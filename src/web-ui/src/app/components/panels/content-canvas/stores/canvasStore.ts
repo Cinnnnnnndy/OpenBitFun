@@ -29,7 +29,7 @@ import { normalizePath } from '@/shared/utils/pathUtils';
 
 // ==================== Store State Types ====================
 
-interface CanvasStoreState {
+export interface CanvasStoreState {
   /** Live content scope, committed with scope swaps and excluded from snapshots. */
   scopeKey?: string;
   primaryGroup: EditorGroupState;
@@ -1321,8 +1321,44 @@ export function switchAgentCanvasScope(nextScopeId: string | null | undefined): 
 
 }
 
-const selectWholeCanvasStore = (state: CanvasStore) => state;
+/**
+ * Snapshot the live agent scope so another window can become its owner.
+ * `scopeKey` stays out of the payload's own fields; the caller carries it.
+ */
+export function readAgentCanvasScopeState(): { scopeKey: string; state: CanvasStoreState } {
+  const live = useAgentCanvasStore.getState() as CanvasStore;
+  return {
+    scopeKey: live.scopeKey ?? normalizeAgentScopeKey(null),
+    state: extractAgentPersistableState(live),
+  };
+}
 
+/**
+ * Install a scope handed over by another window. The receiver owns the scope
+ * from here on, so any snapshot it still held for that id is discarded.
+ */
+export function applyAgentCanvasScopeState(scopeKey: string, state: CanvasStoreState): void {
+  const clone = structuredClone(state);
+  clone.scopeKey = scopeKey;
+  clone.isMissionControlOpen = false;
+  clone.draggingTabId = null;
+  clone.draggingFromGroupId = null;
+  agentScopeSnapshots.delete(scopeKey);
+  useAgentCanvasStore.setState(clone);
+}
+
+/**
+ * Give up ownership of the live agent scope in place: empty the canvas and
+ * forget its snapshot, so a later scope swap cannot resurrect content that now
+ * lives in another window.
+ */
+export function releaseAgentCanvasScope(): void {
+  const key = (useAgentCanvasStore.getState() as CanvasStore).scopeKey;
+  if (key !== undefined) agentScopeSnapshots.delete(key);
+  applyEmptyAgentCanvas(key);
+}
+
+const selectWholeCanvasStore = (state: CanvasStore) => state;
 export function useCanvasStore(): CanvasStore;
 export function useCanvasStore<T>(selector: (state: CanvasStore) => T): T;
 export function useCanvasStore<T>(selector?: (state: CanvasStore) => T): T | CanvasStore {
