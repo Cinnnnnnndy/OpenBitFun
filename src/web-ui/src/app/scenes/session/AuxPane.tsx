@@ -5,18 +5,21 @@
  * Renamed from panels/ContentPanel. All logic preserved.
  */
 
-import { forwardRef, useEffect, useRef, useImperativeHandle, useCallback, useSyncExternalStore } from 'react';
-import { Maximize2, Minimize2, SquareDashed } from 'lucide-react';
-import { Icon, IconButton, Tooltip } from '@openbitfun/ui';
+import { forwardRef, useEffect, useMemo, useRef, useImperativeHandle, useCallback, useSyncExternalStore } from 'react';
+import { CornerUpLeft, Maximize2, Minimize2, PictureInPicture2, SquareDashed } from 'lucide-react';
+import { Button, Empty, Icon, IconButton, Tooltip } from '@openbitfun/ui';
 import { ContentCanvas, useCanvasStore } from '../../components/panels/content-canvas';
 import { usePanelTabCoordinator } from '../../components/panels/content-canvas/hooks/usePanelTabCoordinator';
 import { TAB_EVENTS } from '../../components/panels/content-canvas/types';
+import { NON_DETACHABLE_REASON_KEYS } from '../../components/panels/content-canvas/transfer/detachability';
 import { collapseSessionAuxPane, expandSessionAuxPane, hideSessionAuxPane } from './sessionPanelLayout';
+import { useDetachedAuxPane } from './useDetachedAuxPane';
 import { switchAgentCanvasScope } from '../../components/panels/content-canvas/stores';
 import { useI18n } from '@/infrastructure/i18n';
 import type { PanelContent as OldPanelContent } from '../../components/panels/base/types';
 import type { PanelContent } from '../../components/panels/content-canvas/types';
 import { createLogger } from '@/shared/utils/logger';
+import { notificationService } from '@/shared/notification-system';
 import { flowChatStore } from '@/flow_chat/store/FlowChatStore';
 import { isCanvasTabVisibleForSession } from '../../components/panels/content-canvas/types';
 
@@ -59,16 +62,44 @@ const AuxPane = forwardRef<AuxPaneRef, AuxPaneProps>(
     const secondaryGroup = useCanvasStore(state => state.secondaryGroup);
     const tertiaryGroup = useCanvasStore(state => state.tertiaryGroup);
     const canvasScopeKey = useCanvasStore(state => state.scopeKey);
-    const { expandPanel } = usePanelTabCoordinator({
-      visibleTabCount: [primaryGroup, secondaryGroup, tertiaryGroup]
-        .reduce((count, group) => count + group.tabs.filter(tab =>
+    const visibleTabs = useMemo(
+      () => [primaryGroup, secondaryGroup, tertiaryGroup]
+        .flatMap(group => group.tabs.filter(tab =>
           !tab.isHidden && isCanvasTabVisibleForSession(tab, activeSessionId),
-        ).length, 0),
+        )),
+      [activeSessionId, primaryGroup, secondaryGroup, tertiaryGroup],
+    );
+    const detach = useDetachedAuxPane({
+      visibleTabs,
+      scopeKey: canvasScopeKey,
+      sessionId: activeSessionId,
+      workspacePath,
+      title: t('canvas.detachedWindowTitle'),
+    });
+    const { expandPanel } = usePanelTabCoordinator({
+      // While the canvas lives in another window this pane still reports the
+      // count it had when it let go, so the host does not collapse the panel
+      // and take the recall affordance with it.
+      visibleTabCount: detach.layoutTabCount,
       scopeKey: canvasScopeKey,
       expandEventName: TAB_EVENTS.EXPAND_RIGHT_PANEL,
       onExpand: expandSessionAuxPane,
       onCollapse: collapseSessionAuxPane,
     });
+
+    const { status: detachStatus, blockers: detachBlockers, error: detachError } = detach;
+
+    // A refused or failed detach must not look like nothing happened.
+    useEffect(() => {
+      if (!detachError) return;
+      const blocker = detachBlockers[0];
+      const reasonKey = blocker ? NON_DETACHABLE_REASON_KEYS[blocker.type] : undefined;
+      notificationService.warning(
+        blocker
+          ? t('canvas.detachBlocked', { title: blocker.title }) + (reasonKey ? ` ${t(reasonKey)}` : '')
+          : t('canvas.detachFailed', { reason: detachError.message }),
+      );
+    }, [detachBlockers, detachError, t]);
 
     const convertContent = useCallback((oldContent: OldPanelContent): PanelContent => {
       return {
@@ -151,57 +182,109 @@ const AuxPane = forwardRef<AuxPaneRef, AuxPaneProps>(
       return true;
     }, []);
 
+    const canDetach = detach.supported
+      && detachStatus === 'docked'
+      && detachBlockers.length === 0
+      && visibleTabs.length > 0;
+    const detachHint = detachBlockers.length > 0
+      ? `${t('canvas.detachBlocked', { title: detachBlockers[0].title })}`
+      : t('canvas.detachToWindow');
+
+    const isDetached = detachStatus !== 'docked';
+
     return (
-      <div data-openbitfun-component="aux-pane" data-openbitfun-part="root" className="openbitfun-aux-pane">
-        <ContentCanvas
-          workspacePath={workspacePath}
-          mode="agent"
-          isSceneActive={isSceneActive}
-          onReveal={expandPanel}
-          onCollapsePanel={hideSessionAuxPane}
-          toolbarActions={(
-            <>
-              {onToggleFullscreen && (
-                <Tooltip content={t(isFullscreen ? 'canvas.restorePanel' : 'canvas.maximizePanel')} placement="bottom">
+      <div data-openbitfun-component="aux-pane" data-openbitfun-part="root" className="openbitfun-aux-pane"
+        data-openbitfun-state={isDetached ? 'detached' : undefined}
+      >
+        {isDetached ? (
+          <div
+            className="openbitfun-aux-pane__detached"
+            data-openbitfun-component="aux-pane"
+            data-openbitfun-part="detachedPlaceholder"
+            data-openbitfun-state="detached"
+          >
+            <Empty
+              imageSize="md"
+              icon={<Icon glyph={PictureInPicture2} size="lg" />}
+              title={t('canvas.detachedElsewhere')}
+              description={t('canvas.detachedHint')}
+              actions={(
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  leadingIcon={<Icon glyph={CornerUpLeft} size="sm" />}
+                  onClick={detach.recall}
+                >
+                  {t('canvas.recallToMainWindow')}
+                </Button>
+              )}
+            />
+          </div>
+        ) : (
+          <ContentCanvas
+            workspacePath={workspacePath}
+            mode="agent"
+            isSceneActive={isSceneActive}
+            onReveal={expandPanel}
+            onCollapsePanel={hideSessionAuxPane}
+            toolbarActions={(
+              <>
+                {detach.supported && (
+                  <Tooltip content={detachHint} placement="bottom">
+                    <IconButton
+                      size="sm"
+                      aria-label={detachHint}
+                      disabled={!canDetach}
+                      icon={<Icon glyph={PictureInPicture2} size="sm" />}
+                      onClick={event => {
+                        event.stopPropagation();
+                        detach.detach();
+                      }}
+                    />
+                  </Tooltip>
+                )}
+                {onToggleFullscreen && (
+                  <Tooltip content={t(isFullscreen ? 'canvas.restorePanel' : 'canvas.maximizePanel')} placement="bottom">
+                    <IconButton
+                      size="sm"
+                      aria-label={t(isFullscreen ? 'canvas.restorePanel' : 'canvas.maximizePanel')}
+                      aria-pressed={isFullscreen}
+                      icon={<Icon glyph={isFullscreen ? Minimize2 : Maximize2} size="sm" />}
+                      onClick={event => {
+                        event.stopPropagation();
+                        onToggleFullscreen();
+                      }}
+                    />
+                  </Tooltip>
+                )}
+                <Tooltip content={t('canvas.hidePanel')} placement="bottom">
                   <IconButton
                     size="sm"
-                    aria-label={t(isFullscreen ? 'canvas.restorePanel' : 'canvas.maximizePanel')}
-                    aria-pressed={isFullscreen}
-                    icon={<Icon glyph={isFullscreen ? Minimize2 : Maximize2} size="sm" />}
+                    aria-label={t('canvas.hidePanel')}
+                    icon={<Icon glyph={SquareDashed} size="sm" />}
                     onClick={event => {
                       event.stopPropagation();
-                      onToggleFullscreen();
+                      hideSessionAuxPane();
                     }}
                   />
                 </Tooltip>
-              )}
-              <Tooltip content={t('canvas.hidePanel')} placement="bottom">
-                <IconButton
-                  size="sm"
-                  aria-label={t('canvas.hidePanel')}
-                  icon={<Icon glyph={SquareDashed} size="sm" />}
-                  onClick={event => {
-                    event.stopPropagation();
-                    hideSessionAuxPane();
-                  }}
-                />
-              </Tooltip>
-            </>
-          )}
-          onInteraction={handleInteraction}
-          onBeforeClose={handleBeforeClose}
-          terminalResizeSuspended={terminalResizeSuspended}
-          missionControlEnabled={false}
-          emptyState={
-            <div
-              className="openbitfun-aux-pane__empty-state"
-              data-openbitfun-component="aux-pane"
-              data-openbitfun-part="emptyState"
-            >
-              {t('canvas.noContentOpen')}
-            </div>
-          }
-        />
+              </>
+            )}
+            onInteraction={handleInteraction}
+            onBeforeClose={handleBeforeClose}
+            terminalResizeSuspended={terminalResizeSuspended}
+            missionControlEnabled={false}
+            emptyState={(
+              <div
+                className="openbitfun-aux-pane__empty-state"
+                data-openbitfun-component="aux-pane"
+                data-openbitfun-part="emptyState"
+              >
+                {t('canvas.noContentOpen')}
+              </div>
+            )}
+          />
+        )}
       </div>
     );
   }

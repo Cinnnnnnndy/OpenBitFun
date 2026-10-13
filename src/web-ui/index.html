@@ -403,7 +403,8 @@
     <script>
       (function () {
         var params = new URLSearchParams(window.location.search);
-        var isPetWindow = params.get('openbitfunWindow') === 'agent-companion';
+        var windowKind = params.get('openbitfunWindow');
+        var isPetWindow = windowKind === 'agent-companion';
         var messages = window.__OPENBITFUN_RESOLVE_BOOTSTRAP_MESSAGES__();
         var locale = window.__OPENBITFUN_RESOLVE_BOOTSTRAP_LOCALE__();
         var startupOverlay = document.getElementById('openbitfun-startup-overlay');
@@ -418,6 +419,13 @@
             var petStatus = root.querySelector('.openbitfun-sr-only');
             if (petStatus) petStatus.textContent = messages.petLoading;
           }
+          return;
+        }
+
+        // Auxiliary windows mount without the product shell, so nothing will
+        // ever emit the overlay-hidden signal. Their chrome is their own.
+        if (windowKind === 'detached-canvas') {
+          if (startupOverlay) startupOverlay.remove();
           return;
         }
 

@@ -28,6 +28,19 @@
     text-align: center;
   }
 
+  // Shown while the canvas itself lives in its own window. The pane keeps the
+  // same surface so the placeholder reads as "this area moved", not "empty".
+  &__detached {
+    display: grid;
+    place-items: center;
+    flex: 1 1 auto;
+    min-width: 0;
+    min-height: 0;
+    overflow: auto;
+    padding: var(--openbitfun-space-6);
+    background: var(--openbitfun-color-surface-workbench);
+  }
+
   &__tabbed-panel {
     height: 100%;
     width: 100%;

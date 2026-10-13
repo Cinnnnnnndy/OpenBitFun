@@ -14,4 +14,8 @@ export {
   useDragging,
   switchAgentCanvasScope,
   clearAgentCanvasForPeerSwitch,
+  readAgentCanvasScopeState,
+  applyAgentCanvasScopeState,
+  releaseAgentCanvasScope,
 } from './canvasStore';
+export type { CanvasStoreState } from './canvasStore';
