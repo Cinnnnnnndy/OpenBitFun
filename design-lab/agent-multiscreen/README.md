@@ -75,6 +75,22 @@ python3 -m http.server 8099
 | `.tab` / `.tab__pop` | TabGroup | `TabGroup.module.css` | 预览面板 tab 条（`data-size="sm"` 档） |
 | `.target` / `.target__*` | Listbox | `Listbox.module.css` | 两块副屏里的「预览目标」设备单选列表 |
 | `.hub__group-title` | Listbox `.groupLabel` | `Listbox.module.css` | 列表分组标题 |
+| `.tile` / `.tile__*` | Card | `Card.module.css` | 页面预览里的三张卡片（`data-appearance="raised"` + `data-radius="md"` + `data-padding="sm"` + `data-gap="sm"`） |
+| `.placeholder` / `.placeholder__*` | Empty | `Empty.module.css` | 面板空态（`__icon`←`.media`、`__title`←`.title`、`__desc`←`.description`、`__row`←`.actions`） |
+
+### Card 带来的一处视觉变化（要推翻只需改一个字）
+
+真组件 `Card` 的 `data-appearance` 只有 `raised` / `subtle` / `neutral` 三档，**没有「有边无投影」这一档**。三张卡原来的底和边（`surface-panel` + `border-subtle`）恰好等于 `raised` 的定义，但 `raised` 还会加 `shadow-overlay`（`0 4px 20px rgba(0,0,0,.12)`）—— 所以卡片现在有投影了。
+
+不想要就把 `data-appearance="raised"` 换成 `"subtle"`（那会变成 `surface-tertiary` 灰底、无边无影）。
+
+### 为什么没用 Capsule
+
+`Capsule.module.css` 只有 **14 行**：一个 `display:inline-flex` 的外壳 + 四个尺寸档只改 `--_floating-action-host-height`。它**没有任何视觉**（无背景、无边框、无内边距、无字阶），是给别的组件当浮动操作宿主用的。把 surface 标识套上去等于什么都没换。
+
+那个 `browser-detached` 标识改用 **StatusPill 的中性 tone**（`.ds-pill`，不传 `data-tone`）：底色 `action-neutral-surface` 与原来的 `key-hint-background` 同为 `rgba(0,0,0,.08)`，所以底色没变，只有字阶从 mono 变成 meta。
+
+DS 里还有一个 `KeyHint`（`.ds-kbd`），视觉上和原来的 `.badge` 逐项相同（mono + key-hint-background + radius-xs）。但那是个**键盘按键**语义，拿去当环境标识是挪用，所以没选它。
 
 尺寸档一律用真组件的 `data-size`：`xs` → `control-button-xs-height`（Button，24px）/ `control-icon-button-xs-size`（IconButton，22px）。**没有自造的尺寸值。**
 
@@ -282,6 +298,9 @@ const STEPS = [
 | 20 | 两块副屏的「预览目标」换 Listbox | ✅ 实测 `border 0px none`、`min-height 30px`、`radius 8px`、`padding-inline 8px`（= `overlay-menu-item-*`）；选中态 `rgba(0,0,0,.08)`（= `color-selection-surface`）；名称 `13px/15.6px`（= `type-label-md`）、尺寸行 `rgb(106,106,106)`（= `content-muted`）；`::before` 为 `normal`（手搓黑竖条已删除） |
 | 21 | 旧按钮体系整体移除 | ✅ `.btn` / `.btn--primary` / `.btn--quiet` / `.btn--tiny` / `.icon-btn` 共 5 个类、8 处 markup 全删；实测标题栏 `border 0px`、图标按钮 22px、文字按钮 24px（= `control-icon-button-xs-size` / `control-button-xs-height`） |
 | 22 | 语义状态色与「去色」要求不冲突 | ✅ 核实状态色板：success `#12722a` / info `#2360c2` / warning `#8a4c00` / danger `#bd1b19` —— **均非**青色 `#059cb0`。青色只出现在 `component-button-text-content`（`text` 变体）与 `accent-*`，本 Demo 一个都没用，故早前「去色不要青色」仍然成立（`text` 变体也因此**刻意不用**） |
+| 23 | Card 换装 | ✅ 实测 `data-appearance="raised"` / 底 `rgb(255,255,255)` / 边 `1px rgba(16,26,39,.08)` / 圆角 `12px` / 内边距 `12px`（后两者与手写版一致）/ 投影 `rgba(0,0,0,.12) 0 4px 20px`；`header` / `header-content` / `footer` 三个槽位齐全 |
+| 24 | Empty 换装 | ✅ 实测 `gap 10px` / `padding 32px 16px` / media `32px` / 图标色 `component-empty-media`；`__where` 已是 `ds-pill` + `ds-pill__dot`；`badge` 已是中性 `ds-pill` |
+| 25 | 面板空态内容被裁（本轮发现并修） | ✅ 修前 `.panel__body` 是 `overflow-y: visible`，`scrollHeight 423` / `clientHeight 255` → **168px 内容被裁且无滚动条**，4 行「收回」基本点不到。修后 `overflow-y: auto`，滚到底可达（`maxScroll 180` = `scrolledTo 180`） |
 
 **未验证 / 测不了**：
 
@@ -369,6 +388,7 @@ const STEPS = [
 | 9 | 🟡 中 | 中途那轮「加填充减描边」其实**改偏离了设计系统**（真系统本就靠三档 border 分层） | ✅ 已修（18 处结构描边按真 token 全量恢复） |
 | 10 | 🔴 高 | **全局缺 `button { border: 0 }`** → 所有未显式写 `border` 的按钮都在渲染 UA 默认描边。`.target`（设备列表）和 `.btn` / `.icon-btn`（弹出窗标题栏）都中招，看起来像手绘重框；`收回` 甚至像双层边 | ✅ 已修（`.target` 走 Listbox 的 `border: 0`；`.btn`/`.icon-btn` 整套换成 `.ds-btn`/`.ds-icon-btn`） |
 | 11 | 🟡 中 | 配方漏了 `:not(:disabled)`，禁用按钮仍会触发 hover 底色；且禁用态只靠 `opacity: .35`，没走真组件的 content-disabled token | ✅ 已修（补 `:not(:disabled)`；禁用态改用 `color-action-neutral-content-disabled` 并显式清掉 fill/primary 底色） |
+| 12 | 🟠 高 | `.panel__body` 是 `overflow-y: visible`，空态里那段「已跳出清单」在窄面板下比可视区高 168px —— **内容被裁且没有滚动条**，4 行「收回」按钮实际点不到。这是上一版就存在的缺陷，换 Empty 后 padding 从 18px 变 32px 才让它明显到被发现 | ✅ 已修（`overflow-y: auto`，实测滚到底可达） |
 
 ---
 
