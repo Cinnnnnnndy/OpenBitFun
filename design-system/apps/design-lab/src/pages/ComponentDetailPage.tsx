@@ -1,10 +1,10 @@
 import { CapsulePreview } from "../preview/CapsulePreview";
 import { ColorPickerPreview } from "../preview/ColorPickerPreview";
-import { Fragment, useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { ComponentOverview } from "../preview/ComponentOverview";
 import { getComponentPresentation, getInitialPreviewState, hasComponentOverview } from "../preview/componentPresentation";
 import { previewEn } from "../i18n/previewMessages";
-import { MobileConversationExample, MobileDisclosureExample, MobileFloatingActionsExample, MobileScrimExample, NavigationExample } from "../preview/LiveComponentExamples";
+import { MobileConversationExample, MobileDisclosureExample, MobileFloatingActionsExample, MobileScrimExample, NavigationExample, PhoneScreenPreview } from "../preview/LiveComponentExamples";
 import { BrandPreview, brandCodeSample } from "../preview/BrandPreview";
 import { VoiceCallPreview } from "../components/VoiceCallPreview";
 import { Clipboard, List } from "lucide-react";
@@ -29,6 +29,7 @@ import {
   ComposerDivider,
   ComposerToolbar,
   ConfirmDialog,
+  DesignSystemProvider,
   Dialog,
   DialogBody,
   DialogClose,
@@ -484,6 +485,10 @@ export function ComponentDetailPage({
   const [composerShowToolbar, setComposerShowToolbar] = useState(true);
   const flowChatPreview = getFlowChatPreviewDefinition(component.name);
   const isFlowChatComponent = Boolean(flowChatPreview);
+  const isMobileCategory = component.category === "mobile";
+  /* Mobile specimens render inside a phone-screen frame; sheets and scrims resolve their overlay
+     portal into the screen instead of the page, so a demo sheet slides over the phone. */
+  const phoneScreenRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     const pending = overlayOpen && previewState === "pending";
@@ -1220,7 +1225,7 @@ export function ComponentDetailPage({
       return <MobilePageHeader actions={<MobileIconButton appearance="plain" aria-label={t("components.preview.more")} icon={<Icon name="more" aria-hidden="true" />} size="sm" />} centered={state === "centered"} leading={<MobileIconButton appearance="plain" aria-label={t("components.preview.close")} icon={<Icon name="chevron-left" aria-hidden="true" />} size="sm" />} subtitle={state === "with-subtitle" ? t("components.preview.fieldDescription") : undefined} title={t("components.preview.session")} />;
     }
 
-    if (component.name === "MobileScrim") return <MobileScrimExample key={state} state={state} />;
+    if (component.name === "MobileScrim") return <MobileScrimExample className="lab-mobile-scrim" key={state} state={state} />;
 
     if (component.name === "MobileSection") {
       return <MobileSection action={state === "with-action" ? <MobileButton appearance="plain" size="sm">{t("components.preview.more")}</MobileButton> : undefined} description={state === "content-only" ? undefined : t("components.preview.fieldDescription")} title={state === "content-only" ? undefined : t("components.preview.appearance")}><MobileCard>{t("components.preview.cardDescription")}</MobileCard></MobileSection>;
@@ -2381,7 +2386,17 @@ export function ComponentDetailPage({
                 {component.name === "ChatComposer" && <p>{t("design.contextAfter")}</p>}
               </div>
               <div className="design-selected-component" data-component-name={component.name}>
-                {component.name === "IconButton" ? renderIconButtonPreview(previewState, iconButtonVariant, true) : renderPreview(previewState, variant, true)}
+                {isMobileCategory ? (
+                  <PhoneScreenPreview withThread={component.name === "MobileMessage" || component.name === "MobileComposer" || component.name === "MobileFloatingActions"}>
+                    {/* The provider routes the kit's overlay portal into the screen, so a demo
+                        sheet slides over the phone instead of the Lab. ThemeRoot draws the theme. */}
+                    <DesignSystemProvider portalHost={() => phoneScreenRef.current}>
+                      <ThemeRoot colorScheme={colorScheme} contrast={contrast} density={density} tokenOverrides={tokenOverrides}>
+                        <div ref={phoneScreenRef} className="design-phone-portal-host">{renderPreview(previewState, variant, true)}</div>
+                      </ThemeRoot>
+                    </DesignSystemProvider>
+                  </PhoneScreenPreview>
+                ) : component.name === "IconButton" ? renderIconButtonPreview(previewState, iconButtonVariant, true) : renderPreview(previewState, variant, true)}
               </div>
               <div className="design-preview-context-after" hidden={!isFlowChatComponent || previewMode !== "conversation" || component.name === "ChatComposer"}><p>{t("design.contextAfter")}</p></div>
               {previewState === "hidden" && <p className="design-hidden-preview">{t("preview.hidden")}</p>}

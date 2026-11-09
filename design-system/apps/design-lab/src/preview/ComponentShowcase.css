@@ -35,6 +35,32 @@
 .design-mobile-footer-example { display: grid; gap: var(--openbitfun-space-8); min-height: 300px; align-content: space-between; }
 .design-scrim-example { position: relative; min-height: 220px; padding: var(--openbitfun-space-5); border-radius: var(--openbitfun-radius-lg); overflow: hidden; background: var(--openbitfun-color-surface-canvas); }
 .design-scrim-example > [data-openbitfun-component="mobile-scrim"] { position: absolute; }
+/* Phone-screen chrome for mobile detail previews: a portrait device frame at the 390px reading
+   width the mobile kit is authored for. Sheets and scrims mount inside the screen (their portal
+   target and their scrim are scoped here), so a demo sheet slides over the phone, not the Lab. */
+.design-phone-frame { display: flex; justify-content: center; inline-size: 100%; padding: var(--openbitfun-space-4) 0; }
+.design-phone-screen { position: relative; display: flex; flex-direction: column; inline-size: min(390px, 100%); block-size: min(720px, 72vh); min-block-size: 420px; overflow: hidden; border: var(--openbitfun-border-width-default) solid var(--openbitfun-color-border-subtle); border-radius: var(--openbitfun-radius-4xl); background: var(--openbitfun-color-surface-canvas); box-shadow: var(--openbitfun-shadow-lg); }
+.design-phone-status { display: flex; justify-content: space-between; padding: var(--openbitfun-space-3) var(--openbitfun-space-5) var(--openbitfun-space-1); color: var(--openbitfun-color-content-secondary); font-size: var(--openbitfun-type-label-sm-font-size); }
+.design-phone-thread { display: grid; gap: var(--openbitfun-space-3); padding: var(--openbitfun-space-3) var(--openbitfun-space-4); }
+.design-phone-body { position: relative; z-index: 0; flex: 1; display: flex; flex-direction: column; gap: var(--openbitfun-space-4); justify-content: center; min-block-size: 0; padding: var(--openbitfun-space-4); overflow: hidden; }
+.design-phone-body > .design-phone-portal-host { display: flex; flex: 1; min-block-size: 0; flex-direction: column; justify-content: center; gap: var(--openbitfun-space-4); }
+.design-phone-gesture { block-size: var(--openbitfun-space-5); flex: none; background-repeat: no-repeat; background-position: center; background-image: linear-gradient(var(--openbitfun-color-content-muted), var(--openbitfun-color-content-muted)); background-size: var(--openbitfun-space-12) 3px; }
+/* Sheets portal into .design-phone-portal-host; their overlay is position:fixed for the real page,
+   so inside the screen it must re-anchor to the screen box instead of the viewport. A transform on
+   the screen makes fixed descendants resolve against the screen — that contains a demo sheet inside
+   the phone without touching the kit's page-level behavior. */
+.design-phone-screen { transform: translateZ(0); }
+/* MobileScrim is fixed on a real page; inside the screen it fills the phone instead of its own card.
+   The lab-class prefix wins over the kit's module-scoped .root (0,2,0) by specificity. */
+.design-phone-screen .lab-mobile-scrim { position: fixed; }
+/* The specimen (ThemeRoot) must fill the screen so a sheet anchored inside it spans the phone. */
+.design-phone-body > div { flex: 1; min-block-size: 0; }
+.design-phone-body > div > .design-phone-portal-host { flex: 1; }
+.design-phone-body > div > .design-phone-portal-host:has([data-openbitfun-component="mobile-scrim"]) { flex: none; }
+.design-phone-screen .design-selected-component { flex: 1; min-block-size: 0; }
+@media (max-width: 600px) {
+  .design-phone-screen { block-size: min(560px, 64vh); min-block-size: 0; }
+}
 @media (max-width: 600px) {
   .design-component-overview { padding: var(--openbitfun-space-4); }
   .design-component-overview:not([data-presentation="compact"]) .design-example-grid { grid-template-columns: minmax(0, 1fr); }
