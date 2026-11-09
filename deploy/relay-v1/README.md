@@ -1,4 +1,13 @@
-# Official Relay v1 deployment
+# Relay v1 self-hosted deployment
+
+This directory is a community self-deployment template. Example domains and
+paths must be replaced with your own environment.
+
+Normal Remote Connect use goes through the official Relay and does not require
+this deployment. A private endpoint requires matching client builds; setting
+these server variables alone does not redirect released clients. Follow the
+[fork setup](../../src/apps/relay-server/README.md#for-community-developers-and-forks)
+and read the [connection FAQ](../../src/apps/relay-server/FAQ.md) first.
 
 The owner guide is [Relay Server](../../src/apps/relay-server/README.md).
 Use this independent Compose project for `/v/1.0.2/`. Keep the `/v/1.0.1/` Compose project
@@ -7,7 +16,10 @@ container, image, database, assets, and proxy location: clients built for 1.0.1 
 and the two releases do not share a credential database.
 
 Deploy from a committed checkout at `/srv/openbitfun-relay-v1.0.2/app`. Set
-`RELAY_GIT_COMMIT` to that checkout's verified full commit. Build mobile web
+`RELAY_GIT_COMMIT` to that checkout's verified full commit. Set
+`RELAY_PUBLIC_ORIGIN` and `RELAY_AUTH_ORIGIN` to your public Relay and auth
+origins before running Compose; the checked-in values are `example.com`
+placeholders. Build mobile web
 from the same checkout with `pnpm run build:mobile-web` and stage its `dist`
 contents into `/srv/openbitfun-relay-v1.0.2/static`. Create `data` and `assets`
 under that root owned by UID/GID 10001 before starting Compose.
@@ -16,21 +28,23 @@ The Linux host network plus explicit `127.0.0.1:19702` listener lets the service
 verify the immediate proxy peer before trusting its overwritten forwarded IP.
 Do not publish this listener on a public interface. Install `nginx-http.conf` as `/etc/nginx/conf.d/relay-v1.0.2.conf` and include
 `nginx-location.conf` as `/etc/nginx/relay-v1.0.2-location.conf` in the existing remote server after the container passes
-its health check. Keep the existing v1.0.1 includes. The new version uses independent admission zones.
-The new location accepts the existing explicit WAF origin
+its health check. [`nginx-relay.conf`](nginx-relay.conf) is a full generic
+server-block example. Keep the existing v1.0.1 includes. The new version uses independent admission zones.
+The new location accepts your explicit WAF origin
 ranges and loopback; direct origin requests from other peers receive 403.
 Forwarded client IPs are recursively resolved only for those trusted WAF
 peers. Keep the range list synchronized with the WAF control plane. Raise
 `worker_connections` to 8192 and retain a file descriptor limit of at least
 16384; validate with `nginx -t` before a graceful reload.
 
-Published Pages use the existing official Relay address:
-`https://remote.openbitfun.com/v/1.0.2/p/{github_username}/{slug}`.
-Compose sets this public base URL and the separate sign-in base URL
-`https://auth.openbitfun.com/v/1.0.2`. Users do not configure domains.
+Published Pages use your public Relay address:
+`https://relay.example.com/v/1.0.2/p/{github_username}/{slug}`.
+Compose derives this public base URL and the separate sign-in base URL
+`https://auth.example.com/v/1.0.2` from `RELAY_PUBLIC_ORIGIN` and
+`RELAY_AUTH_ORIGIN`. Users do not configure domains.
 Install the versioned Pages sign-in locations from
-[`nginx-auth.openbitfun.com.conf`](../miniapp-market/nginx-auth.openbitfun.com.conf)
-in the existing auth server as well. Keep its marketplace sign-in routes intact.
+[`nginx-auth.conf`](../miniapp-market/nginx-auth.conf)
+(template file name) in the existing auth server as well. Keep its marketplace sign-in routes intact.
 These locations forward only Page sign-in and GitHub start/poll endpoints to
 Relay, preserve the auth Host, and omit query strings from access logs.
 The Page callback and published content remain on the remote origin.
@@ -109,7 +123,7 @@ retired only for as long as the edge announces it.
 
 A 1.0.x Relay persisted every realtime session message in `realtime_messages`
 and never pruned it: `log_bytes` was tracked per account but no code enforced a
-ceiling, so the file grew with traffic forever. One production deployment
+ceiling, so the file grew with traffic forever. A legacy deployment
 reached **38.6 GiB in six days** with 97 accounts (~6.4 GB/day, ~2.8 M rows,
 ~14.5 KB per encrypted row), while every other table stayed under a megabyte.
 1.0.2 stores no session content and drops those tables at startup (see
@@ -182,8 +196,8 @@ sqlite3 /srv/openbitfun-relay-v1.0.1/data/relay.db \
 docker start openbitfun-relay-v1.0.1
 ```
 
-or compact online first and swap inside the window, which is what turned a
-38.6 GiB file into 7.15 GiB here: run
+or compact online first and swap inside the window, which turned a
+38.6 GiB file into 7.15 GiB in one legacy deployment: run
 `VACUUM INTO '/srv/.../data/relay-compact.db'` while the service keeps serving
 (a consistent snapshot; `VACUUM INTO` output is `journal_mode=delete` and keeps
 `auto_vacuum` of the source, so the window still has to set both), then stop the
@@ -249,3 +263,44 @@ WantedBy=timers.target
 is cheap: hourly traffic moves past the window in seconds, versus 455 seconds
 for the first pass over 2.17 M rows. Pruning and retiring are separate steps —
 pruning only buys time until the version reaches the retirement switch above.
+
+## Version-by-query endpoint and the Page origin
+
+Releases used to be separated by a proxy location (`/v/<version>/`). A client
+now targets `https://remote.openbitfun.com/relay?v=<service-version>`: the
+version travels as a query parameter, one proxy location serves every build,
+and the bare origin is the account controller. `/v/1.0.2/` stays live on the
+same process and database for builds that predate the parameter, so both
+aliases share credentials and device registration.
+
+```nginx
+location = /relay { return 308 /relay/; }
+location ^~ /relay/ {
+    proxy_pass http://127.0.0.1:19702/;   # strip the prefix
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;          # bare host: the Relay compares it verbatim
+    proxy_set_header X-Forwarded-For $remote_addr;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection $connection_upgrade;
+    proxy_buffering off;
+    client_max_body_size 65m;
+}
+location = / { proxy_pass http://127.0.0.1:19702/; }   # the controller SPA
+location = /index.html { proxy_pass http://127.0.0.1:19702/index.html; }
+location ^~ /assets/ { proxy_pass http://127.0.0.1:19702; }
+location ^~ /brand/ { proxy_pass http://127.0.0.1:19702; }
+location / { return 410; }   # keep unversioned paths closed
+```
+
+Published Pages must not share a browser origin with the controller: Page
+documents execute user-authored JavaScript, and the controller keeps its device
+key and Relay credential in that origin's IndexedDB. Serve `/p/` and
+`/api/page-auth/` from a separate host (`RELAY_PAGE_PUBLIC_BASE_URL`) and keep
+`RELAY_PAGE_AUTH_BASE_URL` on a third origin. Redirect the old path instead of
+serving content there:
+
+```nginx
+location ^~ /v/1.0.2/p/ { rewrite ^/v/1\.0\.2(/p/.*)$ https://pages.example.com$1 redirect; }
+location ^~ /relay/p/   { rewrite ^/relay(/p/.*)$      https://pages.example.com$1 redirect; }
+```

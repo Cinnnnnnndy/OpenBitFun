@@ -2,6 +2,7 @@ import React from 'react';
 import ReactMarkdown from 'react-markdown';
 import type { Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { markdownGfmOptions } from './markdownGfmOptions';
 import { remarkAutolinkBoundaries } from './remarkAutolinkBoundaries';
 import { remarkStreamingTableLinks } from './remarkStreamingTableLinks';
 import remarkMath from 'remark-math';
@@ -13,6 +14,7 @@ import type { Pluggable } from 'unified';
 import 'katex/dist/katex.min.css';
 import { rehypeSourceRange, type MarkdownSourceRange } from './rehypeSourceRange';
 import { rehypeWindowsDrivePaths } from './rehypeWindowsDrivePaths';
+import { rehypeImageThumbnails } from './rehypeImageThumbnails';
 
 interface MarkdownMathRendererProps {
   markdownContent: string;
@@ -23,6 +25,7 @@ interface MarkdownMathRendererProps {
   urlTransform: (value: string) => string;
   sourceRange?: MarkdownSourceRange;
   inline?: boolean;
+  imageThumbnails?: boolean;
 }
 
 export const MarkdownMathRenderer: React.FC<MarkdownMathRendererProps> = ({
@@ -34,11 +37,12 @@ export const MarkdownMathRenderer: React.FC<MarkdownMathRendererProps> = ({
   urlTransform,
   sourceRange,
   inline = false,
+  imageThumbnails = false,
 }) => {
   const content = (
     <ReactMarkdown
-      remarkPlugins={[remarkGfm, remarkMath, [remarkStreamingTableLinks, { isStreaming }], remarkAutolinkBoundaries, remarkAutolinkComputerFileLinks]}
-      rehypePlugins={[rehypeRaw, rehypeWindowsDrivePaths, [rehypeSanitize, sanitizeSchema], [rehypeSourceRange, sourceRange], rehypeKatex]}
+      remarkPlugins={[[remarkGfm, markdownGfmOptions], remarkMath, [remarkStreamingTableLinks, { isStreaming }], remarkAutolinkBoundaries, remarkAutolinkComputerFileLinks]}
+      rehypePlugins={[rehypeRaw, [rehypeWindowsDrivePaths, { markdownSource: markdownContent }], [rehypeSanitize, sanitizeSchema], [rehypeSourceRange, sourceRange], rehypeKatex, [rehypeImageThumbnails, { enabled: imageThumbnails }]]}
       urlTransform={urlTransform}
       components={components}
     >

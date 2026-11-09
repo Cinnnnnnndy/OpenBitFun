@@ -1,19 +1,16 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import girlManifest from '../../../../public/agent-companion-pets/openbitfun-girl/pet.json';
 import bitblobManifest from '../../../../public/agent-companion-pets/bitblob/pet.json';
 
 const invoke = vi.fn();
+const isTauriRuntimeMock = vi.fn(() => false);
 
 vi.mock('@/infrastructure/api/service-api/ApiClient', () => ({
   api: { invoke },
 }));
 
-vi.mock('@tauri-apps/plugin-fs', () => ({
-  readFile: vi.fn(),
-}));
-
 vi.mock('@/infrastructure/runtime', () => ({
-  isTauriRuntime: () => false,
+  isTauriRuntime: () => isTauriRuntimeMock(),
 }));
 
 describe('AgentCompanionPetService built-in presets', () => {
@@ -145,5 +142,109 @@ describe('bundled pet compatibility', () => {
     expect(invoke).toHaveBeenLastCalledWith('import_agent_companion_pet_package', {
       request: { path: '/installed/app.asar', builtinId: 'codex', expectedFingerprint: 'reviewed' },
     });
+  });
+});
+
+describe('user pet spritesheet reads', () => {
+  const userPet = {
+    id: 'pet-abc',
+    displayName: 'Imported',
+    source: 'user' as const,
+    packagePath: '/home/user/.config/openbitfun/data/agent-companions/pet-abc',
+    spritesheetPath: '/home/user/.config/openbitfun/data/agent-companions/pet-abc/spritesheet.webp',
+    spritesheetMimeType: 'image/webp',
+    spriteVersionNumber: 2,
+  };
+
+  beforeEach(() => {
+    invoke.mockReset();
+    isTauriRuntimeMock.mockReturnValue(true);
+    vi.stubGlobal('URL', {
+      createObjectURL: vi.fn((_blob: Blob) => 'blob:pet-spritesheet'),
+      revokeObjectURL: vi.fn(),
+    });
+  });
+
+  afterEach(() => {
+    isTauriRuntimeMock.mockReturnValue(false);
+    vi.unstubAllGlobals();
+  });
+
+  it('reads the spritesheet through the host instead of the filesystem plugin scope', async () => {
+    const { resolveAgentCompanionPetSrc } = await import('./AgentCompanionPetService');
+    invoke.mockResolvedValueOnce(new Uint8Array([1, 2, 3]).buffer);
+
+    await expect(resolveAgentCompanionPetSrc(userPet)).resolves.toBe('blob:pet-spritesheet');
+    expect(invoke).toHaveBeenCalledWith('load_agent_companion_pet_spritesheet', {
+      request: { spritesheetPath: userPet.spritesheetPath },
+    });
+  });
+
+  it('accepts a raw byte response and reuses the cached blob URL', async () => {
+    const { resolveAgentCompanionPetSrc } = await import('./AgentCompanionPetService');
+    const otherPet = {
+      ...userPet,
+      id: 'pet-def',
+      packagePath: '/home/user/.config/openbitfun/data/agent-companions/pet-def',
+      spritesheetPath: '/home/user/.config/openbitfun/data/agent-companions/pet-def/spritesheet.webp',
+    };
+    invoke.mockResolvedValueOnce(new Uint8Array([1, 2, 3]));
+
+    await expect(resolveAgentCompanionPetSrc(otherPet)).resolves.toBe('blob:pet-spritesheet');
+    await expect(resolveAgentCompanionPetSrc(otherPet)).resolves.toBe('blob:pet-spritesheet');
+    expect(invoke).toHaveBeenCalledTimes(1);
+  });
+
+  it('coalesces concurrent reads without orphaning a blob URL', async () => {
+    const { resolveAgentCompanionPetSrc, releaseAgentCompanionPetPreviewBlobs } = await import('./AgentCompanionPetService');
+    releaseAgentCompanionPetPreviewBlobs(userPet.packagePath);
+    let finish!: (buffer: ArrayBuffer) => void;
+    invoke.mockReturnValueOnce(new Promise<ArrayBuffer>(resolve => { finish = resolve; }));
+    const first = resolveAgentCompanionPetSrc(userPet);
+    const second = resolveAgentCompanionPetSrc(userPet);
+    expect(invoke).toHaveBeenCalledTimes(1);
+    finish(new Uint8Array([1, 2, 3]).buffer);
+    await expect(Promise.all([first, second])).resolves.toEqual(['blob:pet-spritesheet', 'blob:pet-spritesheet']);
+    expect(URL.createObjectURL).toHaveBeenCalledTimes(1);
+    releaseAgentCompanionPetPreviewBlobs(userPet.packagePath);
+    expect(URL.revokeObjectURL).toHaveBeenLastCalledWith('blob:pet-spritesheet');
+  });
+
+  it('does not repopulate a released package from an in-flight read and allows retry', async () => {
+    const { resolveAgentCompanionPetSrc, releaseAgentCompanionPetPreviewBlobs } = await import('./AgentCompanionPetService');
+    releaseAgentCompanionPetPreviewBlobs(userPet.packagePath);
+    let finish!: (buffer: ArrayBuffer) => void;
+    invoke.mockReturnValueOnce(new Promise<ArrayBuffer>(resolve => { finish = resolve; }));
+    const pending = resolveAgentCompanionPetSrc(userPet);
+    const rejected = expect(pending).rejects.toThrow('released while loading');
+    releaseAgentCompanionPetPreviewBlobs(userPet.packagePath);
+    finish(new Uint8Array([1]).buffer);
+    await rejected;
+    expect(URL.createObjectURL).not.toHaveBeenCalled();
+    invoke.mockRejectedValueOnce(new Error('offline'));
+    await expect(resolveAgentCompanionPetSrc(userPet)).rejects.toThrow('offline');
+    invoke.mockResolvedValueOnce(new Uint8Array([2]));
+    await expect(resolveAgentCompanionPetSrc(userPet)).resolves.toBe('blob:pet-spritesheet');
+    releaseAgentCompanionPetPreviewBlobs(userPet.packagePath);
+  });
+
+  it('keeps a replacement load when the released older read finishes later', async () => {
+    const { resolveAgentCompanionPetSrc, releaseAgentCompanionPetPreviewBlobs } = await import('./AgentCompanionPetService');
+    releaseAgentCompanionPetPreviewBlobs(userPet.packagePath);
+    let finishOld!: (buffer: ArrayBuffer) => void;
+    let finishNew!: (buffer: ArrayBuffer) => void;
+    invoke.mockReturnValueOnce(new Promise<ArrayBuffer>(resolve => { finishOld = resolve; }));
+    const old = expect(resolveAgentCompanionPetSrc(userPet)).rejects.toThrow('released while loading');
+    releaseAgentCompanionPetPreviewBlobs(userPet.packagePath);
+    invoke.mockReturnValueOnce(new Promise<ArrayBuffer>(resolve => { finishNew = resolve; }));
+    const replacement = resolveAgentCompanionPetSrc(userPet);
+    finishOld(new Uint8Array([1]).buffer);
+    await old;
+    const concurrent = resolveAgentCompanionPetSrc(userPet);
+    expect(invoke).toHaveBeenCalledTimes(2);
+    finishNew(new Uint8Array([2]).buffer);
+    await expect(Promise.all([replacement, concurrent])).resolves.toEqual(['blob:pet-spritesheet', 'blob:pet-spritesheet']);
+    expect(URL.createObjectURL).toHaveBeenCalledTimes(1);
+    releaseAgentCompanionPetPreviewBlobs(userPet.packagePath);
   });
 });

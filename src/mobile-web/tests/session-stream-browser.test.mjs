@@ -84,13 +84,13 @@ test('an older host without host streams is reported as unsupported instead of r
   const relay=new RelayFixture();relay.legacyHost=true;
   const page=await relay.page(context,source.origin);
   await signIn(page);await connected(page);
-  const module=fileURLToPath(new URL('../../shared/relay-transport/HostStream.ts',import.meta.url));
+  const module='/@fs/'+fileURLToPath(new URL('../../shared/relay-transport/HostStream.ts',import.meta.url)).replace(/\\/g, '/').replace(/^\/+/, '');
   const result=await page.evaluate(async path=>{
    const {getBrowserAccountStore,releaseBrowserAccount}=await import('/src/services/BrowserAccountStore.ts');
    const {currentRelayUrl}=await import('/src/services/pairingLink.ts');
    const {RelayHttpClient}=await import('/src/services/RelayHttpClient.ts');
    const {RemoteSessionManager}=await import('/src/services/RemoteSessionManager.ts');
-   const {UNSUPPORTED_HOST_MESSAGE}=await import('/@fs'+path);
+   const {UNSUPPORTED_HOST_MESSAGE}=await import(path);
    const saved=await getBrowserAccountStore(currentRelayUrl()).read();
    const client=new RelayHttpClient(currentRelayUrl(),{token:saved.session.token,masterKey:saved.session.masterKey,userId:saved.session.userId,deviceId:saved.controllerDeviceId});
    releaseBrowserAccount(saved);
@@ -110,4 +110,37 @@ test('an older host without host streams is reported as unsupported instead of r
   assert.ok(relay.streamReads.filter(read=>read.stream_id==='@host/catalog').length<=2,'unsupported hosts are not retried in a loop');
   assert.deepEqual(relay.errors,[]);
  }finally{await browser.close();await source.close();}
+});
+
+test('the browser decodes the native Zstd frame after AES-GCM and sends legacy JSON to old peers', { timeout: 60_000 }, async () => {
+  const { readFile } = await import('node:fs/promises');
+  const fixture = JSON.parse(await readFile(new URL('../../shared/relay-protocol-contract-fixtures/relay-message-encoding.json', import.meta.url)));
+  const source = await startSourceServer();
+  const browser = await launchBrowser();
+  try {
+    const page = await browser.newPage();
+    await page.goto(source.origin);
+    const facts = await page.evaluate(async ({ wire, expected }) => {
+      const { encrypt, decrypt, decryptBytes, fromB64, toB64 } = await import('/src/services/E2EEncryption.ts');
+      const { decodeRelayMessage } = await import('/src/services/relayMessageEncoding.ts');
+      const key = new Uint8Array(32).fill(41);
+      const frame = Uint8Array.from(wire.hex.match(/../g), byte => parseInt(byte, 16));
+      const reference = new TextDecoder().decode(await decodeRelayMessage(frame));
+      const encoded = await encrypt(key, expected.text, true);
+      const opened = decryptBytes(key, fromB64(encoded.data), fromB64(encoded.nonce));
+      const decoded = await decrypt(key, encoded.data, encoded.nonce);
+      const legacy = await encrypt(key, expected.text, false);
+      const plain = decryptBytes(key, fromB64(legacy.data), fromB64(legacy.nonce));
+      const corrupted = fromB64(encoded.data);
+      corrupted[0] ^= 1;
+      let rejected = false;
+      try { await decrypt(key, toB64(corrupted), encoded.nonce); } catch { rejected = true; }
+      return { same: decoded === expected.text && reference === expected.text, compressed: opened[0] === 255,
+        legacy: new TextDecoder().decode(plain) === expected.text, rejected };
+    }, fixture.cases[0]);
+    assert.deepEqual(facts, { same: true, compressed: true, legacy: true, rejected: true });
+  } finally {
+    await browser.close();
+    await source.close();
+  }
 });

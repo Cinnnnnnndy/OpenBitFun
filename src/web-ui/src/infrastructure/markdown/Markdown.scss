@@ -197,6 +197,13 @@
 }
 
 .markdown-renderer pre {
+  // Both the Markdown fence shell and the rendered code pre can become WebKit
+  // selection roots (overflow/positioning). Isolate each level, with code as a
+  // flex item, so selecting through a fence does not fill its padding or the
+  // unused line width. Code/token children keep their normal preformatted flow.
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
   margin: var(--markdown-code-block-gap) 0;
   padding: var(--markdown-code-block-pad-y) var(--markdown-code-block-pad-x);
   overflow: auto;
@@ -272,6 +279,8 @@
 }
 
 .markdown-renderer .code-block-body {
+  display: flex;
+  flex-direction: column;
   position: relative;
   min-width: 0;
   overflow-x: auto;
@@ -418,6 +427,55 @@
   cursor: zoom-in;
 }
 
+/* Conversation previews stay compact; the lightbox retains the original bytes. */
+.markdown-renderer--thumbnails img {
+  max-width: min(100%, 18rem);
+  max-height: 14rem;
+  object-fit: contain;
+}
+
+.markdown-renderer .markdown-image-gallery {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 9rem), 1fr));
+  gap: var(--openbitfun-space-2);
+  width: min(100%, 32rem);
+  margin-block: var(--openbitfun-space-2);
+}
+
+.markdown-renderer .markdown-image-gallery--single {
+  width: min(100%, 18rem);
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.markdown-renderer .markdown-image-gallery--paired {
+  width: min(100%, 26rem);
+}
+
+.markdown-renderer .markdown-image-tile {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  aspect-ratio: 4 / 3;
+  overflow: hidden;
+  border-radius: var(--openbitfun-control-flow-chat-card-radius);
+  background: var(--openbitfun-color-surface-subtle);
+}
+
+.markdown-renderer .markdown-image-tile > img {
+  width: 100%;
+  height: 100%;
+  max-width: 100%;
+  max-height: 100%;
+  margin: 0;
+  object-fit: contain;
+}
+
+.markdown-renderer .markdown-image-thumbnail:focus-visible {
+  outline: var(--openbitfun-border-width-default) solid var(--openbitfun-color-border-default);
+  outline-offset: calc(-1 * var(--openbitfun-space-1));
+}
+
 /* A linked image belongs to its link, not to the preview affordance. */
 .markdown-renderer :is(a, button):has(> img) > img.markdown-image--previewable {
   cursor: pointer;
@@ -457,6 +515,9 @@
   margin: var(--markdown-block-gap) 0;
   overflow-x: auto;
   overflow-y: hidden;
+  // Keep words in intrinsic column sizing; the prose-level `anywhere` rule
+  // otherwise lets long descriptions squeeze names and numbers to a few glyphs.
+  overflow-wrap: normal;
   border: 0;
   border-radius: var(--openbitfun-radius-lg);
   background: color-mix(in srgb, var(--openbitfun-color-surface-tertiary) 50%, var(--openbitfun-color-surface-scene));
@@ -479,12 +540,41 @@
 
 .markdown-renderer .table-wrapper th,
 .markdown-renderer .table-wrapper td {
+  // Leave room for short values (including units), with overflow in the scroller.
+  min-width: calc(8ch + 2 * var(--markdown-table-cell-pad-x));
   padding: var(--markdown-table-cell-pad-y) var(--markdown-table-cell-pad-x);
   border: 0;
   background: transparent;
   color: var(--openbitfun-color-content-primary);
   text-align: left;
   vertical-align: top;
+}
+
+.markdown-renderer .table-wrapper .inline-code {
+  // Inline code has its own prose wrapping rule; preserve its word widths too.
+  overflow-wrap: normal;
+}
+
+// Keep native table-cell layout (column sizing, alignment and spans). A cell is
+// itself a WebKit selection root, so its padding/unused row height must not
+// paint. Only these renderer-owned cell boxes are transparent; the inner body
+// and its inline descendants retain the application's native selection color.
+.markdown-header-cell::selection,
+.markdown-data-cell::selection {
+  background-color: transparent;
+}
+
+// A separate flex boundary avoids filling the unused inline width of a cell.
+// The body stays in block flow: putting text/link/code runs directly in flex
+// would split them into independent items and change wrapping and alignment.
+.markdown-table-cell-content {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.markdown-table-cell-body {
+  min-width: 0;
 }
 
 .markdown-renderer .table-wrapper th {

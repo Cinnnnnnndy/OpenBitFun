@@ -17,6 +17,8 @@ Notes:
   inherit each tool's default behavior.
 - Dynamically registered MCP tools default to `Deferred`; they are discovered
   at runtime and are not enumerated in the built-in table below.
+- Pages defaults expose `PageManage`. `PagePublish` and `PageDeploy` remain
+  registered for legacy explicit Agent tool selections and existing calls only.
 - When `ai.enable_deferred_tool_loading=false`, all allowed tools are exposed as
   `Direct`, and `GetToolSpec` plus `CallDeferredTool` are removed from the
   model-visible manifest.
@@ -29,11 +31,13 @@ Notes:
 | `Read` | Direct | None | - |
 | `view_image` | Direct | None | - |
 | `analyze_image` | Direct | None | - |
+| `generate_image` | Direct | None | - |
 | `Glob` | Direct | None | - |
 | `Grep` | Direct | None | - |
 | `Write` | Direct | None | - |
 | `Edit` | Direct | None | - |
 | `Delete` | Direct | None | - |
+| `GenOfficeFile` | Direct | None | - |
 | `ExecCommand` | Direct | None | - |
 | `WriteStdin` | Direct | None | - |
 | `ExecControl` | Direct | None | - |
@@ -57,23 +61,20 @@ Notes:
 | `CallDeferredTool` | Direct | None | - |
 | `OpenBitFunControl` | Direct | None | - |
 | `GetFileDiff` | Deferred | `CodeReview`, `DeepReview`, `ReviewFixer`, `ReviewWorker`, `ReviewJudge` | Direct |
-| `CreateCanvas` | Direct | None | - |
-| `ReadCanvas` | Direct | None | - |
-| `UpdateCanvas` | Direct | None | - |
-| `PatchCanvas` | Direct | None | - |
 | `ListWorkspaces` | Deferred | None | - |
 | `SessionControl` | Deferred | None | - |
 | `SessionMessage` | Deferred | None | - |
 | `SessionHistory` | Deferred | None | - |
 | `Cron` | Deferred | None | - |
 | `PortForward` | Deferred | None | - |
+| `DesktopCard` | Direct | None | - |
 | `WebSearch` | Deferred | None | - |
 | `WebFetch` | Deferred | None | - |
 | `ListMCPResources` | Deferred | None | - |
 | `ReadMCPResource` | Deferred | None | - |
 | `ListMCPPrompts` | Deferred | None | - |
 | `GetMCPPrompt` | Deferred | None | - |
-| `GenerativeUI` | Deferred | None | - |
+| `GenerativeUI` | Direct | None | - |
 | `Worktree` | Deferred | None | - |
 | `ReviewPlatform` | Deferred | None | - |
 | `InitMiniApp` | Direct | None | - |
@@ -81,6 +82,7 @@ Notes:
 | `PublishMiniApp` | Direct | None | - |
 | `FrontendWorkbench` | Direct | None | - |
 | `PublishAppearance` | Direct | None | - |
+| `PageManage` | Direct | None | - |
 | `PageDeploy` | Direct | None | - |
 | `PagePublish` | Direct | None | - |
 | `ControlHub` | Deferred | `ComputerUse` | Direct |

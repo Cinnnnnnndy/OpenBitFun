@@ -114,6 +114,11 @@ SessionManager -> Session -> DialogTurn -> ModelRound
   Function Agent adapters use the independent `function-agents` owner;
   MiniApp domain/runtime/market dependencies belong only to `tools-miniapp`.
   Tool implementation groups use the matching `tools-*` owner feature.
+  `tools-image-analysis` owns only image inspection; `tools-image-generation`
+  separately selects the generation tool and its AI adapter client.
+  `tools-office-documents` owns `GenOfficeFile` and its portable OOXML engine
+  (`openbitfun-office-documents`); the tool moves bytes only through the
+  session's workspace file system, so remote workspaces need no extra owner.
   Product Assembly supplies the exact `ProductToolPlan`; Core materialization
   validates that requested owners were compiled and must not infer product
   capability from Cargo's feature union. The Agent Runtime baseline plan is
@@ -190,6 +195,74 @@ Narrower local guides already exist for some subtrees:
 
 ## Verification
 
+For desktop card admission, per-turn Peer origin, recovery context and subagent
+propagation:
+
+```bash
+cargo test --locked -p openbitfun-core --no-default-features --features agent-runtime,git --lib -- desktop_card
+```
+
+These tests use a stub card host and simulated remote contexts; they do not
+exercise native card windows or live Peer/mobile/SSH connections. The Desktop
+guide owns the HostInvoke compatibility and native host checks.
+
+For Creative frontend customization origin admission and fresh approval policy:
+
+```bash
+cargo test --locked -p openbitfun-core --no-default-features --features agent-runtime,git,tools-creation --lib frontend_workbench
+```
+
+These tests simulate Peer/mobile and remote-workspace origins; they do not
+exercise native recovery controls or live remote connections.
+
+For opt-in category/system-prompt previews and session-storage isolation:
+
+```bash
+cargo test --locked -p openbitfun-core --no-default-features --features agent-runtime,git --lib -- system_prompt_preview usage_context_preview
+```
+
+This fixture verifies default report privacy and resolved host storage with a
+simulated SSH workspace identity; it does not exercise live remote connections.
+
+For Agent name references, enabled-catalog admission, and prompt catalog names:
+
+```bash
+cargo test --locked -p openbitfun-core --no-default-features --features agent-runtime,git --lib agentic::tools::implementations::task::tests
+```
+
+These fixtures cover prompt name mappings and simulated workspace policies;
+they do not establish live SSH, relay, Peer, or Detached Dispatch behavior.
+
+For ordinary subagent shared concurrency, permit release, and cancelled/timed-out waits:
+
+```bash
+cargo test --locked -p openbitfun-core --no-default-features --features agent-runtime,git --lib subagent_concurrency_
+```
+
+For smart routing, unchanged subagent model policy and resumed subagent choices:
+
+```bash
+cargo test --locked -p openbitfun-core --no-default-features --features agent-runtime,git --lib subagent_model
+cargo test --locked -p openbitfun-core --no-default-features --features agent-runtime,git --lib round_model_routing
+cargo test --locked -p openbitfun-core --no-default-features --features agent-runtime,git --lib coordinator::tests::reused_subagent
+```
+
+These fixtures cover host-owned configuration, nested delegation and Router protocol
+behavior with mocks. They do not establish connectivity to a deployed Router or a
+live SSH, relay, Peer or detached-dispatch host.
+
+Smart routing applies only to main sessions. Subagents use their independent
+model or pool configuration. Restoring an older smart child retains its saved
+target and legacy strategy fields without enabling routing; an explicit model
+replacement atomically returns that child to manual selection.
+
+For tool catalog feature gates, loaded-spec collection, and native/PTC
+presentation, check both the native baseline and the optional PTC owner:
+
+```bash
+cargo test --locked -p openbitfun-core --no-default-features --features agent-runtime,git --lib agentic::tools::product_runtime::
+cargo test --locked -p openbitfun-core --no-default-features --features ptc-runtime --lib agentic::tools::product_runtime::
+```
 For config-backed product-control option defaults, typed binding, and persisted readback:
 
 ```bash
@@ -201,6 +274,25 @@ AI client construction and subscription credential compatibility:
 ```bash
 cargo test -p openbitfun-core --no-default-features --features ai-adapter-runtime,subscription-auth --lib infrastructure::ai::client_factory::tests
 ```
+
+For image-service selection and compatibility with saved subscription configurations:
+
+```bash
+cargo test --locked -p openbitfun-core --no-default-features --features agent-runtime,git,tools-image-generation,subscription-auth --lib agentic::image_generation::tests
+cargo test --locked -p openbitfun-core --no-default-features --features agent-runtime,git,tools-image-generation --lib agentic::tools::implementations::generate_image_tool::tests
+cargo test --locked -p openbitfun-core --no-default-features --features agent-runtime,git,tools-image-generation --lib agentic::tools::product_runtime::materialization::tests::image_tools_follow_independent_compiled_owners
+cargo test --locked -p openbitfun-core --no-default-features --features agent-runtime,git,tools-image-analysis --lib agentic::tools::product_runtime::materialization::tests::image_tools_follow_independent_compiled_owners
+```
+
+For Office file generation (`GenOfficeFile`); the engine itself is covered by
+`cargo test -p openbitfun-office-documents`:
+
+```bash
+cargo test --locked -p openbitfun-core --no-default-features --features agent-runtime,git,tools-office-documents --lib agentic::tools::implementations::gen_office_file_tool::tests
+```
+
+These fixtures do not call a provider or exercise live remote hosts. Image wire
+protocol and opt-in live probes belong to the AI adapters guide.
 
 This guide owns Core verification. Select one command pattern that matches the
 change; do not run every feature variant:
@@ -237,14 +329,72 @@ them under `product-full`. `PathManager::with_user_root_for_tests` derives produ
 home from the user root's parent, so a fixture that relocates managed paths must
 place its user root below the directory it means to exercise.
 
+For durable per-turn token usage, client checkpoint reconciliation, and recovery:
+`cargo test --locked -p openbitfun-core --no-default-features --features agent-runtime,git --lib turn_usage`.
+The fixtures cover host-ledger isolation and client-free completion, not live SSH,
+Relay, Peer Device, or Detached Dispatch connections.
+
+For model-round order when completion fills sparse client checkpoints:
+
+```bash
+cargo test --locked -p openbitfun-core --no-default-features --features agent-runtime,git --lib generation_round_order
+```
+
+These fixtures cover suffix/scattered checkpoints, legacy record round trips,
+idempotent merge, prior interrupted generations, additive metadata, and headless
+completion/reload. They do not establish live SSH, Relay, Peer Device, or
+Detached Dispatch behavior.
+
+For cold dialog startup and the production-feature scheduler stack regression:
+
+```bash
+cargo test --locked -p openbitfun-core --features product-full --lib agentic::coordination::scheduler::tests::idle_background_result_uses_the_session_logical_agent_route -- --exact
+```
+
+Run this filter alone with `RUST_MIN_STACK` unset so prior skill discovery cannot
+warm the cold-start path. The shared coordinator keeps startup state behind one
+allocation boundary for every admission surface.
+
+For direct user follow-ups to reusable subagent sessions, legacy route defaults,
+source binding, and FreshOnly admission:
+
+```bash
+cargo test --locked -p openbitfun-core --no-default-features --features agent-runtime,git --lib subagent_conversation_
+```
+
+These fixtures cover local turn admission and SSH-workspace agent resolution;
+they do not exercise live SSH, relay, peer, or dispatch connections.
+
+For child-Agent lifecycle operations, mode-switch continuation, current-turn
+listing (including reserved IDs), parent-scoped resolution, and persisted deletion/cancellation lineage
+(ordinary subagents and Swarm):
+
+```bash
+cargo test --locked -p openbitfun-core --no-default-features --features agent-runtime,git --lib -- agent_lifecycle_ agentic::coordination::coordination_store::tests agentic::tools::implementations::agent_list_tool::tests
+```
+
+These fixtures cover local execution and persistence, not live remote transports.
+
 For disk-backed history paging and legacy sessions without a catalog:
 `cargo test --locked -p openbitfun-core --no-default-features --features remote-connect,git --lib history_page_`.
+
 Also run the `staged_revert_catalog_projection` and `load_relay_session_turns_`
 filters for the same target when changing visibility. Paging must not parse
 unrelated turn bodies or rewrite history. To compare real-file first-page work
 against full materialization locally, use the same target with
 `history_page_benchmark -- --ignored --nocapture`; it checks content equivalence
 and reports timings without asserting a machine-dependent latency in CI.
+
+For opening a staged-revert Session at its last complete visible Turn, run
+`cargo test --locked -p openbitfun-core --no-default-features --features agent-runtime,git --lib restore_session_view_tail_with_staged_revert`.
+This exercises local workspace resolution and the host-storage entry used by
+Peer callers, sparse legacy histories, complete payloads and untouched hidden
+files; it does not establish live remote behavior. The same target with
+`staged_revert_tail_benchmark -- --ignored --nocapture` compares real-file full
+materialization with the bounded visible-tail read without a CI timing assertion.
+
+For workspace metadata catalog paging, cache reuse and cross-process invalidation:
+`cargo test --locked -p openbitfun-core --no-default-features --features external-sources,git,product-search --lib -- catalog_snapshot_ catalog_query_pages_`.
 
 For host-stream history reads and abandoned execution after a runtime restart:
 `cargo test --locked -p openbitfun-core --no-default-features --features agent-runtime,git --lib load_relay_session_turns_`.
@@ -257,19 +407,53 @@ For built-in provider overlay, trusted endpoint validation, and reasoning catalo
 cargo test -p openbitfun-core --no-default-features --features ai-adapter-runtime --lib infrastructure::ai::
 ```
 
-For model selector latency, run the catalog and session mutation owner fixtures:
+For model-pool image admission, compatibility filtering, and image projection:
+
+```bash
+cargo test --locked -p openbitfun-core --no-default-features --features agent-runtime,git --lib -- model_pool::tests image_input input_model_tests
+```
+
+These fixtures exercise both pool strategies, inherited bindings, read-only previews,
+Agent tool restrictions, and native/tool-assisted image paths. They do not contact
+providers or exercise live SSH, relay, peer, or dispatch connections.
+
+For built-in MiniApp image-tool parity and five-image native/tool-assisted input,
+include the concrete image-tool owner in the same focused fixture:
+
+```bash
+cargo test --locked -p openbitfun-core --no-default-features --features agent-runtime,git,tools-image-analysis --lib -- image_input input_model_tests
+```
+
+For model selector latency, run the catalog and session owner fixtures:
 
 ```bash
 cargo test --locked -p openbitfun-core --no-default-features --features model-catalog --lib infrastructure::ai::reasoning_catalog::tests
 cargo test --locked -p openbitfun-core --no-default-features --features agent-runtime,git --lib session_model_update
+cargo test --locked -p openbitfun-core --no-default-features --features agent-runtime,git --lib session_model_read
+cargo test --locked -p openbitfun-core --no-default-features --features agent-runtime,git --lib -- session_permission_read session_permission_mode active_turn_permission_mode
 cargo test --locked -p openbitfun-core --no-default-features --features remote-connect,git --lib remote_attach_and_mutation_paths_preserve_workspace_ownership_facts
 ```
 
-Catalog snapshots remain usable during background refresh. Selector mutations
-must not restore cold transcripts or reserve active-session capacity; preserve
+Catalog snapshots remain usable during background refresh. Selector reads use
+live session facts or a persisted header, without reading Turns/context, acquiring
+the running Turn's mutation permit, or marking a cold runtime as loaded. Desktop
+and CLI Peer adapters preserve storage scope and internal-session visibility.
+Permission reads preserve the optional session override; only the live runtime
+can supply an active Turn and its temporary override.
+Selector mutations must not restore cold transcripts or reserve active-session capacity; preserve
 writer ownership, unknown persisted fields, legacy metadata-only sessions, and
 both state/metadata projections on failure. These fixtures cover local storage
 and remote routing contracts, not live SSH/relay/peer/dispatch connections.
+
+Remote session host rollback port wiring:
+
+`cargo test --locked -p openbitfun-core --no-default-features --features remote-connect --lib remote_session_host_registers_targeted_rollback_port`.
+
+For mobile/bot model-selection eligibility, legacy child records, and unknown
+session failures:
+`cargo test --locked -p openbitfun-core --no-default-features --features remote-connect,git --lib remote_model_strategy`.
+These owner fixtures preserve the unsupported child-editing boundary; they do not
+exercise a live relay or bot connection.
 
 Configuration persistence, account settings import, backup restore, legacy
 field/deletion compatibility, local-change notifications, and save/reload/model
@@ -290,6 +474,13 @@ cargo test --locked -p openbitfun-core --no-default-features --features remote-c
 cargo test --locked -p openbitfun-core --no-default-features --features remote-connect --lib service_agent_runtime::tests::remote_workspace_catalog_tracks_opened_rows_and_assistant_identity
 ```
 
+For explicit mobile file preview/download outside the selected workspace:
+`cargo test --locked -p openbitfun-core --no-default-features --features remote-connect,git --lib service_agent_runtime::tests::controller_file_reads_support_absolute_and_relative_paths_outside_workspace`.
+Provider isolation and automatic delivery confinement are covered by
+`cargo test --locked -p openbitfun-services-integrations --no-default-features --features remote-connect --lib remote_connect::file_projection::tests`.
+These fixtures cover local IO and a simulated remote filesystem, not live SSH,
+relay, Peer Device, or Detached Dispatch connections.
+
 Focused workspace-IO and snapshot regression entry points (use the matching
 filter rather than a product-wide build):
 
@@ -309,6 +500,17 @@ existing Agent tool test assembly):
 cargo test --locked -p openbitfun-core --no-default-features --features mcp-runtime,git --lib agentic::tools::product_runtime::
 ```
 
+For MCP ProductControl discovery, prompt budget, shared GUI/Agent persistence,
+runtime failures, and headless/remote-path refusal:
+
+```bash
+cargo test --locked -p openbitfun-core --no-default-features --features mcp-runtime,git --lib mcp_control_
+cargo test --locked -p openbitfun-core --no-default-features --features mcp-runtime,git --lib agentic::tools::implementations::openbitfun_control_tool::tests
+```
+
+These fixtures use temporary storage and local lifecycle state; they do not
+exercise live SSH, relay, Peer, or Detached Dispatch connections.
+
 User Agent directory watching and registry regressions (omit `file-watch` to
 exercise query-time discovery fallback):
 
@@ -319,7 +521,7 @@ cargo test --locked -p openbitfun-core --no-default-features --features agent-ru
 Skill discovery, installation provenance, and local/remote registry regressions:
 
 ```bash
-cargo test --locked -p openbitfun-core --no-default-features --features agent-runtime,git --lib agentic::tools::implementations::skills::
+cargo test --locked -p openbitfun-core --no-default-features --features agent-runtime,git,file-watch --lib agentic::tools::implementations::skills::
 ```
 
 SessionControl workspace selection, remote routing, and session-targeted actions:
@@ -328,6 +530,17 @@ SessionControl workspace selection, remote routing, and session-targeted actions
 cargo test --locked -p openbitfun-core --no-default-features --features agent-runtime,git --lib session_control_tool::tests
 cargo test --locked -p openbitfun-core --no-default-features --features agent-runtime,git --lib list_workspaces
 ```
+
+For MiniAppBrowser action routing, element-position capability negotiation, and
+opened-app guidance:
+
+```bash
+cargo test --locked -p openbitfun-core --no-default-features --features agent-runtime,git,tools-browser-web,tools-miniapp --lib miniapp_browser
+```
+
+This covers platform-neutral tool dispatch and legacy-host refusals, not native
+WebView input or live remote scenarios. The Web UI MiniApp agent fixtures cover
+actual app source and frame input.
 
 MiniApp Agent appdata workspace registration and pre-ID session compatibility:
 
@@ -354,6 +567,56 @@ For configured OpenCode discovery and explicit skill loading, include their owne
 cargo test --locked -p openbitfun-core --no-default-features --features agent-runtime,git,external-sources --lib agentic::tools::implementations::skill
 ```
 
+For native/Codex user-instruction selection, source catalog consistency, and
+local versus remote instruction composition:
+
+```bash
+cargo test --locked -p openbitfun-core --no-default-features --features external-sources,git --lib instruction_
+```
+
+For external session indexing, immutable source views, viewed-version forks,
+legacy materialization, workspace ownership and cancellation (including the full-text search build):
+
+```bash
+cargo test -p openbitfun-core --no-default-features --features external-sources,git,product-search --lib external_session_import::
+cargo test -p openbitfun-core --no-default-features --features external-sources,git,product-search --lib agentic::persistence::manager::tests
+cargo test -p openbitfun-core --no-default-features --features external-sources,git,product-search --lib session_fork_
+cargo test -p openbitfun-core --no-default-features --features external-sources,git,product-search --lib agentic::persistence::session_branch::tests
+cargo test -p openbitfun-core --no-default-features --features external-sources,git,product-search --lib agentic::session::session_manager::tests::restore_session_
+```
+
+For installed-source acceptance, set `OPENBITFUN_TEST_SESSION_ECOSYSTEM` and
+`OPENBITFUN_TEST_SESSION_ID` to a real source session, then run the same target
+with filter `inspect_installed_external_session_follow_and_fork -- --ignored --nocapture`.
+The source is read-only; native records are written only to a temporary user root.
+Set `TEMP` / `TMP` to the validation drive when testing a large local history.
+
+Optional read-only Zcode-to-temporary-native-store verification uses the same
+target with `inspect_installed_zcode_native_import -- --ignored --nocapture`.
+It reads the installed source and writes only inside a temporary test directory.
+
+For immutable external-history cache/window reads, byte-budget eviction, v1
+snapshot compatibility and viewed-version isolation, use the same target with
+`history_cache_`. The fixtures count real-file snapshot reads, derived catalog
+builds and copied turns; they do not measure native WebView or remote latency.
+
+The same target also supports `inspect_installed_codex_history_repair -- --ignored --nocapture`.
+Set `OPENBITFUN_TEST_NATIVE_SESSIONS_ROOT` and `OPENBITFUN_TEST_NATIVE_SESSION_ID`
+to an existing answerless Codex import. It reads the installed native copy and
+Codex source, exercises the repair in a temporary copy, and verifies the original
+native history is unchanged.
+
+External-subagent model inheritance uses the same owner feature:
+
+```bash
+cargo test -p openbitfun-core --no-default-features --features agent-runtime,git,external-sources --lib external_subagents::tests::omitted_external_model
+```
+
+Detached Dispatch model sync must use the protected config export and negotiate
+explicit-account binding/pool runtime capabilities before remote writes. Do not
+copy OAuth credentials or downgrade an unsupported binding to a generic model
+readiness failure. API-key and legacy-default sync retain their existing path.
+
 Detached Dispatch controller, target query compatibility, and managed-baseline checks:
 
 ```bash
@@ -367,7 +630,7 @@ cargo test --locked -p openbitfun-core --no-default-features --features remote-c
 cargo test --locked -p openbitfun-core --no-default-features --features remote-connect --lib service::remote_connect::bot::weixin::tests
 ```
 
-Pages account publication and tool gates (including remote directory rejection):
+Pages account management and tool gates (including remote directory rejection):
 
 ```bash
 cargo test -p openbitfun-core --no-default-features --features remote-connect,tools-pages,git,ssh-remote --lib page_
@@ -376,6 +639,13 @@ cargo test -p openbitfun-core --no-default-features --features remote-connect,to
 `tools-pages` selects only the Pages tool group. Account host wiring additionally
 requires `remote-connect`; CLI and Desktop select both explicitly. Pages does
 not select MiniApp runtime or market dependencies.
+
+`PageManage` is the default Pages Agent tool. `PagePublish` and `PageDeploy`
+remain registered only for legacy explicit tool selections and existing calls;
+do not add them back to mode defaults. List/version reads have no mutation
+permission intent; writes retain fresh, account-scoped Ask-mode approval.
+The focused fixtures cover loopback Relay requests, old Relay payloads, account
+switches, and simulated remote workspace rejection, not live remote connections.
 
 Scheduled-job workspace identity and the temporary 1.0.0 target upgrade boundary:
 
@@ -410,10 +680,43 @@ cargo test -p openbitfun-core --no-default-features --features agent-runtime,git
 ```
 
 These mock-host tests do not validate native capture, background input or remote
-GUI behavior; native fixtures remain owned by the Desktop Computer Use guide.
+GUI behavior; native fixtures remain owned by the shared Computer Use service guide.
 
 For plain-prompt goal activation and remote goal storage routing:
 
 ```bash
 cargo test --locked -p openbitfun-core --no-default-features --features agent-runtime,git,remote-workspace --lib thread_goal_
 ```
+
+Assistant naming, concurrent host allocation, and user-title protection:
+
+```bash
+cargo test --locked -p openbitfun-core --no-default-features --features agent-runtime,git --lib service::workspace::service::tests::assistant_
+cargo test --locked -p openbitfun-core --no-default-features --features agent-runtime,git --lib title_
+```
+
+For HTML preview workspace identity and shared resource-service wiring:
+
+```bash
+cargo test --locked -p openbitfun-core --no-default-features --features remote-connect --lib service::filesystem::html_preview::tests
+```
+
+For host-owned workspace icon persistence, legacy metadata round trips, worktree inheritance,
+concurrent-controller revisions and failed-write preservation:
+
+```bash
+cargo test -p openbitfun-core --no-default-features --features workspace-icons --lib service::workspace::service::icons
+```
+
+These are local fixtures, including an offline SSH workspace record; they do not establish
+live SSH, Relay or Detached Dispatch behavior. `workspace-icons` selects only workspace
+catalog and image service owners; headless task execution need not select it.
+
+For Remote Connect bot restore eligibility and listener shutdown/status:
+
+```bash
+cargo test --locked -p openbitfun-core --no-default-features --features remote-connect --lib -- service::remote_connect::control:: listener_lifecycle_tests
+```
+
+The lifecycle fixtures cover account/config replacement, explicit disablement,
+and task release; real provider message delivery requires a signed-in host.

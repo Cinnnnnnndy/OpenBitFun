@@ -54,7 +54,40 @@ import kotlin.uuid.Uuid
 import kotlin.uuid.ExperimentalUuidApi
 import kotlin.time.TimeSource
 
-public const val DEFAULT_CLOUD_RELAY_URL: String = "https://remote.openbitfun.com/v/1.0.2"
+/** Hosted Relay service version announced by the official endpoint. */
+public const val RELAY_SERVICE_VERSION: String = "1.0.10"
+
+/**
+ * Identity of the official Relay: no version query, no fragment, no trailing
+ * slash.
+ *
+ * Every API and socket path is joined onto this, and a stored token or master
+ * key is compared against it. The version parameter belongs to
+ * [OFFICIAL_CLOUD_RELAY_URL] only, so it can never reach a path.
+ */
+public const val DEFAULT_CLOUD_RELAY_URL: String = "https://remote.openbitfun.com/relay"
+
+/**
+ * The same deployment as a user sees and shares it: the service version travels
+ * as a GET parameter instead of a path segment, so a release no longer needs a
+ * proxy location of its own.
+ */
+public const val OFFICIAL_CLOUD_RELAY_URL: String = "$DEFAULT_CLOUD_RELAY_URL?v=$RELAY_SERVICE_VERSION"
+
+/**
+ * Paths served by the same deployed Relay and the same account database.
+ *
+ * `?v=` replaced the path segment as the client-facing version, but `/v/1.0.2`
+ * stays live for builds that predate the change: a token, master key, or device
+ * registration obtained through either path is interchangeable, because both
+ * reach one process and one database. Any other `/v/<version>` path is a
+ * different deployment.
+ */
+private val LIVE_RELAY_ENDPOINT_PATHS: Set<String> = setOf("/relay", "/v/1.0.2")
+
+/** The only query parameter a Relay endpoint may carry, and its value shape. */
+private const val RELAY_VERSION_PARAMETER = "v"
+private val RELAY_VERSION_VALUE = Regex("[A-Za-z0-9.]{1,32}")
 
 /** A relayed stream page slower than this is worth a breadcrumb; faster ones are not. */
 internal const val SLOW_STREAM_PAGE_MS: Long = 300L
@@ -315,7 +348,7 @@ public class CloudAccountClient internal constructor(
         val historyKey = target + ":" + sessionId
         val historyRequests = Channel<CompletableDeferred<Unit>>(Channel.RENDEZVOUS)
         historyReaders[historyKey] = historyRequests
-        val hints = socket.notifications.mapNotNull { notice -> decodeStreamHint(relayUrl, session, target, notice) }
+        val hints = socket.notifications.mapNotNull { notice -> decodeStreamHint(relayUrl, session, target, notice, socket.peerEncodings) }
         val reads = object : HostStreamReads {
             override suspend fun read(after: Long?, before: Long?, epoch: Long?): StreamPageWire {
                 check(realtime.value?.socket === socket) { "Account changed" }
@@ -364,7 +397,10 @@ public class CloudAccountClient internal constructor(
      * hint. A hint that cannot be decrypted is dropped: the next keepalive or
      * reconnect re-reads the host anyway.
      */
-    private suspend fun decodeStreamHint(relayUrl: String, session: CloudAccountSession, target: String, notice: JsonObject): StreamHint? {
+    private suspend fun decodeStreamHint(
+        relayUrl: String, session: CloudAccountSession, target: String, notice: JsonObject,
+        encodings: MutableStateFlow<Set<String>>?,
+    ): StreamHint? {
         if (notice["type"]?.jsonPrimitive?.contentOrNull != "device-event") return null
         val source = notice["sourceDeviceId"]?.jsonPrimitive?.contentOrNull ?: return null
         if (source != target) return null
@@ -372,8 +408,10 @@ public class CloudAccountClient internal constructor(
         val envelope = try { RelayJson.decodeFromJsonElement(EncryptedPayload.serializer(), params) } catch (_: Throwable) { return null }
         return try {
             val key = peerMessageKey(relayUrl, session, target)
-            val plain = CloudAccountCipher.decrypt(decode(envelope.encryptedData), key, decode(envelope.nonce)).decodeToString()
-            parseStreamHint(source, RelayJson.parseToJsonElement(plain).jsonObject)
+            val plain = RelayMessageEncoding.decode(CloudAccountCipher.decrypt(decode(envelope.encryptedData), key, decode(envelope.nonce))).decodeToString(throwOnInvalidSequence = true)
+            val event = RelayJson.parseToJsonElement(plain).jsonObject
+            encodings?.update { if (envelope.acceptEncoding == RelayMessageEncoding.NAME) it + target else it - target }
+            parseStreamHint(source, event)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: Throwable) {
@@ -413,20 +451,23 @@ public class CloudAccountClient internal constructor(
         if (target.isEmpty()) throw CloudAccountException(CloudAccountFailure.MALFORMED_RESPONSE)
         val socket = connection(relayUrl, session.token)
         val messageKey = peerMessageKey(relayUrl, session, target)
-        val payload = withContext(processingDispatcher) {
+        val encodings = socket.readyForEncoding()
+        val (payload, usesZstd) = withContext(processingDispatcher) {
             val nonce = DeviceIdentity.randomBytes(12)
             val plain = RelayJson.encodeToString(RemoteCommand.serializer(), command).encodeToByteArray()
-            val encrypted = CloudAccountCipher.encrypt(plain, messageKey, nonce)
-            EncryptedPayload(Base64.Default.encode(encrypted), Base64.Default.encode(nonce))
+            val encoded = RelayMessageEncoding.encode(plain, encodings?.value?.contains(target) == true)
+            val encrypted = CloudAccountCipher.encrypt(encoded, messageKey, nonce)
+            EncryptedPayload(Base64.Default.encode(encrypted), Base64.Default.encode(nonce), RelayMessageEncoding.NAME) to
+                (encoded.firstOrNull() == 0xff.toByte())
         }
         val response = RelayJson.decodeFromJsonElement(EncryptedPayload.serializer(),
             socket.call(target,
-                RelayJson.encodeToJsonElement(EncryptedPayload.serializer(), payload), timeoutMs))
+                RelayJson.encodeToJsonElement(EncryptedPayload.serializer(), payload), timeoutMs,
+                if (usesZstd) encodings else null))
         val decoded = try {
             withContext(processingDispatcher) {
-                CloudAccountCipher.decrypt(
-                    decode(response.encryptedData), messageKey, decode(response.nonce),
-                ).decodeToString()
+                val plain = CloudAccountCipher.decrypt(decode(response.encryptedData), messageKey, decode(response.nonce))
+                RelayMessageEncoding.decode(plain).decodeToString(throwOnInvalidSequence = true)
             }
         } catch (cancelled: CancellationException) {
             throw cancelled
@@ -437,6 +478,7 @@ public class CloudAccountClient internal constructor(
             log.error("device rpc undecryptable cmd=${command.cmd} reason=${cause::class.simpleName}")
             throw CloudAccountException(CloudAccountFailure.MALFORMED_RESPONSE, null, cause)
         }
+        encodings?.update { if (response.acceptEncoding == RelayMessageEncoding.NAME) it + target else it - target }
         return try {
             withContext(processingDispatcher) { RelayJson.decodeFromString(deserializer, decoded) }
         } catch (cancelled: CancellationException) {
@@ -686,6 +728,41 @@ private fun statusFailure(status: Int): CloudAccountException = when (status) {
     429 -> CloudAccountException(CloudAccountFailure.RATE_LIMITED, status)
     in 500..599 -> CloudAccountException(CloudAccountFailure.RELAY_UNAVAILABLE, status)
     else -> CloudAccountException(CloudAccountFailure.MALFORMED_RESPONSE, status)
+}
+
+/** The server an endpoint names, and the path it names on that server. */
+private class RelayEndpointIdentity(val origin: String, val path: String)
+
+/**
+ * Whether two Relay URLs resolve to the same deployed Relay.
+ *
+ * This is the comparison behind reusing a stored token or master key: both live
+ * aliases of one host count as one deployment, so a build that moves from
+ * `/v/1.0.2` to `/relay?v=` keeps its credential, while any other versioned
+ * path is a different or retired deployment. Exactly one `v=<version>`
+ * parameter is allowed and it is never part of the identity; a fragment makes
+ * the value not an endpoint at all.
+ */
+public fun sameRelayDeployment(left: String?, right: String?): Boolean {
+    val a = relayEndpointIdentity(left) ?: return false
+    val b = relayEndpointIdentity(right) ?: return false
+    if (a.origin != b.origin) return false
+    return a.path == b.path || (a.path in LIVE_RELAY_ENDPOINT_PATHS && b.path in LIVE_RELAY_ENDPOINT_PATHS)
+}
+
+private fun relayEndpointIdentity(value: String?): RelayEndpointIdentity? {
+    val text = value?.trim().orEmpty()
+    if (text.isEmpty()) return null
+    val url = runCatching { io.ktor.http.Url(text) }.getOrNull() ?: return null
+    if (url.protocol.name !in setOf("http", "https") || url.user != null || url.password != null ||
+        url.fragment.isNotEmpty()) return null
+    if (url.parameters.names().isNotEmpty()) {
+        val versions = url.parameters.getAll(RELAY_VERSION_PARAMETER).orEmpty()
+        if (url.parameters.names() != setOf(RELAY_VERSION_PARAMETER) || versions.size != 1 ||
+            !RELAY_VERSION_VALUE.matches(versions.single())) return null
+    }
+    val port = url.port.takeIf { it != url.protocol.defaultPort }?.let { ":$it" }.orEmpty()
+    return RelayEndpointIdentity(url.protocol.name + "://" + url.host.lowercase() + port, url.encodedPath.trimEnd('/'))
 }
 
 private fun encodePathSegment(value: String): String = value.encodeToByteArray().joinToString("") { byte ->

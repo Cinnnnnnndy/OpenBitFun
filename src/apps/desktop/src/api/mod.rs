@@ -9,7 +9,6 @@ pub mod browser_api;
 pub mod browser_control_api;
 pub mod browser_file_drop_api;
 pub mod btw_api;
-pub mod canvas_api;
 pub mod clipboard_file_api;
 pub mod commands;
 pub mod computer_use_api;
@@ -25,8 +24,10 @@ pub mod dto;
 pub mod editor_ai_api;
 pub mod event_coalescer;
 pub mod external_hooks_api;
+pub mod external_session_import_api;
 pub mod external_sources_api;
 pub mod file_drop_preview_api;
+pub mod generative_ui_api;
 pub mod git_agent_api;
 pub mod git_api;
 pub mod html_preview_api;
@@ -64,3 +65,5 @@ pub mod workspace_activation;
 pub mod worktree_api;
 
 pub use app_state::{AppState, AppStatistics, HealthStatus, RemoteWorkspace};
+
+pub mod model_pool_api;

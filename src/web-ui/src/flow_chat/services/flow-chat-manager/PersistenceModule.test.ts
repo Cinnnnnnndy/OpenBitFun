@@ -6,6 +6,7 @@ import {
   debouncedSaveDialogTurn,
   immediateSaveDialogTurn,
   saveDialogTurnToDisk,
+  saveDialogTurnConfirmed,
   updateSessionMetadata,
 } from './PersistenceModule';
 
@@ -108,6 +109,17 @@ describe('PersistenceModule', () => {
     vi.clearAllMocks();
   });
 
+  it.each([{}, { firstChunkMs: 20, firstVisibleOutputMs: 200, streamDurationMs: 1_200, ttftMs: 350 }])(
+    'preserves optional host timing through JSON persistence: %j', timing => {
+      const turn = createDialogTurn('completed');
+      Object.assign(turn.modelRounds[0], timing);
+      const saved = JSON.parse(JSON.stringify(convertDialogTurnToBackendFormat(turn)));
+      for (const key of ['firstChunkMs', 'firstVisibleOutputMs', 'streamDurationMs', 'ttftMs'] as const) {
+        expect(saved.modelRounds[0][key]).toBe(turn.modelRounds[0][key]);
+      }
+    },
+  );
+
   it('saves a visible result receipt with its retained generation and no metadata read', async () => {
     const turn = createDialogTurn('completed');
     turn.recoveryEpoch = 2;
@@ -116,6 +128,35 @@ describe('PersistenceModule', () => {
     expect(mockSaveSessionMetadata).toHaveBeenCalledWith(expect.objectContaining({
       unreadCompletion: undefined,
       lastTurn: expect.objectContaining({ turnId: TURN_ID, status: 'completed', executionGeneration: 2 }),
+    }), 'workspace-local', ['unreadCompletion', 'needsUserAttention']);
+  });
+
+  it('keeps peer turn saves and explicit UI patches while avoiding automatic metadata round trips', async () => {
+    const original = getActiveSurfaceId();
+    activateSurface('legacy-cli');
+    try {
+      const context = createContext(createDialogTurn('completed'));
+      await saveDialogTurnToDisk(context, SESSION_ID, TURN_ID);
+      expect(mockSaveSessionTurn).toHaveBeenCalledTimes(1);
+      expect(mockLoadSessionMetadata).not.toHaveBeenCalled();
+      expect(mockSaveSessionMetadata).not.toHaveBeenCalled();
+
+      await updateSessionMetadata(context, SESSION_ID, ['titleMetadata']);
+      expect(mockSaveSessionMetadata).toHaveBeenCalledWith(
+        expect.any(Object), 'workspace-local', ['titleMetadata'],
+      );
+    } finally {
+      activateSurface(original);
+    }
+  });
+
+  it('names the host receipt when the transcript was never loaded', async () => {
+    const receipt = { turnId: 'host-turn', turnIndex: 4, status: 'cancelled' as const, executionGeneration: 3, recoveryPending: true };
+    await updateSessionMetadata(createContext(createDialogTurn('completed')), SESSION_ID,
+      ['unreadCompletion', 'needsUserAttention'], { unreadReceipt: receipt });
+    expect(mockSaveSessionMetadata).toHaveBeenCalledWith(expect.objectContaining({
+      lastTurn: receipt,
+      customMetadata: expect.objectContaining({ unreadCompletionTarget: receipt }),
     }), 'workspace-local', ['unreadCompletion', 'needsUserAttention']);
   });
 
@@ -153,6 +194,15 @@ describe('PersistenceModule', () => {
     } finally {
       activateSurface(original);
     }
+  });
+
+  it('preserves actual routing facts in frontend checkpoints', () => {
+    const turn = createDialogTurn('completed');
+    turn.modelRounds = [{ id: 'r', index: 0, items: [], isStreaming: false, isComplete: true, startTime: 1,
+      modelConfigId: 'economy-id', effectiveModelName: 'economy-name', routing: { route: 'economy', latencyMs: 12 } }];
+    expect(convertDialogTurnToBackendFormat(turn, 0).modelRounds[0]).toMatchObject({
+      modelConfigId: 'economy-id', effectiveModelName: 'economy-name', routing: { route: 'economy', latencyMs: 12 },
+    });
   });
 
   it('persists dialog turn token usage metadata when available', () => {
@@ -402,6 +452,21 @@ describe('PersistenceModule', () => {
     await vi.advanceTimersByTimeAsync(500);
     await flushMicrotasks();
     expect(mockSaveSessionTurn).toHaveBeenCalledTimes(1);
+  });
+
+  it('confirmed saves await IO and propagate persistence failures', async () => {
+    const context = createContext(createDialogTurn('completed'));
+    mockSaveSessionTurn.mockRejectedValueOnce(new Error('disk unavailable'));
+    await expect(saveDialogTurnConfirmed(context, SESSION_ID, TURN_ID)).rejects.toThrow('disk unavailable');
+    await expect(saveDialogTurnConfirmed(context, SESSION_ID, TURN_ID)).resolves.toBeUndefined();
+  });
+
+  it('confirmed saves reject unsupported owners instead of reporting success', async () => {
+    await expect(saveDialogTurnConfirmed(createContext(createDialogTurn('completed'), { isTransient: true }), SESSION_ID, TURN_ID)).rejects.toThrow('does not support');
+    const turn = createDialogTurn('completed');
+    turn.recovery = { status: 'recovering', executionGeneration: 1, resumeCount: 1 };
+    await expect(saveDialogTurnConfirmed(createContext(turn), SESSION_ID, TURN_ID)).rejects.toThrow('Runtime-owned');
+    expect(mockSaveSessionTurn).not.toHaveBeenCalled();
   });
 
   it('does not overwrite Runtime-owned interrupted or recovering turns', async () => {

@@ -5,9 +5,11 @@ import { agentAPI } from '@/infrastructure/api/service-api/AgentAPI';
 export interface SessionModeSelectionTarget {
   draft?: boolean;
   sessionId: string;
+  workspaceId?: string;
   workspacePath?: string;
   remoteConnectionId?: string;
   remoteSshHost?: string;
+  includeInternal?: boolean;
 }
 
 interface ModeSelectionIntent {
@@ -21,9 +23,9 @@ interface SessionModeSelectionQueue {
 }
 
 /**
- * Keep passive selector hydration separate from an explicit Runtime rebind.
- * A catalog refresh may change which same-name route is currently offered,
- * but only a user selection may replace a Session's durable route owner.
+ * Commit explicit selections after Runtime acceptance. Passive composer
+ * hydration is handled separately by useChatInputModeSync and never publishes
+ * a Session mutation.
  */
 export function useSessionModeSelection(
   target: SessionModeSelectionTarget | null,
@@ -32,7 +34,6 @@ export function useSessionModeSelection(
   onSelectionCommitted?: (modeId: string) => void,
 ): {
   isModeChangePending: boolean;
-  publishModeSelection: (modeId: string) => void;
   requestModeChange: (modeId: string) => void;
 } {
   const publishRef = useRef(publishSelection);
@@ -60,13 +61,11 @@ export function useSessionModeSelection(
 
   const sessionId = target?.sessionId;
   const draft = target?.draft;
+  const workspaceId = target?.workspaceId;
   const workspacePath = target?.workspacePath;
   const remoteConnectionId = target?.remoteConnectionId;
   const remoteSshHost = target?.remoteSshHost;
-
-  const publishModeSelection = useCallback((modeId: string) => {
-    publishRef.current(modeId);
-  }, []);
+  const includeInternal = target?.includeInternal;
 
   const requestModeChange = useCallback((modeId: string) => {
     if (!sessionId || draft) {
@@ -78,9 +77,11 @@ export function useSessionModeSelection(
       request: {
         sessionId,
         modeId,
+        workspaceId,
         workspacePath,
         remoteConnectionId,
         remoteSshHost,
+        includeInternal,
       },
       publish: publishRef.current,
       reportFailure: failureRef.current,
@@ -123,11 +124,10 @@ export function useSessionModeSelection(
       }
     };
     void run(intent);
-  }, [draft, notifyQueueChanged, remoteConnectionId, remoteSshHost, sessionId, workspacePath]);
+  }, [draft, notifyQueueChanged, remoteConnectionId, remoteSshHost, sessionId, workspaceId, workspacePath, includeInternal]);
 
   return {
     isModeChangePending: Boolean(sessionId && sessionQueuesRef.current.has(sessionId)),
-    publishModeSelection,
     requestModeChange,
   };
 }

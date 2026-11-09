@@ -20,6 +20,8 @@ pub mod external_mcp_import;
 #[cfg(all(test, feature = "external-sources"))]
 mod external_mcp_tests;
 #[cfg(feature = "external-sources")]
+pub mod external_session_import;
+#[cfg(feature = "external-sources")]
 pub mod external_sources;
 #[cfg(feature = "external-sources")]
 mod external_subagents;
@@ -30,7 +32,6 @@ pub mod function_agents; // Function-based agents
 pub mod infrastructure; // AI clients, storage, logging, events
 #[cfg(feature = "external-sources")]
 mod instruction_sources;
-#[cfg(feature = "legacy-migration")]
 pub mod legacy_migration;
 #[cfg(feature = "tools-miniapp")]
 pub mod miniapp; // AI-generated instant apps (Zero-Dialect Runtime)

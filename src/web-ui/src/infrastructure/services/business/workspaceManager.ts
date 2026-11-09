@@ -1,5 +1,11 @@
  
 
+import {
+  noteWorkspaceActivated,
+  orderWorkspacesForDisplay,
+  setWorkspaceDisplayOrder,
+  stableWorkspaceOrder,
+} from './workspaceDisplayOrder';
 import type {
   RemoteWorkspaceSnapshot,
   WorkspaceInfo,
@@ -66,6 +72,7 @@ interface WorkspaceIdentityChangedEvent {
   name: string;
   identity: WorkspaceInfo['identity'];
   changedFields: string[];
+  defaultNameNumber?: number | null;
 }
 
 export type WorkspaceEvent =
@@ -167,6 +174,14 @@ class WorkspaceManager {
     // The activation commit swaps transport before listeners run, so consumers
     // can safely render this surface's cached workspace snapshot immediately.
     onSurfaceActivated(scope => {
+      // While this device was in the background its catalog may have changed
+      // its display order; show the cached list in that order at once, so the
+      // hand-over from the catalog projection moves no row.
+      const cached = this.getOpenedWorkspacesList();
+      const ordered = orderWorkspacesForDisplay(scope.surfaceId, cached);
+      if (ordered.some((workspace, index) => workspace !== cached[index])) {
+        this.state = { ...this.state, openedWorkspaces: this.buildOpenedWorkspaceMap(ordered) };
+      }
       this.emit({
         type: 'workspace:active-changed',
         workspace: this.state.currentWorkspace,
@@ -180,6 +195,16 @@ class WorkspaceManager {
         void this.syncWorkspaceStateAfterIdentityListenerReady();
       }
     });
+  }
+
+  /** Opened workspaces last loaded for a surface, rendered or not. */
+  public getSurfaceOpenedWorkspaces(surfaceId: DeviceSurfaceId): WorkspaceInfo[] {
+    // In the order the device is shown now: a background catalog read may
+    // have changed it since this list was loaded.
+    return orderWorkspacesForDisplay(
+      surfaceId,
+      Array.from(this.surfaceContainers.get(surfaceId)?.state.openedWorkspaces.values() ?? []),
+    );
   }
 
   private surfaceContainer(surfaceId: DeviceSurfaceId): WorkspaceSurfaceContainer {
@@ -322,10 +347,16 @@ class WorkspaceManager {
   }
 
   private setLoading(loading: boolean): void {
+    // State-quiet events: repeating an unchanged value would have listeners
+    // observe `workspace:loading` and `workspace:error` in the same tick —
+    // e.g. loading:true then error:null right after — and treat the pair as a
+    // load that failed instantly.
+    if (this.state.loading === loading) return;
     this.updateState({ loading }, { type: 'workspace:loading', loading });
   }
 
   private setError(error: string | null): void {
+    if (this.state.error === error) return;
     this.updateState({ error }, { type: 'workspace:error', error });
   }
 
@@ -346,22 +377,15 @@ class WorkspaceManager {
       : workspace.workspaceKind !== 'assistant';
   }
 
+  /**
+   * A host list in this surface's display order. The same order the device
+   * catalog applies, so the live list and the device's background projection
+   * never disagree (see `workspaceDisplayOrder`). Ordering by this window's
+   * previous list instead let the two projections adopt each other's order on
+   * every switch.
+   */
   private preserveOpenedWorkspaceOrder(workspaces: WorkspaceInfo[]): WorkspaceInfo[] {
-    const currentOrder = Array.from(this.state.openedWorkspaces.keys());
-    const nextWorkspaceMap = this.buildOpenedWorkspaceMap(workspaces);
-    const orderedWorkspaces = currentOrder
-      .map(workspaceId => nextWorkspaceMap.get(workspaceId))
-      .filter((workspace): workspace is WorkspaceInfo => Boolean(workspace));
-
-    const existingIds = new Set(orderedWorkspaces.map(workspace => workspace.id));
-
-    for (const workspace of workspaces) {
-      if (!existingIds.has(workspace.id)) {
-        orderedWorkspaces.push(workspace);
-      }
-    }
-
-    return orderedWorkspaces;
+    return stableWorkspaceOrder(getActiveSurfaceId(), workspaces);
   }
 
   private buildReorderedOpenedWorkspaceIds(
@@ -446,7 +470,10 @@ class WorkspaceManager {
     error: string | null,
     event?: WorkspaceEvent
   ): void {
-    const openedWorkspaceMap = this.buildOpenedWorkspaceMap(openedWorkspaces);
+    // Every list a host returns is shown in this surface's one display order.
+    const openedWorkspaceMap = this.buildOpenedWorkspaceMap(
+      stableWorkspaceOrder(getActiveSurfaceId(), openedWorkspaces),
+    );
 
     const resolvedCurrentWorkspace = currentWorkspace
       ? openedWorkspaceMap.get(currentWorkspace.id) ?? currentWorkspace
@@ -620,6 +647,7 @@ class WorkspaceManager {
       return {
         ...workspace,
         name: update.name,
+        defaultNameNumber: update.defaultNameNumber ?? null,
         identity: update.identity ?? null,
       };
     };
@@ -1408,6 +1436,8 @@ class WorkspaceManager {
     }
   }
 
+  private activeWorkspaceSwitchSequence = 0;
+
   public async setActiveWorkspace(workspaceId: string): Promise<WorkspaceInfo> {
     const surface = this.captureSurface();
     try {
@@ -1428,23 +1458,40 @@ class WorkspaceManager {
         ? await globalStateAPI.openWorkspaceById(workspaceId)
         : await globalStateAPI.setActiveWorkspace(workspaceId);
       this.assertSurfaceUnchanged(surface, 'set active workspace');
-      const [recentWorkspaces, openedWorkspaces] = await Promise.all([
-        globalStateAPI.getRecentWorkspaces(),
-        globalStateAPI.getOpenedWorkspaces(),
-      ]);
-      this.assertSurfaceUnchanged(surface, 'set active workspace');
-      const orderedOpenedWorkspaces = this.preserveOpenedWorkspaceOrder(openedWorkspaces);
-
+      // An older host moved it to the front of its opened list; that is not
+      // an arrangement the display order should adopt.
+      noteWorkspaceActivated(surface.scope.surfaceId, workspace.id);
+      // The host has switched: show it now, from the lists this window holds.
+      // The recent and opened lists are refreshed afterwards, off the path the
+      // user waits on (opening a session in another workspace waits on this).
+      const knownOpened = this.getOpenedWorkspacesList();
+      const opened = knownOpened.some(candidate => candidate.id === workspace.id)
+        ? knownOpened : [workspace, ...knownOpened];
+      const switchSequence = ++this.activeWorkspaceSwitchSequence;
       this.updateWorkspaceState(
         workspace,
-        recentWorkspaces,
-        orderedOpenedWorkspaces,
+        this.state.recentWorkspaces,
+        this.preserveOpenedWorkspaceOrder(opened),
         false,
         null,
         { type: 'workspace:switched', workspace }
       );
-
       this.emit({ type: 'workspace:active-changed', workspace });
+      void Promise.all([
+        globalStateAPI.getRecentWorkspaces(),
+        globalStateAPI.getOpenedWorkspaces(),
+      ]).then(([recentWorkspaces, openedWorkspaces]) => {
+        // A newer switch (or another device) owns the state by now.
+        if (!this.isSurfaceUnchanged(surface) || switchSequence !== this.activeWorkspaceSwitchSequence) return;
+        this.updateWorkspaceState(
+          this.state.currentWorkspace,
+          recentWorkspaces,
+          this.preserveOpenedWorkspaceOrder(openedWorkspaces),
+          false,
+          null,
+          { type: 'workspace:recent-updated' },
+        );
+      }).catch(error => log.warn('Failed to refresh workspace lists after a switch', { workspaceId, error }));
       return workspace;
     } catch (error) {
       if (!this.isSurfaceUnchanged(surface)) {
@@ -1500,6 +1547,7 @@ class WorkspaceManager {
       return;
     }
 
+    setWorkspaceDisplayOrder(getActiveSurfaceId(), reorderedOpenedWorkspaces.map(workspace => workspace.id));
     this.updateWorkspaceState(
       previousCurrentWorkspace,
       previousRecentWorkspaces,
@@ -1516,6 +1564,7 @@ class WorkspaceManager {
         throw error;
       }
       const errorMessage = error instanceof Error ? error.message : String(error);
+      setWorkspaceDisplayOrder(getActiveSurfaceId(), previousOpenedWorkspaces.map(workspace => workspace.id));
       const rollbackEventWorkspace = previousCurrentWorkspace
         ?? workspaceMap.get(sourceWorkspaceId)
         ?? previousOpenedWorkspaces[0]
@@ -1621,53 +1670,35 @@ class WorkspaceManager {
     await this.refreshRecentWorkspaces();
   }
 
-  public async updateWorkspaceRelatedPaths(
+  public async updateWorkspaceInfo(
     workspaceId: string,
-    relatedPaths: WorkspaceInfo['relatedPaths']
+    updates: { name?: string; relatedPaths?: WorkspaceInfo['relatedPaths'] }
   ): Promise<WorkspaceInfo> {
     const surface = this.captureSurface();
     try {
       this.setError(null);
-
-      const updatedWorkspace = await globalStateAPI.updateWorkspaceInfo(workspaceId, {
-        relatedPaths,
-      });
-      this.assertSurfaceUnchanged(surface, 'update workspace related paths');
-
+      const updatedWorkspace = await globalStateAPI.updateWorkspaceInfo(workspaceId, updates);
+      this.assertSurfaceUnchanged(surface, 'update workspace info');
       this.applyWorkspaceRecordUpdate(updatedWorkspace);
       return updatedWorkspace;
     } catch (error) {
-      if (!this.isSurfaceUnchanged(surface)) {
-        throw error;
-      }
-      log.error('Failed to update workspace related paths', { workspaceId, error });
+      if (!this.isSurfaceUnchanged(surface)) throw error;
+      log.error('Failed to update workspace info', { workspaceId, error });
       const errorMessage = error instanceof Error ? error.message : String(error);
       this.updateState({ error: errorMessage }, { type: 'workspace:error', error: errorMessage });
       throw error;
     }
   }
 
+  public async updateWorkspaceRelatedPaths(
+    workspaceId: string,
+    relatedPaths: WorkspaceInfo['relatedPaths']
+  ): Promise<WorkspaceInfo> {
+    return this.updateWorkspaceInfo(workspaceId, { relatedPaths });
+  }
+
   public async renameWorkspace(workspaceId: string, name: string): Promise<WorkspaceInfo> {
-    const surface = this.captureSurface();
-    try {
-      this.setError(null);
-
-      const updatedWorkspace = await globalStateAPI.updateWorkspaceInfo(workspaceId, {
-        name: name.trim(),
-      });
-      this.assertSurfaceUnchanged(surface, 'rename workspace');
-
-      this.applyWorkspaceRecordUpdate(updatedWorkspace);
-      return updatedWorkspace;
-    } catch (error) {
-      if (!this.isSurfaceUnchanged(surface)) {
-        throw error;
-      }
-      log.error('Failed to rename workspace', { workspaceId, error });
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      this.updateState({ error: errorMessage }, { type: 'workspace:error', error: errorMessage });
-      throw error;
-    }
+    return this.updateWorkspaceInfo(workspaceId, { name: name.trim() });
   }
 
   public async cleanupInvalidWorkspaces(): Promise<number> {

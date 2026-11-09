@@ -27,12 +27,24 @@ export type UiSessionMetadataField =
   | 'needsUserAttention'
   | 'titleMetadata';
 
+export interface SessionCatalogQuery {
+  workspaceId: string;
+  ordering: 'created' | 'updated';
+  source: string;
+  /** New hosts may acknowledge a mixed native/external source allowlist. */
+  sources?: string[];
+  sortTimestamps?: Record<string, number>;
+}
+
 export interface SessionMetadataPageRequest {
   workspaceId: string;
   limit: number;
   cursor?: string;
   /** Read only these summaries (max 128), without returning metadata rows. */
   sessionIds?: string[];
+  query?: SessionCatalogQuery;
+  /** Explicitly refresh sources and wait for that scan in this request. */
+  refreshExternalDiscovery?: boolean;
 }
 
 export interface SessionMetadataPage {
@@ -43,6 +55,21 @@ export interface SessionMetadataPage {
   hasMore: boolean;
   /** Absent on older hosts; never interpret absence as an empty snapshot. */
   activities?: SessionActivitySummary[];
+  discoveryWarnings?: string[];
+  /** Structured host diagnostics for clients that can localize each issue. */
+  discoveryDiagnostics?: SessionDiscoveryDiagnostic[];
+  discoveryPending?: boolean;
+  discoveryRefreshed?: boolean;
+  /** Present only when the host applied this complete query before paging. */
+  catalogQuery?: SessionCatalogQuery;
+  catalogRevision?: string;
+  /** The cursor belonged to another query/version; this page restarts at zero. */
+  catalogReset?: boolean;
+}
+
+export interface SessionDiscoveryDiagnostic {
+  ecosystemId: string;
+  code: string;
 }
 
 export interface SessionLineageRequest {
@@ -137,11 +164,32 @@ export interface SessionUsageReportRequest {
   sessionId: string;
   workspaceId: string;
   includeHiddenSubagents?: boolean;
+  includeSystemPromptPreview?: boolean;
+  contextPreviewCategory?: UsageContextCategory;
 }
+
+export type UsageContextCategory = 'systemPrompt' | 'toolDefinitions' | 'rules' | 'skills' | 'mcpTools' | 'subagentDefinitions';
 
 export type UsageModelIdentitySource = 'recorded' | 'inferred_session_model' | 'legacy_missing';
 
+/** Runtime estimates for the latest parent request; absent for older/external hosts. */
+export interface UsageContextBreakdown {
+  systemPrompt: number;
+  toolDefinitions: number;
+  rules: number;
+  skills: number;
+  mcpTools: number;
+  subagentDefinitions: number;
+  summarizedConversation: number;
+  conversation: number;
+  contextWindow?: number;
+}
+
 export interface SessionUsageReport {
+  context?: UsageContextBreakdown;
+  /** Opt-in view of the latest cached system message, not a historical snapshot. */
+  systemPromptPreview?: { content: string; cachedAt: number };
+  contextPreview?: { category: UsageContextCategory; content: string; capturedAt: number };
   schemaVersion: number;
   reportId: string;
   sessionId: string;
@@ -332,12 +380,12 @@ export class SessionAPI {
   }
 
   async searchReferenceableSessions(
-    query: string,
+    query: string | undefined,
     limit = 30,
   ): Promise<SessionReferenceCandidate[]> {
     try {
       return await api.invoke('search_referenceable_sessions', {
-        request: { query, limit },
+        request: query === undefined ? { limit } : { query, limit },
       });
     } catch (error) {
       throw createTauriCommandError('search_referenceable_sessions', error, { query, limit });
@@ -366,6 +414,33 @@ export class SessionAPI {
     }
   }
 
+  /**
+   * Copy a session into a new independent session.
+   *
+   * The host copies the source session's persisted history under a new session
+   * id and leaves the source session untouched. No turn id is sent: the host
+   * resolves the copy boundary from the session's own latest persisted turn, so
+   * the controller never has to load a session's turns to ask for a copy.
+   */
+  async duplicateSession(
+    sourceSessionId: string,
+    workspaceId: string
+  ): Promise<{ sessionId: string; sessionName: string; agentType: string }> {
+    try {
+      return await invokePrepared('copy_session', async () => ({
+        request: {
+          source_session_id: sourceSessionId,
+          workspace_id: workspaceId,
+        }
+      }));
+    } catch (error) {
+      throw createTauriCommandError('copy_session', error, {
+        sourceSessionId,
+        workspaceId,
+      });
+    }
+  }
+
   async listSessions(workspaceId: string): Promise<SessionMetadata[]> {
     return invokePrepared('list_persisted_sessions', async () => ({
       request: await sessionWorkspaceIdRequest(workspaceId),
@@ -382,6 +457,8 @@ export class SessionAPI {
           limit: request.limit,
           ...(request.cursor ? { cursor: request.cursor } : {}),
           ...(request.sessionIds ? { session_ids: request.sessionIds } : {}),
+          ...(request.query ? { query: request.query } : {}),
+          ...(request.refreshExternalDiscovery ? { refresh_external_discovery: true } : {}),
         }
       }));
     } catch (error) {
@@ -526,7 +603,8 @@ export class SessionAPI {
           session_id: request.sessionId,
           ...await sessionWorkspaceIdRequest(request.workspaceId),
           include_hidden_subagents: request.includeHiddenSubagents ?? true,
-
+          ...(request.includeSystemPromptPreview ? { include_system_prompt_preview: true } : {}),
+          ...(request.contextPreviewCategory ? { context_preview_category: request.contextPreviewCategory } : {}),
         }
       }));
     } catch (error) {

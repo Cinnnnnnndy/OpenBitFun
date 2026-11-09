@@ -9,7 +9,7 @@
  * - Merge keys are scoped by session, round/tool id, and retry attempt
  */
 
-import { areSensitiveDiagnosticsEnabled, createLogger } from '@/shared/utils/logger';
+import { areSensitiveDiagnosticsEnabled, createLogger, logger, LogLevel } from '@/shared/utils/logger';
 import { elapsedMs, nowMs } from '@/shared/utils/timing';
 
 const log = createLogger('EventBatcher');
@@ -228,13 +228,19 @@ export class EventBatcher {
 
     const startTime = nowMs();
     const bufferedEvents = Array.from(this.buffer.values());
-    const logPayload = getBatchedEventsLogPayload(bufferedEvents);
-    const { rawEventCount, mergedEventCount } = logPayload;
 
     const events = bufferedEvents.map(({ key, payload }) => ({
       key,
       payload
     }));
+
+    // Build the detailed diagnostic payload only when trace output can reach a
+    // sink; the cheap source count is still needed by the slow-flush warning.
+    const rawEventCount = bufferedEvents.reduce((count, event) => count + event.sourceCount, 0);
+    const logPayload = logger.getLevel() > LogLevel.TRACE
+      ? { rawEventCount, mergedEventCount: bufferedEvents.length }
+      : getBatchedEventsLogPayload(bufferedEvents);
+    const mergedEventCount = logPayload.mergedEventCount;
 
     log.trace('Flushing batched events', logPayload);
 
@@ -285,6 +291,7 @@ export interface SubagentParentInfo {
 export type ToolEventType =
   | 'EarlyDetected'
   | 'ParamsPartial'
+  | 'GenUIStream'
   | 'Queued'
   | 'Waiting'
   | 'Started'
@@ -311,6 +318,19 @@ export type EarlyDetectedToolEvent = BaseToolEvent<'EarlyDetected'>;
 
 export interface ParamsPartialToolEvent extends BaseToolEvent<'ParamsPartial'> {
   params: string;
+}
+
+export interface GenUIStreamToolEvent extends BaseToolEvent<'GenUIStream'> {
+  message_id: string;
+  seq: number;
+  format: 'openui-lang';
+  text: string;
+  reset: boolean;
+  app_id?: string;
+  title?: string;
+  template?: string;
+  library_id?: string;
+  library_revision?: number;
 }
 
 export function normalizeParamsPartialFragment(params: unknown): string {
@@ -388,6 +408,7 @@ export interface CancelledToolEvent extends BaseToolEvent<'Cancelled'> {
 export type FlowToolEvent =
   | EarlyDetectedToolEvent
   | ParamsPartialToolEvent
+  | GenUIStreamToolEvent
   | QueuedToolEvent
   | WaitingToolEvent
   | StartedToolEvent
@@ -458,7 +479,7 @@ export function generateToolEventKey(data: ToolEventData): { key: string; strate
   const eventType = toolEvent.event_type;
   const attemptToken = resolveAttemptMergeToken(data);
 
-  const isolatedEvents: ToolEventType[] = ['EarlyDetected', 'Started', 'Completed', 'Failed', 'Cancelled', 'Rejected', 'ConfirmationNeeded'];
+  const isolatedEvents: ToolEventType[] = ['EarlyDetected', 'GenUIStream', 'Started', 'Completed', 'Failed', 'Cancelled', 'Rejected', 'ConfirmationNeeded'];
   if (isolatedEvents.includes(eventType)) {
     return null;
   }

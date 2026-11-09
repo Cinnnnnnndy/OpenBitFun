@@ -5,12 +5,13 @@ import { flowChatStore } from '@/flow_chat/store/FlowChatStore';
 import { useModernFlowChatStore } from '@/flow_chat/store/modernFlowChatStore';
 import type { Session } from '@/flow_chat/types/flow-chat';
 import { activateSurface, LOCAL_SURFACE_ID } from '@/infrastructure/peer-device/deviceSurface';
-import { selectActiveSceneId, useSceneStore } from '../stores/sceneStore';
+import { selectActiveSceneId, useSceneStore, resetSceneStoreForTest } from '../stores/sceneStore';
 import { getSessionSceneTabId } from '../components/SceneBar/types';
 import { resolveSessionSceneTarget } from './sessionSceneTarget';
 import { workspaceManager, type WorkspaceEventListener } from '@/infrastructure/services/business/workspaceManager';
 import { WorkspaceKind, type WorkspaceInfo } from '@/shared/types';
 import { startSessionSceneLifecycle } from './sessionSceneLifecycle';
+import { sceneSelection, selectedSessionTab } from '../workbench/scenePaneModel';
 
 function session(sessionId: string, overrides: Partial<Session> = {}): Session {
   return {
@@ -42,7 +43,7 @@ describe('Session scene resource lifetime with real stores', () => {
     activateSurface(LOCAL_SURFACE_ID);
     select([], null);
     useModernFlowChatStore.getState().clear();
-    useSceneStore.getState().resetForPeerSwitch();
+    resetSceneStoreForTest();
     stop = startSessionSceneLifecycle();
   });
 
@@ -53,7 +54,7 @@ describe('Session scene resource lifetime with real stores', () => {
     activateSurface(LOCAL_SURFACE_ID);
     select([], null);
     useModernFlowChatStore.getState().clear();
-    useSceneStore.getState().resetForPeerSwitch();
+    resetSceneStoreForTest();
   });
 
   it('removes the last session tab, projection and navigation history together', () => {
@@ -71,7 +72,7 @@ describe('Session scene resource lifetime with real stores', () => {
     });
   });
 
-  it('retains different workspaces and replaces only the selected workspace session', () => {
+  it('gives every session its own tab, including several of one workspace', () => {
     const first = session('a1', { workspaceId: 'workspace-a', workspacePath: '/projects/a' });
     const second = session('a2', { workspaceId: 'workspace-a', workspacePath: '/projects/a' });
     const other = session('b1', { workspaceId: 'workspace-b', workspacePath: '/projects/b' });
@@ -84,11 +85,13 @@ describe('Session scene resource lifetime with real stores', () => {
     const otherTabId = useSceneStore.getState().activeTabId;
     flowChatStore.switchSession(second.sessionId);
     useSceneStore.getState().openScene('session');
+    const secondTabId = useSceneStore.getState().activeTabId;
 
+    // A new tab opens next to the session tab that was shown.
     expect(useSceneStore.getState().openTabs.map(tab => [tab.id, tab.session?.sessionId])).toEqual([
-      [firstTabId, second.sessionId], [otherTabId, other.sessionId],
+      [firstTabId, first.sessionId], [otherTabId, other.sessionId], [secondTabId, second.sessionId],
     ]);
-    expect(useSceneStore.getState().activeTabId).toBe(firstTabId);
+    expect(new Set([firstTabId, otherTabId, secondTabId]).size).toBe(3);
     expect(flowChatStore.getState().sessions.size).toBe(3);
   });
 
@@ -101,6 +104,48 @@ describe('Session scene resource lifetime with real stores', () => {
     expect(useSceneStore.getState().openTabs.map(tab => tab.session?.sessionId)).toEqual(['a']);
     select([first, second], 'b');
     expect(useSceneStore.getState().openTabs.map(tab => tab.session?.sessionId)).toEqual(['a', 'b']);
+  });
+
+  it.each(['local', 'peer:history'])('reconciles recent SSH workspace sessions on the %s surface', surfaceId => {
+    stop?.();
+    activateSurface(surfaceId);
+    select([], null);
+    resetSceneStoreForTest();
+    stop = startSessionSceneLifecycle();
+    const sessions = ['one', 'two', 'three'].map(id => session(id, {
+      workspaceId: 'ssh-project', workspacePath: '/srv/project', remoteConnectionId: 'ssh-host',
+    }));
+    select(sessions, 'one');
+    useSceneStore.getState().openScene('session');
+    flowChatStore.switchSession('two');
+    flowChatStore.switchSession('three');
+    const tabId = useSceneStore.getState().activeTabId;
+    expect(useSceneStore.getState().openTabs.map(tab => tab.session?.sessionId)).toEqual(['one', 'two', 'three']);
+    expect(useSceneStore.getState().openTabs.every(tab => tab.session?.surfaceId === surfaceId)).toBe(true);
+    flowChatStore.removeSession('two');
+    expect(useSceneStore.getState().openTabs.map(tab => tab.session?.sessionId)).toEqual(['one', 'three']);
+    expect(useSceneStore.getState().activeTabId).toBe(tabId);
+    expect(flowChatStore.getActiveSession()?.sessionId).toBe('three');
+  });
+
+  it.each(['canvas', 'page'] as const)('keeps a moved conversation synchronized while the other pane has %s focus', async focus => {
+    const first = session('a', { workspacePath: '/a' });
+    const second = session('b', { workspacePath: '/b' });
+    select([first, second], 'a');
+    const scenes = useSceneStore.getState();
+    scenes.openScene('session');
+    await scenes.moveScene(useSceneStore.getState().activeTabId!, 'secondary');
+    if (focus === 'canvas') scenes.selectCanvas();
+    else scenes.openScene('git');
+    const before = useSceneStore.getState();
+    flowChatStore.switchSession('b');
+    const after = useSceneStore.getState();
+    expect(selectedSessionTab(after)?.session?.sessionId).toBe('b');
+    expect(selectedSessionTab(after)?.pane).toBe('secondary');
+    expect(after.focusedPane).toBe('primary');
+    expect(after.activeTabId).toBe(before.activeTabId);
+    expect(after.paneSelections.primary).toEqual(focus === 'canvas' ? { kind: 'canvas' } : sceneSelection('git'));
+    expect(after.openTabs.filter(tab => tab.session)).toHaveLength(2);
   });
 
   it('defers legacy identity changes until pending navigation commits', () => {
@@ -348,15 +393,19 @@ describe('Session scene resource lifetime with real stores', () => {
     select([local], local.sessionId);
     useSceneStore.getState().openScene('session');
 
+    const localTabId = useSceneStore.getState().activeTabId;
+
+    // The other device shows none of this device's sessions, but its tab stays.
     activateSurface('empty-peer-lifecycle-test');
     expect(useSceneStore.getState().activeTabId).toBeNull();
     expect(useModernFlowChatStore.getState().activeSession).toBeNull();
+    expect(useSceneStore.getState().openTabs.map(tab => tab.id)).toEqual([localTabId]);
 
+    // Back on this device, its active session returns to that tab.
     activateSurface(LOCAL_SURFACE_ID);
     expect(flowChatStore.getActiveSession()).toBe(local);
     expect(useModernFlowChatStore.getState().activeSession).toBe(local);
-    expect(useSceneStore.getState().openTabs).toEqual([]);
-    useSceneStore.getState().openScene('session');
+    expect(useSceneStore.getState().activeTabId).toBe(localTabId);
     expect(selectActiveSceneId(useSceneStore.getState())).toBe('session');
   });
 

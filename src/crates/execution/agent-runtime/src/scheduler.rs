@@ -1,5 +1,9 @@
 //! Scheduler owner decisions.
 
+/// Portable result delivery decisions share the background scheduler owner.
+#[path = "background_delivery.rs"]
+pub mod result_delivery;
+
 use crate::events::turn_outcome_kind;
 use crate::thread_goal::{build_objective_updated_plan, build_thread_goal_continuation_plan};
 use openbitfun_runtime_ports::{
@@ -349,6 +353,48 @@ impl<T> DialogTurnQueue<T> {
         self.inner
             .remove_if(session_id, |_, queue| queue.is_empty());
         turn
+    }
+
+    /// Reorder an exact subset without disturbing other work or priority lanes.
+    /// Validate the entire permutation before touching the queue.
+    pub fn reorder_subset<F>(&self, session_id: &str, ids: &[String], identify: F) -> bool
+    where
+        T: Clone,
+        F: Fn(&T) -> Option<&str>,
+    {
+        let Some(mut queue) = self.inner.get_mut(session_id) else {
+            return false;
+        };
+        let mut positions = Vec::with_capacity(ids.len());
+        for id in ids {
+            let Some(position) = queue
+                .iter()
+                .position(|entry| identify(&entry.turn) == Some(id.as_str()))
+            else {
+                return false;
+            };
+            if positions.contains(&position) {
+                return false;
+            }
+            positions.push(position);
+        }
+        if let Some(&first) = positions.first() {
+            if positions
+                .iter()
+                .any(|&position| queue[position].priority != queue[first].priority)
+            {
+                return false;
+            }
+        }
+        let turns: Vec<_> = positions
+            .iter()
+            .map(|&position| queue[position].turn.clone())
+            .collect();
+        positions.sort_unstable();
+        for (position, turn) in positions.into_iter().zip(turns) {
+            queue[position].turn = turn;
+        }
+        true
     }
 
     pub fn requeue_front(&self, session_id: &str, turn: T, priority: DialogQueuePriority) {
@@ -1069,6 +1115,29 @@ mod tests {
             store.take_for_outcome("session-1", "turn-new"),
             ActiveDialogTurnTakeResult::Absent
         ));
+    }
+
+    #[test]
+    fn dialog_turn_queue_reorder_preserves_unmanaged_slots_and_priority_lanes() {
+        let queue = DialogTurnQueue::with_max_depth(8);
+        for (id, priority) in [
+            ("high", DialogQueuePriority::High),
+            ("a", DialogQueuePriority::Normal),
+            ("unmanaged", DialogQueuePriority::Normal),
+            ("b", DialogQueuePriority::Normal),
+        ] {
+            queue.enqueue("s", id.to_string(), priority).unwrap();
+        }
+        assert!(!queue.reorder_subset("s", &["a".into(), "a".into()], |s| Some(s.as_str())));
+        assert!(!queue.reorder_subset("s", &["a".into(), "high".into()], |s| Some(s.as_str())));
+        assert!(!queue.reorder_subset("s", &["missing".into()], |s| Some(s.as_str())));
+        assert!(queue.reorder_subset("s", &["b".into(), "a".into()], |s| Some(s.as_str())));
+        assert_eq!(
+            (0..4)
+                .map(|_| queue.dequeue_next("s").unwrap())
+                .collect::<Vec<_>>(),
+            ["high", "b", "unmanaged", "a"]
+        );
     }
 
     #[test]

@@ -2,7 +2,7 @@ import { HARNESS_IDS, canonicalAgentId, type HarnessId } from '@/shared/agents/i
 import { HARNESS_PRESENTATION } from '@/shared/agents/harnessPresentation';
 import React, { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { subscribeOverlayInteraction, createOverlayPortal, OverflowText, Icon, Menu, MenuItem, MenuSection, MenuSeparator, Tooltip } from '@openbitfun/ui';
+import { captureConfirmationAnchor, subscribeOverlayInteraction, createOverlayPortal, OverflowText, Icon, Menu, MenuItem, MenuSection, MenuSeparator, Tooltip } from '@openbitfun/ui';
 import { getAppearanceOverlayHost } from '@/infrastructure/appearance/runtime/AppearanceOverlayHost';
 import { confirmDialog } from '@/infrastructure/confirm-dialog';
 import { notificationService } from '@/shared/notification-system';
@@ -167,8 +167,10 @@ export const HarnessProfileSelector: React.FC<HarnessProfileSelectorProps> = ({
     selection: HarnessNewSessionSelection,
     targetName: string,
   ) => {
+    const anchor = captureConfirmationAnchor(triggerRef.current);
     finishSelection();
     const confirmed = await confirmDialog({
+      anchor,
       title: t('chatInput.harness.newSessionConfirmation.title', { name: targetName }),
       message: t('chatInput.harness.newSessionConfirmation.message', { name: targetName }),
       confirmText: t('chatInput.harness.newSessionConfirmation.confirm'),
@@ -266,7 +268,12 @@ export const HarnessProfileSelector: React.FC<HarnessProfileSelectorProps> = ({
       : knownSelectedProfile
         ? t(`chatInput.harness.profiles.${knownSelectedProfile}.name`)
         : t('chatInput.harness.unsupportedProfile', { id: selectedProfile });
-  const triggerLabel = primaryLabel;
+  const triggerLabel = presentation === 'standalone'
+    && !legacySession
+    && knownSelectedProfile
+    && isSelectableProfile(knownSelectedProfile)
+    ? t('chatInput.harness.modeLabel', { name: primaryLabel })
+    : primaryLabel;
   const triggerTooltip = legacySession
     ? t('chatInput.harness.legacySessionNotice')
     : !selectedProfileAvailable

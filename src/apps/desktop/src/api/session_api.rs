@@ -64,6 +64,10 @@ pub struct ListPersistedSessionsPageRequest {
     #[serde(default, alias = "sessionIds")]
     pub session_ids: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub query: Option<openbitfun_services_core::session::page::SessionCatalogQuery>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refresh_external_discovery: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cursor: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remote_connection_id: Option<String>,
@@ -149,7 +153,10 @@ pub struct ExportSessionTranscriptRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchReferenceableSessionsRequest {
-    pub query: String,
+    /// Omit the query to browse recent sessions. An explicit blank query is
+    /// still an empty search for legacy callers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub query: Option<String>,
     #[serde(default = "default_session_reference_search_limit")]
     pub limit: usize,
 }
@@ -231,6 +238,10 @@ pub struct GetSessionUsageReportRequest {
     pub remote_ssh_host: Option<String>,
     #[serde(default = "default_include_hidden_subagents")]
     pub include_hidden_subagents: bool,
+    #[serde(default)]
+    pub include_system_prompt_preview: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_preview_category: Option<openbitfun_core_types::UsageContextCategory>,
 }
 
 fn default_include_hidden_subagents() -> bool {
@@ -252,6 +263,14 @@ pub struct ForkSessionRequest {
 }
 
 pub type ForkSessionResponse = SessionBranchResult;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CopySessionRequest {
+    pub source_session_id: String,
+    pub workspace_id: String,
+}
+
+pub type CopySessionResponse = SessionBranchResult;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ArchiveSessionRequest {
@@ -353,7 +372,7 @@ pub async fn search_session_content(
         })
 }
 
-/// Search lightweight persisted metadata across open local and SSH
+/// Browse or search lightweight persisted metadata across open local and SSH
 /// workspaces. This deliberately never loads dialog turns or generates a
 /// transcript; that work happens only when the selected message is dispatched.
 #[tauri::command]
@@ -362,8 +381,8 @@ pub async fn search_referenceable_sessions(
     runtime: State<'_, DesktopRuntimeContext>,
     app_state: State<'_, AppState>,
 ) -> Result<Vec<SessionReferenceCandidate>, String> {
-    let query = request.query.trim().to_lowercase();
-    if query.is_empty() {
+    let query = request.query.map(|query| query.trim().to_lowercase());
+    if query.as_deref() == Some("") {
         return Ok(Vec::new());
     }
     let limit = request.limit.clamp(1, 30);
@@ -409,7 +428,9 @@ pub async fn search_referenceable_sessions(
                 || scheduler.as_ref().is_some_and(|scheduler| {
                     scheduler.is_session_busy_or_queued(&session.session_id)
                 })
-                || !session.session_name.to_lowercase().contains(&query)
+                || query
+                    .as_ref()
+                    .is_some_and(|query| !session.session_name.to_lowercase().contains(query))
             {
                 continue;
             }
@@ -450,6 +471,8 @@ pub async fn list_persisted_sessions_page(
             request.cursor.as_deref(),
             request.limit,
             request.session_ids.as_deref(),
+            request.query.as_ref(),
+            request.refresh_external_discovery.unwrap_or(false),
         )
         .await
         .map_err(|error| {
@@ -542,6 +565,8 @@ pub async fn get_session_usage_report(
             ),
             request.session_id,
             request.include_hidden_subagents,
+            request.include_system_prompt_preview,
+            request.context_preview_category,
         )
         .await
         .map_err(|error| {
@@ -723,6 +748,7 @@ pub async fn load_persisted_session_metadata(
     result
 }
 
+/// Forks a session through the caller's selected persisted turn.
 #[tauri::command]
 pub async fn fork_session(
     request: ForkSessionRequest,
@@ -742,6 +768,22 @@ pub async fn fork_session(
         )
         .await
         .map_err(|error| format!("Failed to fork session: {}", desktop_session_error(error)))
+}
+
+/// Copies the whole session through its latest persisted turn.
+#[tauri::command]
+pub async fn copy_session(
+    request: CopySessionRequest,
+    runtime: State<'_, DesktopRuntimeContext>,
+) -> Result<CopySessionResponse, String> {
+    runtime
+        .session_application()
+        .copy_session(
+            desktop_session_scope(Some(request.workspace_id), String::new(), None, None),
+            request.source_session_id,
+        )
+        .await
+        .map_err(|error| format!("Failed to copy session: {}", desktop_session_error(error)))
 }
 
 #[tauri::command]
@@ -884,4 +926,47 @@ pub async fn delete_all_archived_sessions(
     }
 
     Ok(deleted_count)
+}
+
+#[cfg(test)]
+mod catalog_request_tests {
+    use super::{ListPersistedSessionsPageRequest, SearchReferenceableSessionsRequest};
+
+    #[test]
+    fn session_reference_request_distinguishes_browsing_from_legacy_search() {
+        for query in ["Docs", ""] {
+            let legacy = serde_json::json!({"query": query, "limit": 30});
+            let request: SearchReferenceableSessionsRequest =
+                serde_json::from_value(legacy.clone()).unwrap();
+            assert_eq!(request.query.as_deref(), Some(query));
+            assert_eq!(serde_json::to_value(request).unwrap(), legacy);
+        }
+
+        let browse = serde_json::json!({"limit": 30});
+        let request: SearchReferenceableSessionsRequest =
+            serde_json::from_value(browse.clone()).unwrap();
+        assert!(request.query.is_none());
+        assert_eq!(serde_json::to_value(request).unwrap(), browse);
+    }
+
+    #[test]
+    fn session_catalog_request_preserves_legacy_payload_and_optional_query() {
+        let legacy = serde_json::json!({"workspace_id": "main", "workspace_path": "", "limit": 5, "session_ids": null});
+        let request: ListPersistedSessionsPageRequest =
+            serde_json::from_value(legacy.clone()).unwrap();
+        assert!(request.query.is_none());
+        assert_eq!(serde_json::to_value(request).unwrap(), legacy);
+        let mut current = legacy;
+        current["query"] =
+            serde_json::json!({"workspaceId": "main", "ordering": "updated", "source": "codex"});
+        let request: ListPersistedSessionsPageRequest =
+            serde_json::from_value(current.clone()).unwrap();
+        assert_eq!(request.query.as_ref().unwrap().workspace_id, "main");
+        assert_eq!(serde_json::to_value(request).unwrap(), current);
+        current["refresh_external_discovery"] = serde_json::json!(true);
+        let request: ListPersistedSessionsPageRequest =
+            serde_json::from_value(current.clone()).unwrap();
+        assert_eq!(request.refresh_external_discovery, Some(true));
+        assert_eq!(serde_json::to_value(request).unwrap(), current);
+    }
 }

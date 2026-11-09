@@ -17,22 +17,24 @@ function sliceBetween(source: string, startMarker: string, endMarker: string): s
 }
 
 describe('session action confirmation policy', () => {
-  it('archives a single session immediately and confirms permanent deletion', () => {
+  it('archives immediately and offers deletion through the shared confirmation handler', () => {
     const source = readSource('./SessionsSection.tsx');
-    const deleteHandler = sliceBetween(source, 'const handleDelete = useCallback(', 'const handleArchive = useCallback(');
-    const archiveHandler = sliceBetween(source, 'const handleArchive = useCallback(', 'const handleCopySessionId = useCallback(');
+    const archiveHandler = sliceBetween(source, 'const handleArchive = useCallback(', 'const handleDuplicateSession = useCallback(');
 
-    expect(source).toContain("import { confirmDanger } from '@/infrastructure/confirm-dialog';");
-    expect(source).not.toContain('confirmWarning');
-    expect(deleteHandler).toContain('await confirmDanger(');
-    expect(deleteHandler).toContain("t('nav.sessions.deleteConfirmTitle')");
-    expect(deleteHandler).toContain("t('nav.sessions.deleteConfirmMessage', {");
-    expect(deleteHandler).toContain("{ confirmText: t('nav.sessions.delete') }");
-    expect(deleteHandler.indexOf('await confirmDanger(')).toBeLessThan(
-      deleteHandler.indexOf('await flowChatManager.deleteChatSession(sessionId)'),
+    expect(source).toContain('testId="nav-session-menu-delete"');
+    expect(source.indexOf('testId="nav-session-menu-delete"')).toBeGreaterThan(
+      source.indexOf('data-testid="nav-session-menu-archive"'),
     );
+    expect(source).toContain('<SessionDeleteMenuItem');
+    expect(source).toContain('return deleteSessionRow(session.sessionId);');
+    expect(source).not.toContain('data-testid="nav-session-menu-manage-sessions"');
+    expect(source).not.toContain('flowChatManager.deleteChatSession');
     expect(archiveHandler).not.toMatch(/confirm(?:Danger|Warning)\(/);
-    expect(archiveHandler).toContain('await flowChatManager.archiveChatSession(sessionId)');
+    expect(archiveHandler).toContain('await archiveSessionRow(sessionId, t);');
+    const rowActions = readSource('./sessionRowActions.ts');
+    const sharedArchive = sliceBetween(rowActions, 'export async function archiveSessionRow(', 'export async function duplicateSessionRow(');
+    expect(sharedArchive).not.toMatch(/confirm(?:Danger|Warning)\(/);
+    expect(sharedArchive).toContain('await flowChatManager.archiveChatSession(sessionId)');
   });
 
   it('archives selected sessions immediately and uses danger confirmation for deletion', () => {
@@ -46,7 +48,7 @@ describe('session action confirmation policy', () => {
     expect(archiveHandler).toContain('flowChatManager.archiveChatSession(sessionId)');
     expect(deleteHandler).toContain('await confirmDanger(');
     expect(deleteHandler).toContain("t('nav.sessions.bulkDeleteConfirmTitle')");
-    expect(deleteHandler).toContain("{ confirmText: t('nav.sessions.deleteSelected') }");
+    expect(deleteHandler).toContain("{ confirmText: onlySources ? t('nav.sessions.removeSelected') : t('nav.sessions.deleteSelected') }");
     expect(deleteHandler.indexOf('await confirmDanger(')).toBeLessThan(
       deleteHandler.indexOf('await flowChatManager.deleteChatSession(rootId)'),
     );

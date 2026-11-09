@@ -6,6 +6,33 @@ import { BtwVirtualSessionList } from './BtwVirtualSessionList';
 import type { VirtualItem } from '../../store/modernFlowChatStore';
 import type { FlowChatViewportOwnerApi } from '../modern/useFlowChatViewportOwner';
 
+/**
+ * What the transcript asked the virtualizer to measure against, per render.
+ *
+ * The hook itself is passed straight through, so every other test in this file
+ * keeps running against the real virtualizer.
+ */
+const virtualizerProbe = vi.hoisted(() => ({
+  /** Every published settled width, in render order. */
+  widths: [] as Array<number | undefined>,
+  /** Whether the render called itself a frame of a still-moving pane. */
+  suspensions: [] as boolean[],
+  renders: 0,
+}));
+
+vi.mock('../modern/useFlowChatVirtualizer', async importOriginal => {
+  const actual = await importOriginal<typeof import('../modern/useFlowChatVirtualizer')>();
+  return {
+    ...actual,
+    useFlowChatVirtualizer: (options: Parameters<typeof actual.useFlowChatVirtualizer>[0]) => {
+      virtualizerProbe.renders += 1;
+      virtualizerProbe.widths.push(options.estimateContext?.availableWidthPx);
+      virtualizerProbe.suspensions.push(options.measurementSuspended === true);
+      return actual.useFlowChatVirtualizer(options);
+    },
+  };
+});
+
 vi.mock('../modern/VirtualItemRenderer', () => ({
   VirtualItemRenderer: ({ index, measureRef }: { index: number; measureRef: React.Ref<HTMLDivElement> }) => (
     <div ref={measureRef} data-virtual-index={index}>{index}</div>
@@ -28,7 +55,7 @@ describe('BtwVirtualSessionList', () => {
     type: 'image-analyzing', turnId: `turn-${index}`,
   } as VirtualItem));
 
-  function render(renderedItems = items) {
+  function render(renderedItems = items, measurementSuspended = false) {
     act(() => root.render(
       <BtwVirtualSessionList
         items={renderedItems}
@@ -38,19 +65,42 @@ describe('BtwVirtualSessionList', () => {
         viewportOwner={owner}
         exploreGroupStates={new Map()}
         isHistorical={false}
+        measurementSuspended={measurementSuspended}
       />,
     ));
+  }
+
+  /** The width the observer saw, as the list published it to the virtualizer. */
+  function publishedWidths() {
+    return virtualizerProbe.widths.filter((width, index) => (
+      index === 0 || virtualizerProbe.widths[index - 1] !== width
+    ));
+  }
+
+  /** Deliver the scroller's own resize, which is the one a divider drag drives. */
+  function resizeScroller(widthPx: number) {
+    Object.defineProperty(scroller, 'clientWidth', { configurable: true, value: widthPx });
+    for (const observer of [...resizeObservers]) {
+      if (observer.targets.has(scroller)) observer.callback([], {} as ResizeObserver);
+    }
   }
 
   beforeEach(() => {
     frames = new Map();
     resizeObservers = [];
     nextFrame = 0;
+    virtualizerProbe.widths.length = 0;
+    virtualizerProbe.suspensions.length = 0;
+    virtualizerProbe.renders = 0;
     vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
       frames.set(++nextFrame, callback);
       return nextFrame;
     });
     vi.stubGlobal('cancelAnimationFrame', (id: number) => frames.delete(id));
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function () {
+      const height = this.offsetHeight;
+      return { top: 0, bottom: height, height, width: this.offsetWidth } as DOMRect;
+    });
     vi.stubGlobal('ResizeObserver', class {
       targets = new Set<Element>();
       constructor(callback: ResizeObserverCallback) {
@@ -153,7 +203,7 @@ describe('BtwVirtualSessionList', () => {
 
   it.each([false, true])('settles tail rows when trailing margins are measured: %s', contained => {
     // Supplied CSS geometry: a 100px body and an 8px trailing child margin.
-    // With flow-root both occupy the measured border box; with block the
+    // With the column flex context both occupy the measured border box; with block the
     // margin escapes, still occupies layout space, and vanishes on unmount.
     // jsdom does not perform margin collapsing; this tests its consequences
     // against the real virtualizer and the panel's real follow scheduler.
@@ -226,5 +276,38 @@ describe('BtwVirtualSessionList', () => {
       expect(scroller.scrollHeight - 15 - measuredTotal).toBe(window.children.length * 8);
       expect(scroller.scrollHeight - 15).toBeGreaterThan(measuredTotal);
     }
+  });
+
+  /**
+   * The pane-resize case.
+   *
+   * A divider drag narrows this scroller on every frame, and the row estimates
+   * — with the heights measured against them — are derived from its width. The
+   * list has to hold the settled width for the whole gesture and publish the
+   * width the drag ended on exactly once, so the virtualizer re-measures once
+   * too instead of once per frame.
+   */
+  it('holds the settled width while a pane resize is suspended and applies it once on settle', () => {
+    // The mount publishes the width the panel settled on.
+    render();
+    expect(publishedWidths()).toEqual([undefined, 500]);
+
+    // The drag starts; every frame below is a width change with no measurement.
+    render(undefined, true);
+    expect(virtualizerProbe.suspensions.at(-1)).toBe(true);
+    const rendersWhenTheDragStarted = virtualizerProbe.renders;
+    for (const widthPx of [480, 460, 440, 420]) act(() => resizeScroller(widthPx));
+
+    expect(virtualizerProbe.renders).toBe(rendersWhenTheDragStarted);
+    expect(publishedWidths()).toEqual([undefined, 500]);
+
+    // The layout settles: the width the drag ended on lands once.
+    render(undefined, false);
+    expect(publishedWidths()).toEqual([undefined, 500, 420]);
+    expect(virtualizerProbe.suspensions.at(-1)).toBe(false);
+
+    // And once only: later renders carry the same settled width.
+    render(undefined, false);
+    expect(publishedWidths()).toEqual([undefined, 500, 420]);
   });
 });

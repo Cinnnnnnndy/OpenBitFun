@@ -372,7 +372,6 @@ export function runManifestParserSelfTest({
     'agent-runtime',
     'diagnostics',
     'diff',
-    'canvas-runtime',
     'dispatch-store',
     'file-watch',
     'filesystem',
@@ -557,11 +556,6 @@ export function runManifestParserSelfTest({
         'openbitfun-services-integrations/remote-ssh',
       ],
     ],
-    [
-      coreManifest,
-      'canvas-runtime',
-      ['dep:openbitfun-product-domains', 'openbitfun-services-integrations/canvas-runtime'],
-    ],
     [coreManifest, 'file-watch', ['openbitfun-services-integrations/file-watch']],
     [coreManifest, 'git', ['openbitfun-services-integrations/git']],
     [coreManifest, 'review-platform', ['openbitfun-services-integrations/review-platform']],
@@ -634,6 +628,8 @@ export function runManifestParserSelfTest({
         'openbitfun-core/tools-browser-web',
         'openbitfun-core/tools-computer-use',
         'openbitfun-core/tools-image-analysis',
+        'openbitfun-core/tools-image-generation',
+        'openbitfun-core/tools-office-documents',
         'openbitfun-core/tools-agent-control',
       ],
     ],
@@ -1635,10 +1631,10 @@ export function runManifestParserSelfTest({
   ).map((entry) => entry.symbol);
   if (
     opencodeAdapterPublicApiSymbols.join(',') !==
-    'load_opencode_package_adapter,load_opencode_config_snapshot,OpenCodeConfigSnapshot,OpenCodeConfigSnapshotError,project_plugin_config,project_plugin_tool_ref,OpenCodePluginConfigProjectionError,OpenCodeCommandProvider,OpenCodeCommandProviderOptions,OpenCodeConfiguredSkillRoot,OpenCodeSkillRootDiagnostic,OpenCodeSkillRootReport,OpenCodeSkillRootProvider,OpenCodeSkillRootProviderOptions,OpenCodeToolProvider,OpenCodeToolProviderOptions,OpenCodeSubagentProvider,OpenCodeSubagentProviderOptions,OpenCodeMcpProvider,OpenCodeMcpProviderOptions,OpenCodeHookProvider,OpenCodeHookProviderOptions,OpenCodeWorkspaceReferenceProvider,OpenCodeWorkspaceReferenceProviderOptions,load_opencode_user_instructions,OpenCodeInstructionSourceOptions'
+    'session,load_opencode_package_adapter,load_opencode_config_snapshot,OpenCodeConfigSnapshot,OpenCodeConfigSnapshotError,project_plugin_config,project_plugin_tool_ref,OpenCodePluginConfigProjectionError,OpenCodeCommandProvider,OpenCodeCommandProviderOptions,OpenCodeConfiguredSkillRoot,OpenCodeSkillRootDiagnostic,OpenCodeSkillRootReport,OpenCodeSkillRootProvider,OpenCodeSkillRootProviderOptions,OpenCodeToolProvider,OpenCodeToolProviderOptions,OpenCodeSubagentProvider,OpenCodeSubagentProviderOptions,OpenCodeMcpProvider,OpenCodeMcpProviderOptions,OpenCodeHookProvider,OpenCodeHookProviderOptions,OpenCodeWorkspaceReferenceProvider,OpenCodeWorkspaceReferenceProviderOptions,load_opencode_user_instructions,OpenCodeInstructionSourceOptions'
   ) {
     throw new Error(
-      'OpenCode adapter public API budget must stay limited to the reviewed package factory, managed Plugin Host Config projection, and capability-specific command, configured Skill root, tool, subagent, MCP, static Hook, workspace Reference, and user Instruction providers',
+      'OpenCode adapter public API budget must stay limited to the reviewed read-only session history, package factory, managed Plugin Host Config projection, and capability-specific command, configured Skill root, tool, subagent, MCP, static Hook, workspace Reference, and user Instruction providers',
     );
   }
   if (!pluginCapabilityProjectionPublicApiRule) {
@@ -1665,9 +1661,11 @@ export function runManifestParserSelfTest({
         throw new Error(`OpenCode adapter public API entry must declare ${field}: ${entry.symbol}`);
       }
     }
-    const expectedContractSlice = opencodeInstructionSymbols.has(entry.symbol)
-      ? 'user-instruction-source-boundary'
-      : 'opencode-adapter-boundary';
+    const expectedContractSlice = entry.symbol === 'session'
+      ? 'external-session-import-contract'
+      : opencodeInstructionSymbols.has(entry.symbol)
+        ? 'user-instruction-source-boundary'
+        : 'opencode-adapter-boundary';
     if (entry.contractSlice !== expectedContractSlice) {
       throw new Error(`OpenCode adapter public API entry uses wrong contractSlice: ${entry.symbol}`);
     }
@@ -1982,6 +1980,8 @@ export function runManifestParserSelfTest({
   for (const dependencyName of [
     'openbitfun-claude-code-adapter',
     'openbitfun-codex-adapter',
+    'openbitfun-cursor-adapter',
+    'openbitfun-zcode-adapter',
     'openbitfun-static-hook-support',
   ]) {
     if (!forbiddenManifestDependencyRules.some(
@@ -2758,16 +2758,6 @@ export function runManifestParserSelfTest({
       contracts: ['[features]', 'default = []'],
     },
     {
-      path: 'src/crates/execution/agent-runtime/src/context_profile.rs',
-      contracts: [
-        'ContextProfile',
-        'ModelCapabilityProfile',
-        'ContextProfilePolicy',
-        'for_subagent_context_and_models',
-        'model_capability_weak_for_mini',
-      ],
-    },
-    {
       path: 'src/crates/execution/agent-runtime/src/session_state.rs',
       contracts: [
         'SessionState',
@@ -2988,7 +2978,7 @@ export function runManifestParserSelfTest({
         'exec_command_input_policy_applies_defaults_without_trimming_command',
         'write_stdin_input_policy_applies_poll_defaults',
         'exec_control_input_policy_keeps_wait_optional',
-        'exec_command_result_builder_preserves_existing_wire_shape',
+        'exec_command_result_builder_exposes_only_model_result_fields',
         'write_stdin_and_control_result_builders_preserve_remote_shape',
         'remote_env_snapshot_capture_policy_keeps_existing_bounds',
         'remote_env_snapshot_cache_owns_key_and_ttl_policy',
@@ -3406,6 +3396,7 @@ export function runManifestParserSelfTest({
         'SessionStorageLayout',
         'list_metadata',
         'list_metadata_page',
+        'list_metadata_page_with_query',
         'list_metadata_including_internal',
         'rebuild_index',
         'save_metadata',
@@ -3437,7 +3428,7 @@ export function runManifestParserSelfTest({
         'SessionMetadataStore',
         'session_metadata_store',
         'list_metadata',
-        'list_metadata_page',
+        'list_metadata_page_with_query',
         'list_metadata_including_internal',
         'save_metadata',
         'load_metadata',
@@ -4487,8 +4478,6 @@ export function runManifestParserSelfTest({
         'openbitfun-product-domains = \\{ path = "\\.\\.\\/\\.\\.\\/contracts\\/product-domains", optional = true \\}',
         'dep:openbitfun-ai-adapters',
         'ai-adapter-runtime',
-        'canvas-runtime',
-        'openbitfun-services-integrations\\/canvas-runtime',
         'openbitfun-services-integrations\\/function-agents',
         'openbitfun-services-integrations\\/miniapp-runtime',
         'dep:openbitfun-product-capabilities',

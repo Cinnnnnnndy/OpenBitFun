@@ -19,6 +19,7 @@ export type SceneTabId =
   | 'settings'
   | 'file-viewer'
   | 'profile'
+  | 'personal-overview'
   | 'agents'
   | 'skills'
   | 'ecosystem-compatibility'
@@ -30,6 +31,7 @@ export type SceneTabId =
   | 'insights'
   | 'shell'
   | `content:${string}`
+  | `project-resources:${string}`
   | `session:${string}`
   | `miniapp:${string}`;
 
@@ -49,8 +51,22 @@ export function getSceneViewId(id: SceneTabId): SceneTabId {
   return isSessionSceneId(id) ? 'session' : id;
 }
 
+/**
+ * One tab per session: several sessions of one workspace, and sessions of
+ * other devices, each keep their own tab.
+ */
 export function getSessionSceneTabId(target: SessionSceneTarget): SceneTabId {
-  return `session:${encodeURIComponent(JSON.stringify([target.surfaceId, target.workspaceKey]))}`;
+  return `session:${encodeURIComponent(JSON.stringify([target.surfaceId, target.workspaceKey, target.sessionId]))}`;
+}
+
+/** The workspace id a session tab's key names, when it names one. */
+export function sessionSceneWorkspaceId(target: SessionSceneTarget): string | undefined {
+  try {
+    const key = JSON.parse(target.workspaceKey) as unknown;
+    return Array.isArray(key) && key[0] === 'workspace' && typeof key[1] === 'string' ? key[1] : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /** Static definition (from registry) for a scene tab type */
@@ -73,7 +89,11 @@ export interface SceneTabDef {
 /** Runtime instance of an open scene. */
 export interface SceneTab {
   id: SceneTabId;
+  /** Legacy tabs without a location open in the primary pane. */
+  pane?: 'primary' | 'secondary';
   session?: SessionSceneTarget;
+  /** Recently opened sessions in this workspace, newest first (including current). */
+  sessionHistory?: string[];
   /** Reference to content state; the tab never owns an editor buffer. */
   contentId?: string;
   /** User ordering preference; independent of closability. */

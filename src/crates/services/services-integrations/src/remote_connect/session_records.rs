@@ -23,6 +23,14 @@ pub fn session_event_publication(name: &str, payload: &Value) -> SessionEventPub
             persist_control: false,
         };
     }
+    // A next-input suggestion is not transcript content; its source turn was
+    // already synchronized by the completion event that precedes it.
+    if name == "agentic://prompt-suggestion" {
+        return SessionEventPublication {
+            synchronize_records: false,
+            persist_control: true,
+        };
+    }
     if name == "agentic://tool-event" {
         let kind = payload["toolEvent"]["event_type"].as_str().unwrap_or("");
         return SessionEventPublication {
@@ -30,6 +38,7 @@ pub fn session_event_publication(name: &str, payload: &Value) -> SessionEventPub
                 kind,
                 "EarlyDetected"
                     | "ParamsPartial"
+                    | "GenUIStream"
                     | "Queued"
                     | "Waiting"
                     | "Progress"
@@ -56,6 +65,7 @@ pub fn records_from_turns(
 ) -> Result<Vec<Value>> {
     let mut records = Vec::new();
     for source in turns {
+        let turn_start = records.len();
         let mut turn = serde_json::to_value(source)?;
         turn.as_object_mut()
             .expect("turn serializes as object")
@@ -87,6 +97,15 @@ pub fn records_from_turns(
                 }
             }
         }
+        // A transport page is byte/event bounded and can split even one Turn.
+        // Put membership on its root only, so a controller can prove it has the
+        // whole snapshot without duplicating this list on every item. This is
+        // an optional wire field; persisted Turns and older readers are unchanged.
+        let record_ids: Vec<Value> = records[turn_start..]
+            .iter()
+            .map(|record| record["id"].clone())
+            .collect();
+        records[turn_start]["turnRecordIds"] = Value::Array(record_ids);
     }
     Ok(records)
 }
@@ -134,7 +153,7 @@ mod publication_tests {
             assert!(policy.synchronize_records);
             assert!(!policy.persist_control);
         }
-        for kind in ["ParamsPartial", "StreamChunk", "Streaming"] {
+        for kind in ["ParamsPartial", "GenUIStream", "StreamChunk", "Streaming"] {
             let policy = session_event_publication(
                 "agentic://tool-event",
                 &json!({"toolEvent":{"event_type":kind}}),
@@ -152,5 +171,14 @@ mod publication_tests {
             session_event_publication("agentic://dialog-turn-completed", &json!({"turnId":"turn"}))
                 .persist_control
         );
+    }
+    #[test]
+    fn prompt_suggestion_reaches_controllers_without_record_synchronization() {
+        let policy = session_event_publication(
+            "agentic://prompt-suggestion",
+            &json!({"sessionId":"session","sourceTurnId":"turn","suggestion":"Run the tests"}),
+        );
+        assert!(!policy.synchronize_records);
+        assert!(policy.persist_control);
     }
 }

@@ -1,3 +1,4 @@
+import { MessageQueueAction, MessageQueueState } from '../../model/MessageQueue';
 import { InteractionMailboxAction, InteractionMailboxState } from '../../model/InteractionMailbox';
 import { HostCatalogChange, HostCatalogObserver } from '../../services/HostCatalogObserver';
 import { WorkspaceToolsViewModel } from '../viewmodel/WorkspaceToolsViewModel';
@@ -8,10 +9,13 @@ import { SidebarConnectionActionPolicy } from '../policy/SidebarConnectionAction
 import { accountDeviceLink } from '../../services/AccountDeviceLink';
 import {
   ChatMessage,
+  RemoteCommandCatalog,
+  RemoteDefaultModels,
   RemoteModelCatalog,
   RemotePermissionMode,
   RemoteQuestionAnswerPayload,
   RemoteSession,
+  RemoteSessionUsageReport,
   RecentWorkspaceEntry,
   SelectedImageAttachment,
   SessionSummary,
@@ -30,6 +34,7 @@ import { GitHubAccountProfileClient } from '../../services/GitHubAccountProfile'
 import { CloudAccountSessionStore } from '../../services/CloudAccountSessionStore';
 import { RemoteActivityLifecycleController } from '../../services/RemoteActivityLifecycleController';
 import { RemoteChatCache } from '../../services/RemoteChatCache';
+import { RemoteChatBranchCache } from '../../services/RemoteChatBranchCache';
 import { RemoteChatCommandController } from '../../services/RemoteChatCommandController';
 import { RemoteChatLocalRdbStore } from '../../services/RemoteChatLocalRdbStore';
 import { RemoteChatPollingLifecycleController, RemoteChatPollingSnapshot } from '../../services/RemoteChatPollingLifecycleController';
@@ -41,10 +46,12 @@ import { LocaleController } from '../viewmodel/LocaleController';
 import { ConversationController } from '../viewmodel/ConversationController';
 import { RemoteLogger } from '../../services/RemoteLogger';
 import { RemoteModelController } from '../../services/RemoteModelController';
+import { RemoteCommandPaletteController } from '../../services/RemoteCommandPaletteController';
 import { RemoteSessionController } from '../../services/RemoteSessionController';
 import { RemoteSessionListCache } from '../../services/RemoteSessionListCache';
 import { RemoteSessionListRdbStore } from '../../services/RemoteSessionListRdbStore';
 import { RemoteSessionManager } from '../../services/RemoteSessionManager';
+import { SubagentBranchCache } from '../../services/SubagentStreamCoordinator';
 import { RemoteWorkspaceRepository } from '../../services/RemoteWorkspaceRepository';
 import { RemoteWorkspaceCoordinator } from '../../services/RemoteWorkspaceCoordinator';
 import { RemoteConnectionCoordinator } from '../../services/RemoteConnectionCoordinator';
@@ -53,7 +60,7 @@ import { AsyncLifecycleGate } from '../../services/AsyncLifecycleGate';
 import { RemoteUiState } from '../../services/RemoteUiState';
 import { VoiceInputLifecycleController } from '../../services/VoiceInputLifecycleController';
 import { VoiceInputService } from '../../services/VoiceInputService';
-import { ConversationIntent, MessageCopyScope } from '../actions/ConversationIntent';
+import { ConversationIntent, CommandPaletteRequest, MessageCopyScope, SessionRollbackRequest } from '../actions/ConversationIntent';
 import { AppRootHostPort } from '../host/AppRootHostAdapter';
 import { AppRootPresentationActions } from '../actions/AppRootPresentationActions';
 import {
@@ -407,7 +414,7 @@ export abstract class AppRootRuntimeComposition {
           this.remoteSessionViewModel.settleTranscriptLoading();
         },
         onComposerPrepared: (sessionId: string, text: string, images: SelectedImageAttachment[]) => {
-          return this.remotePageState.conversation.prepareComposerSubmission(sessionId, text, images);
+          return this.remotePageState.prepareComposerSubmission(sessionId, text, images);
         },
         onSendSucceeded: (turnId: string, pendingActiveId: string, localMessageId: string) => {
           this.chatTimelineStore.acknowledgeOptimisticTurn(localMessageId, turnId);
@@ -511,6 +518,7 @@ export abstract class AppRootRuntimeComposition {
         this.remoteChatPollingLifecycleController.nudge();
       }
     );
+  readonly remoteChatBranchCache: SubagentBranchCache = new RemoteChatBranchCache(this.remoteChatCache);
   readonly remoteChatPollingLifecycleController: RemoteChatPollingLifecycleController =
     new RemoteChatPollingLifecycleController(
       this.sessionManager,
@@ -519,6 +527,9 @@ export abstract class AppRootRuntimeComposition {
           return this.remotePageState.activeSession.sessionId === sessionId &&
             this.isRemoteConversationContext(sessionId) &&
             this.remoteConnectionController.ensureAvailable();
+        },
+        onQueue: (state: MessageQueueState): void => {
+          if (!state.sessionId || this.remotePageState.activeSession.sessionId === state.sessionId) this.remotePageState.messageQueue = state;
         },
         onMailbox: (state: InteractionMailboxState): void => {
           if (!state.sessionId || this.remotePageState.activeSession.sessionId === state.sessionId) {
@@ -562,7 +573,8 @@ export abstract class AppRootRuntimeComposition {
           // not prove disconnection, and the probe is generation-fenced.
           void this.remoteActivityViewModel.checkConnectionHealth();
         }
-      }
+      },
+      this.remoteChatBranchCache
     );
   readonly remoteModelController: RemoteModelController =
     new RemoteModelController(
@@ -584,6 +596,68 @@ export abstract class AppRootRuntimeComposition {
         this.remotePageState.setBusy(isBusy);
       }
     );
+  /**
+   * The composer command palette's host traffic.
+   *
+   * Every callback is fenced to the session that asked for it: a catalog read or
+   * a usage report that lands after the user moved to another conversation would
+   * otherwise paint one session's data over another's.
+   */
+  readonly remoteCommandPaletteController: RemoteCommandPaletteController =
+    new RemoteCommandPaletteController(
+      this.sessionManager,
+      {
+        onCatalogLoading: (sessionId: string): void => {
+          if (!this.isCommandPaletteSession(sessionId)) return;
+          this.remotePageState.commandPalette.setCatalogLoading();
+        },
+        onCatalogReady: (sessionId: string, catalog: RemoteCommandCatalog): void => {
+          if (!this.isCommandPaletteSession(sessionId)) return;
+          this.remotePageState.commandPalette.setCatalogReady(catalog);
+        },
+        onCatalogFailed: (sessionId: string, errorText: string, failure: string): void => {
+          if (!this.isCommandPaletteSession(sessionId)) return;
+          this.remotePageState.commandPalette.setCatalogFailed(errorText, failure);
+        },
+        onCommandStarted: (sessionId: string, wireAction: string): void => {
+          if (!this.isCommandPaletteSession(sessionId)) return;
+          this.remotePageState.commandPalette.beginCommand(wireAction);
+        },
+        onCommandSettled: (sessionId: string, wireAction: string, errorText: string, message: string): void => {
+          if (!this.isCommandPaletteSession(sessionId)) return;
+          this.remotePageState.commandPalette.settleCommand(wireAction, errorText);
+          if (errorText.length > 0) {
+            // The host's own words, kept out of the notice's one line so a long
+            // refusal does not push the composer's hint out of shape.
+            this.remotePageState.setStatusText(errorText);
+          } else if (message.length > 0) {
+            RemoteLogger.info(
+              `command palette completed session=${sessionId} action=${wireAction}`);
+          }
+        },
+        onCommandNoticeExpired: (sessionId: string, wireAction: string): void => {
+          if (!this.isCommandPaletteSession(sessionId)) return;
+          this.remotePageState.commandPalette.expireNotice(wireAction);
+        },
+        onUsageLoading: (sessionId: string): void => {
+          if (!this.isCommandPaletteSession(sessionId)) return;
+          this.remotePageState.commandPalette.setUsageLoading();
+        },
+        onUsageReady: (sessionId: string, report: RemoteSessionUsageReport | undefined): void => {
+          if (!this.isCommandPaletteSession(sessionId)) return;
+          this.remotePageState.commandPalette.setUsageReady(report);
+        },
+        onUsageFailed: (sessionId: string, errorText: string): void => {
+          if (!this.isCommandPaletteSession(sessionId)) return;
+          this.remotePageState.commandPalette.setUsageFailed(errorText);
+        }
+      }
+    );
+
+  private isCommandPaletteSession(sessionId: string): boolean {
+    return sessionId.length > 0 && this.remotePageState.activeSession.sessionId === sessionId;
+  }
+
   readonly remoteSessionViewModel: RemoteSessionViewModel =
     new RemoteSessionViewModel(
       this.remotePageState,
@@ -737,6 +811,7 @@ export abstract class AppRootRuntimeComposition {
         chatCache: this.remoteChatCache,
         polling: this.remoteChatPollingLifecycleController,
         models: this.remoteModelController,
+        commandPalette: this.remoteCommandPaletteController,
         files: this.remoteFileDownloadController,
         tools: this.remoteToolActionController,
         connection: this.remoteConnectionController,
@@ -761,6 +836,7 @@ export abstract class AppRootRuntimeComposition {
     );
   readonly conversationIntentDispatcher: ConversationIntentDispatcher =
     new ConversationIntentDispatcher({
+      queue: async (action: MessageQueueAction): Promise<void> => { await this.remoteChatPollingLifecycleController.dispatchQueue(action); },
       mailbox: async (action: InteractionMailboxAction): Promise<void> => { await this.remoteChatPollingLifecycleController.dispatchMailbox(action); },
       openSidebar: (): void => this.openAppSidebar(),
       back: (): void => this.exitActiveChat(),
@@ -791,6 +867,25 @@ export abstract class AppRootRuntimeComposition {
       downloadFile: (path: string): void => this.conversationController.downloadVisibleFile(path),
       buildPlan: async (path: string, name: string): Promise<void> => {
         await this.conversationController.buildRemotePlan(path, name);
+      },
+      // Opening a delegation card is a request to watch that worker: the branch
+      // may have lost its stream to the follow cap, and the card has to fill in.
+      branchExpanded: (branchId: string): void => {
+        this.remoteChatPollingLifecycleController.ensureBranchSubscribed(branchId);
+      },
+      commandPalette: async (request: CommandPaletteRequest): Promise<void> => {
+        await this.conversationController.dispatchCommandPalette(request);
+      },
+      rollback: async (request: SessionRollbackRequest): Promise<void> => {
+        await this.conversationController.rollbackRemoteSession(request);
+      },
+      rollbackResync: async (): Promise<void> => {
+        await this.conversationController.resyncRemoteTranscriptAfterRollback();
+      },
+      rollbackNotice: (key: string): void => {
+        // The policy owns which key a refusal resolves to; the host's own text is
+        // already in the log, where a support report can read it.
+        this.conversationController.showHomeToast(RemoteI18n.t(key));
       },
       send: async (): Promise<void> => { await this.conversationController.sendVisibleMessage(); },
       voiceInput: async (): Promise<void> => { await this.toggleVoiceInput(); },
@@ -914,6 +1009,14 @@ export abstract class AppRootRuntimeComposition {
       getPermissionMode: (): Promise<RemotePermissionMode> => this.settingsController.getRemotePermissionMode(),
       setPermissionMode: (mode: RemotePermissionMode): Promise<RemotePermissionMode> =>
         this.settingsController.setRemotePermissionMode(mode),
+      getDeviceModelCatalog: (): Promise<RemoteModelCatalog> =>
+        this.settingsController.getDeviceModelCatalog(),
+      setDeviceModelDefaults: (
+        primary: string | null,
+        fast: string | null,
+        imageUnderstanding: string | null
+      ): Promise<RemoteDefaultModels> =>
+        this.settingsController.setDeviceModelDefaults(primary, fast, imageUnderstanding),
       setLanguage: async (language: string): Promise<void> => {
         await this.localeController.setLanguage(language);
       }

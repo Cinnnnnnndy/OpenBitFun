@@ -14,6 +14,7 @@ import {
   ChatTimelineRowStore
 } from '../../model/ChatTimelineModels';
 import { RemoteUiState } from '../../services/RemoteUiState';
+import { SubagentBranchExpansionState } from './SubagentBranchExpansionState';
 
 /** Shared observable state for General Chat and Remote Chat conversations. */
 @ObservedV2
@@ -33,8 +34,15 @@ export class ConversationCoreState {
   @Trace selectedModelId: string = '';
   @Trace statusText: string = '';
   @Trace chatInput: string = '';
+  @Trace promptSuggestion: string = '';
   @Trace selectedImages: SelectedImageAttachment[] = [];
   @Trace isVoiceListening: boolean = false;
+  /**
+   * Which delegation cards are open. Disclosures outlive the rows that draw
+   * them, so they are owned by the conversation rather than by a card, and they
+   * are shared by every surface that projects this conversation.
+   */
+  readonly subagentBranches: SubagentBranchExpansionState = new SubagentBranchExpansionState();
   private composerRevision: number = 0;
   private readonly defaultAgentType: string;
   private readonly timelineRevisionTracker: ChatTimelineRevisionTracker = new ChatTimelineRevisionTracker();
@@ -50,7 +58,10 @@ export class ConversationCoreState {
   }
 
   setActiveSession(session: SessionSummary): void {
-    if (this.activeSession.sessionId !== session.sessionId) this.composerRevision++;
+    if (this.activeSession.sessionId !== session.sessionId) {
+      this.composerRevision++;
+      this.promptSuggestion = '';
+    }
     this.activeSession = {
       sessionId: session.sessionId,
       title: session.title,
@@ -89,6 +100,7 @@ export class ConversationCoreState {
   }
 
   clearTimeline(): void {
+    this.promptSuggestion = '';
     this.persistedMessages = [];
     this.optimisticMessages = [];
     this.activeTurnMessage = RemoteUiState.emptyActiveTurn();
@@ -152,6 +164,7 @@ export class ConversationCoreState {
       commit: (): void => {
         if (finished || committed || this.composerRevision !== capturedRevision ||
           this.activeSession.sessionId !== sessionId) return;
+        this.promptSuggestion = '';
         if (this.chatInput.trim() === text.trim()) this.setChatInput('');
         this.setSelectedImages(this.selectedImages.filter((image: SelectedImageAttachment): boolean =>
           !images.some((sent: SelectedImageAttachment): boolean => sent.id === image.id)));

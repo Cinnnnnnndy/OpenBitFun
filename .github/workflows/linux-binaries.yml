@@ -79,17 +79,46 @@ jobs:
         with:
           ref: ${{ inputs.checkout_ref }}
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version-file: package.json
+          package-manager-cache: false
+
+      - name: Resolve Bun executable cache
+        id: bun-cache-target
+        shell: bash
+        run: |
+          if [[ -f scripts/ci/bun-cache-target.mjs ]]; then
+            node scripts/ci/bun-cache-target.mjs 1.3.14
+          else
+            echo "::notice::Bun caching is unavailable for this older source revision; setup-bun will install it normally."
+          fi
+
+      - name: Restore Bun executable
+        id: bun-executable-cache
+        if: steps.bun-cache-target.outputs.key != ''
+        uses: actions/cache/restore@v5
+        with:
+          path: ${{ steps.bun-cache-target.outputs.path }}
+          key: ${{ steps.bun-cache-target.outputs.key }}
+
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: "1.3.14"
           no-cache: true
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v5
+      - name: Save Bun executable
+        if: >-
+          inputs.cache_write && github.event_name != 'pull_request' &&
+          github.event_name != 'pull_request_target' &&
+          steps.bun-cache-target.outputs.key != '' &&
+          steps.bun-executable-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
         with:
-          node-version-file: package.json
-          package-manager-cache: false
+          path: ${{ steps.bun-cache-target.outputs.path }}
+          key: ${{ steps.bun-cache-target.outputs.key }}
 
       - name: Build plugin Host resources
         run: |
@@ -100,6 +129,8 @@ jobs:
         shell: bash
         run: |
           sudo apt-get update
+          # Select GStreamer's libunwind headers explicitly so apt can replace
+          # the conflicting LLVM libunwind-dev package preinstalled on Jammy.
           sudo apt-get install -y --no-install-recommends \
             build-essential \
             clang \
@@ -109,6 +140,11 @@ jobs:
             libxcb-render0-dev \
             libxcb-shape0-dev \
             libxcb-xfixes0-dev \
+            libunwind-dev \
+            libgstreamer1.0-dev \
+            libgstreamer-plugins-base1.0-dev \
+            libtesseract-dev \
+            libleptonica-dev \
             pkg-config \
             python3
 

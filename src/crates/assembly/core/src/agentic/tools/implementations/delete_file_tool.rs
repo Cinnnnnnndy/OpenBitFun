@@ -107,6 +107,19 @@ Important notes:
         })
     }
 
+    fn output_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "success": {"type": "boolean"},
+                "path": {"type": "string"},
+                "is_directory": {"type": "boolean"}
+            },
+            "required": ["success", "path", "is_directory"],
+            "additionalProperties": false
+        })
+    }
+
     fn is_readonly(&self) -> bool {
         false
     }
@@ -433,6 +446,7 @@ mod tests {
                 dialog_turn_id: None,
                 workspace: Some(workspace),
                 loaded_deferred_tool_specs: Vec::new(),
+                model_client: None,
                 primary_model_facts: Default::default(),
                 custom_data: Default::default(),
                 computer_use_host: None,

@@ -2,6 +2,7 @@ import { HistoryScrollPreview } from './HistoryScrollPreview';
 import { ColdStartHomePreview } from './ColdStartHomePreview';
 import { ComposerSubmissionPreview } from './ComposerSubmissionPreview';
 import { CopySelectionPreview } from './CopySelectionPreview';
+import { RollbackStagingPreview } from './RollbackStagingPreview';
 import { DurableTimelinePreview } from './DurableTimelinePreview';
 import { DeviceSelectorPreview } from './DeviceSelectorPreview';
 import { CatalogRefreshPreview } from './CatalogRefreshPreview';
@@ -9,7 +10,9 @@ import { ModelRoleSelectorPreview } from './ModelRoleSelectorPreview';
 import { SubagentProcessPreview } from './SubagentProcessPreview';
 import { FileVisibilityPreview } from './FileVisibilityPreview';
 import { ComposerOverflowPreview } from './ComposerOverflowPreview';
+import { CommandPalettePreview } from './CommandPalettePreview';
 import { ImmersiveBottomPreview } from './ImmersiveBottomPreview';
+import { DeviceModelDefaultsPreview } from './DeviceModelDefaultsPreview';
 import { WelcomeHome } from '../components/WelcomeHome';
 import { InteractionMailboxPreview } from './InteractionMailboxPreview';
 import { MobileDesignGeometry, MobileDesignTypography } from '../../generated/MobileDesignTokens';
@@ -57,20 +60,27 @@ struct MobileDesignGallery {
       CatalogRefreshPreview()
     } else if ((AppStorage.get<string>('scenarioId') || '').startsWith('model-role-selector')) {
       ModelRoleSelectorPreview()
-    } else if ((AppStorage.get<string>('scenarioId') || '').startsWith('subagent-process')) {
+    } else if ((AppStorage.get<string>('scenarioId') || '').startsWith('subagent-process') ||
+      (AppStorage.get<string>('scenarioId') || '').startsWith('subagent-swarm')) {
       SubagentProcessPreview()
     } else if ((AppStorage.get<string>('scenarioId') || '').startsWith('file-visibility')) {
       FileVisibilityPreview()
     } else if ((AppStorage.get<string>('scenarioId') || '').startsWith('composer-overflow')) {
       ComposerOverflowPreview()
+    } else if ((AppStorage.get<string>('scenarioId') || '').startsWith('command-palette')) {
+      CommandPalettePreview()
     } else if ((AppStorage.get<string>('scenarioId') || '').startsWith('immersive-bottom')) {
       ImmersiveBottomPreview()
     } else if ((AppStorage.get<string>('scenarioId') || '').startsWith('device-selector')) {
       DeviceSelectorPreview()
+    } else if ((AppStorage.get<string>('scenarioId') || '').startsWith('device-model')) {
+      DeviceModelDefaultsPreview()
     } else if (AppStorage.get<string>('scenarioId') === 'welcome-home') {
       WelcomeHome()
     } else if ((AppStorage.get<string>('scenarioId') || '').startsWith('copy-selection')) {
       CopySelectionPreview()
+    } else if ((AppStorage.get<string>('scenarioId') || '').startsWith('copy-rollback')) {
+      RollbackStagingPreview()
     } else if ((AppStorage.get<string>('scenarioId') || '').startsWith('interaction-mailbox')) {
       InteractionMailboxPreview()
     } else {

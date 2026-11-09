@@ -264,7 +264,14 @@ impl SessionStorePort for CoreSessionStorePort {
                     })?;
                 (
                     runtime
-                        .context_for_remote_workspace(host, &workspace.root_path.to_string_lossy())
+                        .context_for_remote_workspace(
+                            &openbitfun_services_core::workspace_identity::ssh_workspace_identity_host(
+                                host,
+                                Some(connection_id),
+                                &workspace.root_path.to_string_lossy(),
+                            ),
+                            &workspace.root_path.to_string_lossy(),
+                        )
                         .sessions_dir,
                     SessionStorageKind::Remote,
                     Some(connection_id.to_owned()),
@@ -312,6 +319,7 @@ impl SessionStorePort for CoreSessionStorePort {
 
         let workspace_path = request.workspace_path.to_string_lossy().to_string();
         let mut config = SessionConfig {
+            tool_presentation_mode: Default::default(),
             workspace_path: Some(workspace_path.clone()),
             remote_connection_id: request.remote_connection_id,
             remote_ssh_host: request.remote_ssh_host,

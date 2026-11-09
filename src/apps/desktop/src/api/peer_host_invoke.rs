@@ -22,16 +22,29 @@ use serde_json::Value;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::oneshot;
 
-use super::remote_connect_api::{account_app_handle, current_device_id_for_peer};
+use super::remote_connect_api::{account_app_handle, current_device_id_for_peer, RelayRoute};
 
 const DEFAULT_INVOKE_TIMEOUT: Duration = Duration::from_secs(120);
+/// Browser Control setup waits for browser-owned consent: up to one minute for
+/// the Remote debugging toggle plus up to 90 seconds for the connection
+/// approval prompt. The controller adapter uses the same budget.
+pub(crate) const BROWSER_CONTROL_SETUP_INVOKE_TIMEOUT: Duration = Duration::from_secs(180);
+
+fn invoke_timeout_for(command: &str) -> Duration {
+    match command {
+        "browser_control_launch"
+        | "browser_control_enable_default_cdp"
+        | "browser_control_restart_with_cdp" => BROWSER_CONTROL_SETUP_INVOKE_TIMEOUT,
+        _ => DEFAULT_INVOKE_TIMEOUT,
+    }
+}
 
 static PENDING: OnceLock<Mutex<HashMap<String, oneshot::Sender<HostInvokeBridgeResult>>>> =
     OnceLock::new();
 
 #[derive(Default)]
 struct PeerControlState {
-    controllers: HashSet<String>,
+    controllers: HashSet<(RelayRoute, String)>,
     permission_request_ids: HashSet<String>,
 }
 
@@ -96,13 +109,26 @@ pub fn is_retired_command(command: &str) -> bool {
 
 /// Register a controller device id to receive peer UI events.
 pub fn attach_controller(device_id: String) {
+    attach_route_controller(RelayRoute::Official, device_id);
+}
+
+pub(crate) fn attach_route_controller(route: RelayRoute, device_id: String) {
     if let Ok(mut state) = peer_control_state().lock() {
-        state.controllers.insert(device_id);
+        state.controllers.insert((route, device_id));
     }
 }
 
+#[cfg(test)]
 fn detach_from_state(state: &mut PeerControlState, device_id: &str) -> Vec<String> {
-    let removed = state.controllers.remove(device_id);
+    detach_route_from_state(state, RelayRoute::Official, device_id)
+}
+
+fn detach_route_from_state(
+    state: &mut PeerControlState,
+    route: RelayRoute,
+    device_id: &str,
+) -> Vec<String> {
+    let removed = state.controllers.remove(&(route, device_id.to_string()));
     if removed && state.controllers.is_empty() {
         return state.permission_request_ids.drain().collect();
     }
@@ -112,42 +138,46 @@ fn detach_from_state(state: &mut PeerControlState, device_id: &str) -> Vec<Strin
 /// Detach one controller and return requests that must fail closed when it was
 /// the final controller.
 pub fn detach_controller(device_id: &str) -> Vec<String> {
+    detach_route_controller(RelayRoute::Official, device_id)
+}
+
+pub(crate) fn detach_route_controller(route: RelayRoute, device_id: &str) -> Vec<String> {
     let Ok(mut state) = peer_control_state().lock() else {
         return Vec::new();
     };
-    detach_from_state(&mut state, device_id)
+    detach_route_from_state(&mut state, route, device_id)
 }
 
 fn retain_online_in_state(
     state: &mut PeerControlState,
+    route: RelayRoute,
     online_device_ids: &HashSet<String>,
-) -> Vec<String> {
-    let had_controllers = !state.controllers.is_empty();
+) {
     state
         .controllers
-        .retain(|device_id| online_device_ids.contains(device_id));
-    if had_controllers && state.controllers.is_empty() {
-        return state.permission_request_ids.drain().collect();
-    }
-    Vec::new()
+        .retain(|(owner, device_id)| *owner != route || online_device_ids.contains(device_id));
 }
 
-/// Remove controllers missing from account presence and return requests that
-/// lost their final control surface.
-pub fn retain_online_controllers(online_device_ids: &HashSet<String>) -> Vec<String> {
+/// Remove offline delivery subscribers only on the reporting route. Presence
+/// loss does not revoke pending permissions; reconnect recovers the mailbox.
+pub(crate) fn retain_online_controllers(route: RelayRoute, online_device_ids: &HashSet<String>) {
     let Ok(mut state) = peer_control_state().lock() else {
-        return Vec::new();
+        return;
     };
-    retain_online_in_state(&mut state, online_device_ids)
+    retain_online_in_state(&mut state, route, online_device_ids);
 }
 
 /// Clear all attached controllers after the device-routing stream closes.
-pub fn disconnect_controllers() -> Vec<String> {
+pub(crate) fn disconnect_route_controllers(route: RelayRoute) -> Vec<String> {
     let Ok(mut state) = peer_control_state().lock() else {
         return Vec::new();
     };
-    state.controllers.clear();
-    state.permission_request_ids.drain().collect()
+    state.controllers.retain(|(owner, _)| *owner != route);
+    if state.controllers.is_empty() {
+        state.permission_request_ids.drain().collect()
+    } else {
+        Vec::new()
+    }
 }
 
 pub fn track_permission_event(
@@ -212,7 +242,21 @@ pub async fn fail_closed_permission_requests(
 pub fn attached_controllers() -> Vec<String> {
     peer_control_state()
         .lock()
-        .map(|state| state.controllers.iter().cloned().collect())
+        .map(|state| state.controllers.iter().map(|(_, id)| id.clone()).collect())
+        .unwrap_or_default()
+}
+
+pub(crate) fn attached_route_controllers(route: RelayRoute) -> Vec<String> {
+    peer_control_state()
+        .lock()
+        .map(|state| {
+            state
+                .controllers
+                .iter()
+                .filter(|(owner, _)| *owner == route)
+                .map(|(_, id)| id.clone())
+                .collect()
+        })
         .unwrap_or_default()
 }
 
@@ -311,6 +355,51 @@ pub async fn dispatch(command: &str, args: Value) -> HostInvokeBridgeResult {
         PeerHostVerdict::Execute => {}
     }
 
+    // Direct tool calls have no dialog turn whose origin can reach
+    // ToolUseContext. Refuse tools that require the visible local desktop here.
+    let direct_tool = args
+        .get("request")
+        .unwrap_or(&args)
+        .get("toolName")
+        .and_then(Value::as_str);
+    if command == "execute_tool" && matches!(direct_tool, Some("DesktopCard" | "FrontendWorkbench"))
+    {
+        return HostInvokeBridgeResult {
+            ok: false,
+            value: None,
+            error: Some(format!("{} is unavailable through Peer Device Mode because it requires the visible local desktop.", direct_tool.unwrap())),
+        };
+    }
+
+    if command == "product_control_invoke" {
+        use openbitfun_product_domains::{
+            product_control::{ProductControlAction, ProductControlRequest},
+            remote_control::RemoteControlRequest,
+        };
+        let payload = args.get("request").unwrap_or(&args);
+        let validation = serde_json::from_value::<ProductControlRequest>(payload.clone())
+            .map_err(|error| error.to_string())
+            .and_then(|request| {
+                if request.capability_id.as_deref() == Some("feature.remote-connect")
+                    && request.action == ProductControlAction::Execute
+                {
+                    RemoteControlRequest::from_operation(
+                        request.operation_id.as_deref().unwrap_or_default(),
+                        request.arguments.as_ref(),
+                    )?
+                    .ensure_direct_peer_safe()?;
+                }
+                Ok(())
+            });
+        if let Err(error) = validation {
+            return HostInvokeBridgeResult {
+                ok: false,
+                value: None,
+                error: Some(error),
+            };
+        }
+    }
+
     let app = match account_app_handle() {
         Some(app) => app.clone(),
         None => {
@@ -336,6 +425,7 @@ pub async fn dispatch(command: &str, args: Value) -> HostInvokeBridgeResult {
                 }
             }
         };
+    let args = with_peer_turn_origin(command, args);
     let response_scope =
         serde_json::json!({"path": args.get("request").unwrap_or(&args).get("path")});
     match bridge_via_webview(&app, command, args).await {
@@ -364,6 +454,38 @@ pub async fn dispatch(command: &str, args: Value) -> HostInvokeBridgeResult {
     }
 }
 
+/// Preserve the caller's payload while recording where this turn was
+/// submitted. This also covers older controllers that send no metadata.
+fn with_peer_turn_origin(command: &str, mut args: Value) -> Value {
+    use openbitfun_agent_runtime::remote_file_delivery::TOOL_CONTEXT_PEER_DEVICE_CONTROL_KEY;
+
+    if !matches!(
+        command,
+        "start_dialog_turn" | "btw_ask_stream" | "miniapp_agent_run"
+    ) {
+        return args;
+    }
+    let request = if args.get("request").is_some() {
+        args.get_mut("request").expect("request exists")
+    } else {
+        &mut args
+    };
+    if let Some(request) = request.as_object_mut() {
+        if command == "miniapp_agent_run" {
+            request.insert("peerDeviceControl".to_string(), Value::Bool(true));
+            return args;
+        }
+        let metadata = request
+            .entry("userMessageMetadata")
+            .or_insert_with(|| serde_json::json!({}));
+        if !metadata.is_object() {
+            *metadata = serde_json::json!({ "raw_metadata": metadata.take() });
+        }
+        metadata[TOOL_CONTEXT_PEER_DEVICE_CONTROL_KEY] = Value::Bool(true);
+    }
+    args
+}
+
 async fn bridge_via_webview(
     app: &AppHandle,
     command: &str,
@@ -387,14 +509,15 @@ async fn bridge_via_webview(
         return Err(format!("failed to emit peer host invoke request: {e}"));
     }
 
-    match tokio::time::timeout(DEFAULT_INVOKE_TIMEOUT, rx).await {
+    let invoke_timeout = invoke_timeout_for(command);
+    match tokio::time::timeout(invoke_timeout, rx).await {
         Ok(Ok(result)) => Ok(result),
         Ok(Err(_)) => Err("peer host invoke channel closed".to_string()),
         Err(_) => {
             pending_map().lock().ok().map(|mut map| map.remove(&id));
             Err(format!(
                 "peer host invoke timed out after {}s for '{command}'",
-                DEFAULT_INVOKE_TIMEOUT.as_secs()
+                invoke_timeout.as_secs()
             ))
         }
     }
@@ -404,11 +527,160 @@ async fn bridge_via_webview(
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn desktop_cards_direct_peer_calls_fail_before_the_native_bridge() {
+        let result = dispatch(
+            "execute_tool",
+            serde_json::json!({"request": {
+                "toolName": "DesktopCard", "input": {"action": "create"}
+            }}),
+        )
+        .await;
+        assert!(!result.ok);
+        assert!(result.error.unwrap().contains("Peer Device Mode"));
+    }
+
+    #[tokio::test]
+    async fn frontend_workbench_direct_peer_calls_fail_before_the_native_bridge() {
+        let request = serde_json::json!({
+            "toolName": "FrontendWorkbench", "input": {"action": "prepare"}
+        });
+        for args in [request.clone(), serde_json::json!({"request": request})] {
+            let result = dispatch("execute_tool", args).await;
+            assert!(!result.ok);
+            assert!(result.error.unwrap().contains("Peer Device Mode"));
+        }
+    }
+
+    #[test]
+    fn desktop_cards_miniapp_peer_origin_is_host_stamped() {
+        let original = serde_json::json!({"request": {
+            "appId": "builtin-app", "prompt": "Create a card"
+        }});
+        let local: super::super::miniapp_agent_api::MiniAppAgentRunRequest =
+            serde_json::from_value(original["request"].clone()).unwrap();
+        assert!(!local.peer_device_control);
+        let marked = with_peer_turn_origin("miniapp_agent_run", original);
+        let peer: super::super::miniapp_agent_api::MiniAppAgentRunRequest =
+            serde_json::from_value(marked["request"].clone()).unwrap();
+        assert!(peer.peer_device_control);
+        assert_eq!(peer.app_id, local.app_id);
+        assert_eq!(peer.prompt, local.prompt);
+    }
+
+    #[test]
+    fn desktop_cards_peer_origin_preserves_legacy_turn_payloads() {
+        use openbitfun_agent_runtime::remote_file_delivery::TOOL_CONTEXT_PEER_DEVICE_CONTROL_KEY;
+        use serde_json::json;
+
+        for command in ["start_dialog_turn", "btw_ask_stream"] {
+            for metadata in [
+                None,
+                Some(Value::Null),
+                Some(json!("legacy metadata")),
+                Some(json!({
+                    "surface": "flow_chat",
+                    "requestId": "request-1",
+                    "peer_device_control": false
+                })),
+            ] {
+                let mut original = json!({"request": {
+                    "sessionId": "local-or-peer-session",
+                    "turnId": "turn-1",
+                    "userInput": "Create a card",
+                    "agentType": "Standard"
+                }});
+                if let Some(metadata) = metadata.clone() {
+                    original["request"]["userMessageMetadata"] = metadata;
+                }
+                let marked = with_peer_turn_origin(command, original.clone());
+                let marked_metadata = &marked["request"]["userMessageMetadata"];
+                assert_eq!(marked_metadata[TOOL_CONTEXT_PEER_DEVICE_CONTROL_KEY], true);
+                if command == "start_dialog_turn" {
+                    let decoded: super::super::agentic_api::StartDialogTurnRequest =
+                        serde_json::from_value(marked["request"].clone()).unwrap();
+                    assert_eq!(decoded.session_id, "local-or-peer-session");
+                    assert_eq!(
+                        decoded.user_message_metadata.as_ref(),
+                        Some(marked_metadata)
+                    );
+                }
+                match metadata {
+                    Some(Value::Object(_)) => {
+                        assert_eq!(marked_metadata["surface"], "flow_chat");
+                        assert_eq!(marked_metadata["requestId"], "request-1");
+                    }
+                    Some(Value::String(raw)) => assert_eq!(marked_metadata["raw_metadata"], raw),
+                    _ => {}
+                }
+                let mut restored = marked["request"].clone();
+                restored
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("userMessageMetadata");
+                let mut original_fields = original["request"].clone();
+                original_fields
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("userMessageMetadata");
+                assert_eq!(restored, original_fields);
+                // The marker is ordinary additive metadata and survives queue /
+                // transcript serialization without changing the request schema.
+                let round_trip: Value = serde_json::from_str(&marked.to_string()).unwrap();
+                assert_eq!(round_trip, marked);
+                assert_eq!(with_peer_turn_origin(command, marked.clone()), marked);
+            }
+        }
+
+        let read = json!({"request": {"sessionId": "session-1"}});
+        assert_eq!(with_peer_turn_origin("get_session", read.clone()), read);
+        assert_eq!(
+            with_peer_turn_origin("start_dialog_turn", Value::Null),
+            Value::Null
+        );
+    }
+
     fn control_state(controllers: &[&str], requests: &[&str]) -> PeerControlState {
         PeerControlState {
-            controllers: controllers.iter().map(|value| value.to_string()).collect(),
+            controllers: controllers
+                .iter()
+                .map(|value| (RelayRoute::Official, value.to_string()))
+                .collect(),
             permission_request_ids: requests.iter().map(|value| value.to_string()).collect(),
         }
+    }
+
+    #[test]
+    fn browser_control_setup_commands_get_the_consent_budget() {
+        for command in [
+            "browser_control_launch",
+            "browser_control_enable_default_cdp",
+            "browser_control_restart_with_cdp",
+        ] {
+            assert_eq!(
+                invoke_timeout_for(command),
+                BROWSER_CONTROL_SETUP_INVOKE_TIMEOUT
+            );
+        }
+        assert_eq!(
+            invoke_timeout_for("browser_control_get_status"),
+            DEFAULT_INVOKE_TIMEOUT
+        );
+    }
+
+    #[test]
+    fn detaching_one_route_preserves_the_other_controller_and_permissions() {
+        let mut state = control_state(&["same-device"], &["pending-approval"]);
+        state
+            .controllers
+            .insert((RelayRoute::Lan, "same-device".into()));
+        assert!(detach_route_from_state(&mut state, RelayRoute::Lan, "same-device").is_empty());
+        assert_eq!(state.permission_request_ids.len(), 1);
+        assert_eq!(state.controllers.len(), 1);
+        assert_eq!(
+            detach_from_state(&mut state, "same-device"),
+            vec!["pending-approval"]
+        );
     }
 
     #[tokio::test]
@@ -667,14 +939,46 @@ mod tests {
     }
 
     #[test]
-    fn presence_loss_drains_requests_only_when_every_controller_is_offline() {
+    fn presence_loss_preserves_pending_permissions_after_the_last_controller_leaves() {
         let mut state = control_state(&["controller-a", "controller-b"], &["request-1"]);
         let online = HashSet::from(["controller-b".to_string()]);
-        assert!(retain_online_in_state(&mut state, &online).is_empty());
+        retain_online_in_state(&mut state, RelayRoute::Official, &online);
+        assert_eq!(state.controllers.len(), 1);
 
-        assert_eq!(
-            retain_online_in_state(&mut state, &HashSet::new()),
-            vec!["request-1".to_string()]
-        );
+        retain_online_in_state(&mut state, RelayRoute::Official, &HashSet::new());
+        assert!(state.controllers.is_empty());
+        assert!(state.permission_request_ids.contains("request-1"));
+    }
+
+    #[test]
+    fn presence_updates_only_remove_subscribers_from_the_reporting_route() {
+        for route in [RelayRoute::Official, RelayRoute::Lan] {
+            let other = if route == RelayRoute::Official {
+                RelayRoute::Lan
+            } else {
+                RelayRoute::Official
+            };
+            let mut state = PeerControlState::default();
+            state.controllers.extend([
+                (route, "shared-device".to_string()),
+                (other, "shared-device".to_string()),
+                (route, "online-device".to_string()),
+            ]);
+            state.permission_request_ids.insert("request-1".to_string());
+
+            retain_online_in_state(
+                &mut state,
+                route,
+                &HashSet::from(["online-device".to_string()]),
+            );
+            assert_eq!(state.controllers.len(), 2);
+            assert!(state
+                .controllers
+                .contains(&(other, "shared-device".to_string())));
+            assert!(state
+                .controllers
+                .contains(&(route, "online-device".to_string())));
+            assert!(state.permission_request_ids.contains("request-1"));
+        }
     }
 }

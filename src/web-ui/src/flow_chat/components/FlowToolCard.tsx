@@ -7,6 +7,8 @@ import React from 'react';
 import { FlowChatCardReaderProvider } from '../timeline/readerState';
 import { ToolCapsulePresentationProvider } from '@openbitfun/ui/flow-chat';
 import { getToolCardComponent } from '../tool-cards';
+import { DefaultToolCard } from '../tool-cards/DefaultToolCard';
+import { importedToolCardName } from '../utils/importedToolPresentation';
 import { getToolItemCardConfig, isToolCapsule } from '../tool-cards/toolCardMetadata';
 import { getToolCapsuleSummary, toolCapsuleStateKey } from '../tool-cards/toolCapsuleModel';
 import { ToolCapsuleRecord } from '../tool-cards/ToolCapsuleRecord';
@@ -20,6 +22,7 @@ import { ToolApprovalBar } from './ToolApprovalBar';
 import { projectEffectiveToolItem } from '../utils/toolInvocationIdentity';
 import { isToolCardVisible } from '../utils/flowItemVisibility';
 import { useFlowChatContext, useFlowChatVolatileContext } from './modern/FlowChatContext';
+import GenerativeWidgetInline from './GenerativeWidgetInline';
 import './FlowToolCard.scss';
 
 const log = createLogger('FlowToolCard');
@@ -40,7 +43,7 @@ interface FlowToolCardProps {
   parallel?: boolean;
 }
 
-export const FlowToolCard: React.FC<FlowToolCardProps> = React.memo(({
+const FlowToolCardCard: React.FC<FlowToolCardProps> = React.memo(({
   toolItem,
   onConfirm,
   onReject,
@@ -67,7 +70,8 @@ export const FlowToolCard: React.FC<FlowToolCardProps> = React.memo(({
     ? expandedToolCapsules.has(capsuleKey) : localExpanded;
   const { cardRootRef, applyExpandedState } = useToolCardHeightContract({ toolId: toolItem.id, toolName: effectiveToolItem.toolName });
   const config = getToolItemCardConfig(effectiveToolItem);
-  const CardComponent = getToolCardComponent(effectiveToolItem.toolName);
+  const CardComponent = toolItem.importedSource && !importedToolCardName(toolItem)
+    ? DefaultToolCard : getToolCardComponent(effectiveToolItem.toolName);
   const interruptionNote = getToolInterruptionNote(effectiveToolItem, t);
   const cardHandlesInterruptionNote = ['Task', 'AgentSpawn', 'LaunchReviewAgent'].includes(effectiveToolItem.toolName);
   const toolCardTestId =
@@ -76,11 +80,11 @@ export const FlowToolCard: React.FC<FlowToolCardProps> = React.memo(({
       : effectiveToolItem.toolName === 'WebFetch'
         ? 'chat-browser-tool-card'
         : undefined;
-  const permissionPending =
+  const permissionPending = !toolItem.importedSource && (
     effectiveToolItem.status === 'pending_confirmation' ||
     (effectiveToolItem.requiresConfirmation === true && !effectiveToolItem.userConfirmed && !['completed', 'error', 'cancelled', 'rejected'].includes(effectiveToolItem.status)) ||
-    pendingPermissionToolCallIds?.has(toolItem.toolCall.id) === true;
-  const capsuleEligible = isToolCapsule(effectiveToolItem.toolName) && !permissionPending;
+    pendingPermissionToolCallIds?.has(toolItem.toolCall.id) === true);
+  const capsuleEligible = !toolItem.importedSource && isToolCapsule(effectiveToolItem.toolName) && !permissionPending;
   const staticAgentWaitCapsule = capsuleEligible && effectiveToolItem.toolName === 'AgentWait';
 
   const handleConfirm = React.useCallback((permissionOptionId?: string, approve?: boolean) => {
@@ -152,20 +156,21 @@ export const FlowToolCard: React.FC<FlowToolCardProps> = React.memo(({
             toolItem={effectiveToolItem}
             config={config}
             interruptionNote={interruptionNote}
-            onOpenInEditor={onOpenInEditor}
-            onOpenInPanel={onOpenInPanel}
+            onOpenInEditor={toolItem.importedSource ? undefined : onOpenInEditor}
+            onOpenInPanel={toolItem.importedSource ? undefined : onOpenInPanel}
             onExpand={handleExpand}
             sessionId={sessionId}
+            turnId={turnId}
             displayContext={displayContext}
             isLastItem={isLastItem}
           />
         </ToolCapsulePresentationProvider>
       </FlowToolCardErrorBoundary>
-      <ToolApprovalBar
+      {!toolItem.importedSource && <ToolApprovalBar
         toolItem={effectiveToolItem}
         onConfirm={handleConfirm}
         onReject={handleReject}
-      />
+      />}
       </FlowChatCardReaderProvider>
       {interruptionNote && !cardHandlesInterruptionNote && (
         <div
@@ -189,6 +194,7 @@ export const FlowToolCard: React.FC<FlowToolCardProps> = React.memo(({
   return (
     prevProps.toolItem.id === nextProps.toolItem.id &&
     prevProps.toolItem.toolName === nextProps.toolItem.toolName &&
+    prevProps.toolItem.importedSource === nextProps.toolItem.importedSource &&
     prevProps.toolItem.toolCall === nextProps.toolItem.toolCall &&
     prevProps.sessionId === nextProps.sessionId &&
     prevProps.turnId === nextProps.turnId &&
@@ -205,6 +211,7 @@ export const FlowToolCard: React.FC<FlowToolCardProps> = React.memo(({
     prevProps.toolItem.requiresConfirmation === nextProps.toolItem.requiresConfirmation &&
     prevProps.toolItem.acpPermission === nextProps.toolItem.acpPermission &&
     prevProps.toolItem.isParamsStreaming === nextProps.toolItem.isParamsStreaming &&
+    prevProps.toolItem._genUIStream === nextProps.toolItem._genUIStream &&
     prevProps.toolItem.subagentSessionId === nextProps.toolItem.subagentSessionId &&
     prevProps.toolItem.subagentDialogTurnId === nextProps.toolItem.subagentDialogTurnId &&
     prevProps.toolItem.subagentModelId === nextProps.toolItem.subagentModelId &&
@@ -217,4 +224,15 @@ export const FlowToolCard: React.FC<FlowToolCardProps> = React.memo(({
     prevProps.toolItem.partialParams === nextProps.toolItem.partialParams &&
     prevProps.toolItem.toolResult === nextProps.toolItem.toolResult
   );
+});
+
+/** GenUI is a FlowChat answer surface, not a tool-card presentation. Keep the
+ * generic card path for every other tool and isolate its hooks from the
+ * inline renderer. */
+export const FlowToolCard: React.FC<FlowToolCardProps> = React.memo((props) => {
+  const effectiveToolName = projectEffectiveToolItem(props.toolItem).toolName;
+  if (effectiveToolName === 'GenerativeUI') {
+    return <GenerativeWidgetInline toolItem={props.toolItem} sessionId={props.sessionId} turnId={props.turnId} />;
+  }
+  return <FlowToolCardCard {...props} />;
 });

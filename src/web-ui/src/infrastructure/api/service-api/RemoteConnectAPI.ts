@@ -105,6 +105,13 @@ export interface ConnectionResult {
 }
 
 export interface RemoteConnectStatus {
+  /** Present only when the host supports independently managed Relay routes. */
+  connections?: Array<{
+    method: 'lan' | 'openbitfun_server';
+    relay_connected: boolean;
+    relay_url: string | null;
+    clients: Array<{ id: string; name: string }>;
+  }>;
   relay_connected: boolean;
   relay_url: string | null;
   active_method: RemoteConnectionMethod | null;
@@ -235,9 +242,9 @@ class RemoteConnectAPIService {
     }
   }
 
-  async stopConnection(): Promise<void> {
+  async stopConnection(method?: 'lan' | 'openbitfun_server'): Promise<void> {
     try {
-      await this.adapter.request<void>('remote_connect_stop');
+      await this.adapter.request<void>('remote_connect_stop', method ? { request: { method } } : undefined);
     } catch (e) {
       log.error('stopConnection failed', e);
       throw e;
@@ -478,7 +485,11 @@ class RemoteConnectAPIService {
     }
   }
 
-  onSessionGap(callback: (event: { sessionId: string; reason: string }) => void): () => void {
+  /**
+   * `resync` marks a restarted host stream: a full replay from its latest page
+   * follows and replaces the controller's records. Host-appended gaps omit it.
+   */
+  onSessionGap(callback: (event: { sessionId: string; reason: string; resync?: boolean }) => void): () => void {
     return api.listen('relay://session-gap', callback);
   }
 
@@ -490,7 +501,7 @@ class RemoteConnectAPIService {
     return api.listen('session-interaction-changed', callback);
   }
 
-  onSessionReady(callback: (event: { sessionId: string; hasMore: boolean; oldestSeq: number; cursor: number }) => void): () => void {
+  onSessionReady(callback: (event: { sessionId: string; hasMore: boolean; oldestSeq: number; cursor: number; historyBatches?: boolean }) => void): () => void {
     return api.listen('relay://session-ready', callback);
   }
 
@@ -503,6 +514,9 @@ class RemoteConnectAPIService {
   }
 
   async subscribeSession(targetDeviceId: string, sessionId: string): Promise<string> {
+    // Native listener registration is asynchronous; cached history may replay
+    // during the subscribe command, before its response reaches this window.
+    await api.waitForListenerRegistrations();
     return this.adapter.request<string>('account_subscribe_session', { request: { target_device_id: targetDeviceId, session_id: sessionId } });
   }
   async unsubscribeSession(subscriptionId: string): Promise<void> {

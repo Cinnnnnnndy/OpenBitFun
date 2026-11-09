@@ -2,6 +2,7 @@ import { KeyboardReleaseService } from '../../services/KeyboardReleaseService';
 import { RemoteI18n } from '../../i18n/RemoteI18n';
 import { MobileDesignGeometry, MobileDesignMotion, MobileDesignTypography } from '../../generated/MobileDesignTokens';
 import { ChatComposerPolicy, ComposerPrimaryAction } from '../../services/ChatComposerPolicy';
+import { CommandPalettePolicy } from '../../services/CommandPalettePolicy';
 import { ChatComposerCapabilities, REMOTE_CHAT_COMPOSER_CAPABILITIES } from '../state/ChatComposerCapabilities';
 import {
   ConversationUiModel,
@@ -49,6 +50,11 @@ const COMPOSER_IMAGE_STRIP_TOP_GAP: number = 6;
 /** Strip height plus its top gap and the parent Column's 2vp row spacing. */
 const COMPOSER_IMAGE_STRIP_BLOCK: number =
   COMPOSER_IMAGE_CARD_SIZE + COMPOSER_IMAGE_STRIP_TOP_GAP + 2;
+const COMPOSER_TOKEN_HEIGHT: number = 28;
+const COMPOSER_TOKEN_STRIP_TOP_GAP: number = 6;
+/** The command token's row, sized the same way as the attachment strip's. */
+const COMPOSER_TOKEN_STRIP_BLOCK: number =
+  COMPOSER_TOKEN_HEIGHT + COMPOSER_TOKEN_STRIP_TOP_GAP + 2;
 /** Gap the model popover keeps between its defaults section and the list. */
 const COMPOSER_MODEL_SELECTOR_SECTION_SPACE: number = 10;
 const COMPOSER_MODEL_DEFAULTS_DIVIDER_STROKE: number = 0.5;
@@ -56,16 +62,36 @@ const COMPOSER_MODEL_DEFAULTS_DIVIDER_MARGIN_TOP: number = 4;
 
 @ComponentV2
 export struct ComposerBar {
+  @Param queueAttached: boolean = false;
   @Param presentation: ComposerPresentation = ComposerPresentation.Compact;
   @Param capabilities: ChatComposerCapabilities = REMOTE_CHAT_COMPOSER_CAPABILITIES;
   @Param inputId: string = 'conversation-composer-input';
   @Param chatInput: string = '';
+  @Param promptSuggestion: string = '';
   @Local inputText: string = '';
   @Local inputFocused: boolean = false;
   @Local primaryActionPressed: boolean = false;
   @Local sendTransitionActive: boolean = false;
   private sendTransitionTimerId: number = -1;
   @Param selectedImages: ConversationUiSelectedImage[] = [];
+  /**
+   * The command palette's skill token, empty when the composer carries none.
+   *
+   * It is a chip beside the draft rather than text in it, so the field stays
+   * exactly what the user typed; the send path is what turns it into content.
+   * The key is the pick's identity and decides whether the strip is drawn; the
+   * label is the skill's name and is one half of the text the message will carry.
+   */
+  @Param skillId: string = '';
+  @Param skillLabel: string = '';
+  /**
+   * Whether the composer sits under the command row.
+   *
+   * The row is the only thing that can produce a bare `/goal`, and that is a
+   * command still waiting for its argument rather than a message, so this is
+   * what lets the composer withhold Send without changing the local surface.
+   */
+  @Param commandRowActive: boolean = false;
   @Param isBusy: boolean = false;
   @Param canStop: boolean = false;
   @Param connectionState: string = 'connected';
@@ -83,6 +109,7 @@ export struct ComposerBar {
   private restoreInputFocusTimerId: number = -1;
   @Event onPickImages: () => void = () => {};
   @Event onRemoveImage: (imageId: string) => void = (_imageId: string) => {};
+  @Event onRemoveSkillToken: () => void = () => {};
   @Event onSend: () => void = () => {};
   @Event onStop: () => void = () => {};
   @Event onVoiceInput: () => void = () => {};
@@ -118,6 +145,29 @@ export struct ComposerBar {
 
   build() {
     Column() {
+      if (this.canAcceptPromptSuggestion()) {
+        Button({ type: ButtonType.Normal }) {
+          Text(this.promptSuggestion)
+            .fontSize(MobileDesignTypography.bodyMedium.size)
+            .fontColor(MUTED)
+            .width('100%')
+            .textAlign(TextAlign.Start)
+        }
+        .id('composer-prompt-suggestion')
+        .width('100%')
+        .constraintSize({ minHeight: MobileDesignGeometry.controlTouchSize })
+        .padding({ left: 12, right: 12, top: 8, bottom: 8 })
+        .backgroundColor(TRANSPARENT)
+        .borderRadius(MobileDesignGeometry.controlTouchSize / 2)
+        .accessibilityText(this.promptSuggestion)
+        .accessibilityDescription(RemoteI18n.t('chat.promptSuggestionAccept'))
+        .onClick(() => {
+          if (!this.canAcceptPromptSuggestion()) return;
+          this.inputText = this.promptSuggestion;
+          this.onChatInputChange(this.promptSuggestion);
+          this.getUIContext().getFocusController().requestFocus(this.inputId);
+        })
+      }
       this.AdaptiveComposer()
     }
     .width('100%')
@@ -128,15 +178,26 @@ export struct ComposerBar {
         ? 24 : MobileDesignGeometry.conversationOverlaySideInset,
       right: this.presentation === ComposerPresentation.Floating
         ? 24 : MobileDesignGeometry.conversationOverlaySideInset,
-      top: 8,
+      top: this.queueAttached ? 0 : 8,
       bottom: this.presentation === ComposerPresentation.Floating ? 16 : 12
     })
     .backgroundColor(TRANSPARENT)
   }
 
+  private canAcceptPromptSuggestion(): boolean {
+    return this.promptSuggestion.length > 0 && this.inputText.length === 0 && this.chatInput.length === 0 &&
+      !this.isBusy && !this.canStop && !this.isVoiceListening && this.connectionState === 'connected';
+  }
+
   @Builder
   AdaptiveComposer() {
     Column({ space: 2 }) {
+      // The token is not a thumbnail: it sits above the field with the images
+      // because that is the only strip the composer has, and both are things the
+      // next send will carry rather than text the user is still writing.
+      if (this.hasSkillToken()) {
+        this.CommandTokenStrip()
+      }
       if (this.selectedImages.length > 0) {
         this.SelectedImageStrip()
       }
@@ -659,6 +720,48 @@ export struct ComposerBar {
     .margin({ top: COMPOSER_IMAGE_STRIP_TOP_GAP })
   }
 
+  /**
+   * The one skill token a message may carry.
+   *
+   * It is removable in place, and it shows the exact text the message will send
+   * — `[$plan]` — so the token and the wire form cannot drift apart.
+   */
+  @Builder
+  CommandTokenStrip() {
+    Row() {
+      Row({ space: 5 }) {
+        SymbolGlyph($r('sys.symbol.wrench_and_screwdriver'))
+          .fontSize(12)
+          .fontColor([INK])
+          .opacity(0.7)
+        Text(CommandPalettePolicy.skillTokenLabel(this.skillLabel))
+          .fontSize(MobileDesignTypography.labelSmall.size)
+          .lineHeight(MobileDesignTypography.labelSmall.lineHeight)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(INK)
+          .maxLines(1)
+        SymbolGlyph($r('sys.symbol.xmark'))
+          .fontSize(11)
+          .fontColor([INK])
+          .opacity(0.6)
+      }
+      .height(COMPOSER_TOKEN_HEIGHT)
+      .padding({ left: 9, right: 9 })
+      .backgroundColor(SOFT)
+      .borderRadius(COMPOSER_TOKEN_HEIGHT / 2)
+      .accessibilityText(`${RemoteI18n.t('commands.skillToken')} · ` +
+        `${CommandPalettePolicy.skillTokenLabel(this.skillLabel)}`)
+      .onClick(() => {
+        this.onRemoveSkillToken();
+      })
+      Blank()
+    }
+    .width('100%')
+    .height(COMPOSER_TOKEN_HEIGHT)
+    .padding({ left: 4, right: 4 })
+    .margin({ top: COMPOSER_TOKEN_STRIP_TOP_GAP })
+  }
+
   @Builder
   SelectedImageCard(image: ConversationUiSelectedImage) {
     Stack({ alignContent: Alignment.TopEnd }) {
@@ -706,7 +809,7 @@ export struct ComposerBar {
   // Dictation runs inside this app rather than in a system dialog, so listening
   // outranks the draft here in a way a running turn does not.
   private primaryAction(): ComposerPrimaryAction {
-    return ChatComposerPolicy.primaryAction(
+    const action = ChatComposerPolicy.primaryAction(
       this.inputText,
       this.selectedImages.length,
       this.isBusy,
@@ -717,6 +820,16 @@ export struct ComposerBar {
       this.connectionState,
       this.capabilities.showVoiceInput
     );
+    // A bare `/goal` is a command whose argument has not been written yet, and
+    // the desktop parses the objective out of the message head, so there is
+    // nothing to send until the user supplies one. The palette's own face of
+    // this rule lives in `CommandPalettePolicy.blocksSend`; the send path checks
+    // it again, because the field can also be typed into directly.
+    if (action === ComposerPrimaryAction.Send && this.commandRowActive &&
+      CommandPalettePolicy.blocksSend(this.inputText)) {
+      return ComposerPrimaryAction.SendBlocked;
+    }
+    return action;
   }
 
   private shouldShowAddButton(): boolean {
@@ -726,10 +839,23 @@ export struct ComposerBar {
     );
   }
 
-  // Attachments live inside the card, so the card has to grow to hold them.
+  /**
+   * Whether the composer is carrying a skill token.
+   *
+   * The label is the token's own text, so the two cannot disagree: a pick with
+   * no name to write would draw an empty chip rather than nothing at all.
+   */
+  private hasSkillToken(): boolean {
+    return this.skillLabel.length > 0;
+  }
+
+  // Attachments and the skill token live inside the card, so the card has to
+  // grow to hold them.
   private composerHeight(): number {
     const base = this.isComposerExpanded() ? COMPOSER_EXPANDED_HEIGHT : this.collapsedComposerHeight();
-    return this.selectedImages.length > 0 ? base + COMPOSER_IMAGE_STRIP_BLOCK : base;
+    const attachmentBlock = this.selectedImages.length > 0 ? COMPOSER_IMAGE_STRIP_BLOCK : 0;
+    const tokenBlock = this.hasSkillToken() ? COMPOSER_TOKEN_STRIP_BLOCK : 0;
+    return base + attachmentBlock + tokenBlock;
   }
 
   private collapsedComposerHeight(): number {
@@ -739,7 +865,7 @@ export struct ComposerBar {
 
   // The pill radius only reads as a pill while the card is one row tall.
   private composerRadius(): number {
-    if (this.isComposerExpanded() || this.selectedImages.length > 0) {
+    if (this.isComposerExpanded() || this.selectedImages.length > 0 || this.hasSkillToken()) {
       return MobileDesignGeometry.composerExpandedRadius;
     }
     return MobileDesignGeometry.composerCollapsedRadius;

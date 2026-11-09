@@ -48,6 +48,13 @@ struct RestorePlan {
     repair: bool,
 }
 
+impl RestorePlan {
+    fn fullscreen_on_launch(&self, is_macos: bool, app_identifier: &str) -> bool {
+        // A dev reload can bypass the exit save and replay a stale fullscreen Space.
+        self.fullscreen && !(is_macos && app_identifier == "com.openbitfun.desktop.dev")
+    }
+}
+
 fn restore_plan(document: &Value, desktop: &Desktop) -> RestorePlan {
     let entry = &document["main"];
     let maximized = entry["maximized"].as_bool().unwrap_or(false);
@@ -177,13 +184,14 @@ fn restore_inner(window: &tauri::Window) -> Result<bool, String> {
             );
         }
     }
+    let fullscreen = plan.fullscreen_on_launch(cfg!(target_os = "macos"), &app.config().identifier);
     window
-        .set_fullscreen(plan.fullscreen)
+        .set_fullscreen(fullscreen)
         .map_err(|error| error.to_string())?;
     state.ready.store(true, Ordering::Release);
     // Windows must not maximize a hidden undecorated window. Fullscreen takes
     // precedence for this launch; its saved maximize preference is kept on disk.
-    Ok(plan.maximized && !plan.fullscreen)
+    Ok(plan.maximized && !fullscreen)
 }
 
 fn apply_geometry(
@@ -227,10 +235,7 @@ pub(crate) fn remember_normal(window: &tauri::Window) {
 }
 
 pub(crate) fn save(app: &tauri::AppHandle, reason: &str) -> Result<(), String> {
-    let window = app
-        .get_webview_window("main")
-        .ok_or("Main window not found")?;
-    let window = window.as_ref().window();
+    let window = app.get_window("main").ok_or("Main window not found")?;
     let snapshot = capture(&window)?;
     let desktop = Desktop::read(&window)?;
     let state = app.state::<MainWindowState>();
@@ -281,16 +286,15 @@ fn persist_snapshot(
     write_document(path, &document, original.as_deref().filter(|_| plan.repair))
 }
 
-pub(crate) fn repair_for_activation(window: &tauri::WebviewWindow) -> Result<(), String> {
+pub(crate) fn repair_for_activation(window: &tauri::Window) -> Result<(), String> {
     if crate::MAIN_WINDOW_USES_TRANSIENT_GEOMETRY.load(Ordering::SeqCst) {
         return Ok(());
     }
-    let window = window.as_ref().window();
-    let snapshot = capture(&window)?;
+    let snapshot = capture(window)?;
     if snapshot.minimized || snapshot.maximized || snapshot.fullscreen {
         return Ok(());
     }
-    let desktop = Desktop::read(&window)?;
+    let desktop = Desktop::read(window)?;
     if desktop.valid(snapshot.geometry) {
         return Ok(());
     }
@@ -301,7 +305,7 @@ pub(crate) fn repair_for_activation(window: &tauri::WebviewWindow) -> Result<(),
         .filter(|geometry| desktop.valid(*geometry))
         .unwrap_or_else(|| desktop.default_geometry(Some(snapshot.geometry)));
     state.ready.store(false, Ordering::Release);
-    let result = apply_geometry(&window, geometry, &desktop);
+    let result = apply_geometry(window, geometry, &desktop);
     state.ready.store(true, Ordering::Release);
     result?;
     *state.normal.lock().map_err(|error| error.to_string())? = Some(geometry);

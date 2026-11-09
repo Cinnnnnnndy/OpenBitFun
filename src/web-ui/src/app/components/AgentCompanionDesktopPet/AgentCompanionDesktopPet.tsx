@@ -1,4 +1,15 @@
-import { ArrowUp as LucideArrowUp, PencilLine as LucidePencilLine, X as LucideX } from 'lucide-react';
+import {
+  ArrowUp as LucideArrowUp,
+  CircleAlert as LucideCircleAlert,
+  CircleCheck as LucideCircleCheck,
+  CirclePause as LucideCirclePause,
+  CircleX as LucideCircleX,
+  Hourglass as LucideHourglass,
+  LoaderCircle as LucideLoaderCircle,
+  PencilLine as LucidePencilLine,
+  X as LucideX,
+  type LucideIcon,
+} from 'lucide-react';
 import { OverflowText, Menu, MenuItem, ScrollArea } from '@openbitfun/ui';
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -20,6 +31,7 @@ import { isReducedMotionPreferred } from '@/shared/utils/motionPreference';
 import { getPetLookDirection } from '@/infrastructure/config/services/agentCompanionPetSprite';
 import { startAgentCompanionDrag } from '@/infrastructure/config/services/AgentCompanionDragService';
 import { prepareAgentCompanionPointerDrag, type CompanionPointerDrag } from '@/infrastructure/config/services/AgentCompanionPointerDragService';
+import { createCompanionWindowResizer, isCompanionViewportShort } from './agentCompanionWindowResize';
 import './AgentCompanionDesktopPet.scss';
 
 const log = createLogger('AgentCompanionDesktopPet');
@@ -40,6 +52,15 @@ const WINDOW_EDGE_BUFFER = 4;
  * border gets clipped.
  */
 const WINDOW_VERTICAL_BUFFER = 3;
+/**
+ * Largest pet that still fits beside a bubble inside the host window. The dock
+ * is anchored bottom-right, so anything wider than the window is clipped on the
+ * left; oversized custom spritesheets are scaled down to this box instead.
+ */
+const PET_MAX_DISPLAY_SIZE = {
+  width: WINDOW_MAX_WIDTH - BUBBLE_WIDTH - WINDOW_HORIZONTAL_GAP - WINDOW_EDGE_BUFFER,
+  height: WINDOW_MAX_HEIGHT - WINDOW_VERTICAL_BUFFER * 2,
+};
 const POINTER_HOVER_POLL_INTERVAL_MS = 120;
 const PET_LOOK_HOLD_MS = 960;
 /** Clicks shorter/smaller than this use `show_main_window`; beyond it we start dragging. */
@@ -50,7 +71,6 @@ const IS_MACOS_WEBVIEW = /\bMacintosh\b/i.test(window.navigator.userAgent);
 // capture on macOS too, so running direction and drag lifetime follow the pointer.
 const USE_CONTROLLED_PET_DRAG = IS_WINDOWS_WEBVIEW || IS_MACOS_WEBVIEW;
 const PET_COMMAND_EVENT = 'agent-companion://pet-command';
-const MAIN_WINDOW_STATE_EVENT = 'agent-companion://main-window-state';
 const MENU_EDGE_MARGIN = 4;
 
 interface TypewriterOutputState {
@@ -93,6 +113,16 @@ function menuAnchorFromEvent(event: React.MouseEvent): MenuAnchor {
     bottom: Math.max(0, window.innerHeight - event.clientY),
   };
 }
+
+/** A bubble states its task with a glyph; the words stay for assistive tech. */
+const TASK_STATE_GLYPHS: Record<AgentCompanionTaskState, LucideIcon> = {
+  running: LucideLoaderCircle,
+  waiting: LucideHourglass,
+  attention: LucideCircleAlert,
+  completed: LucideCircleCheck,
+  error: LucideCircleX,
+  interrupted: LucideCirclePause,
+};
 
 function bubbleDismissBucket(state: AgentCompanionTaskState): BubbleDismissBucket {
   return state === 'running' || state === 'waiting' ? 'active' : 'notice';
@@ -177,12 +207,15 @@ export const AgentCompanionDesktopPet: React.FC = () => {
   const [overlay, setOverlay] = useState<PetOverlayState>(null);
   const [menuAnchor, setMenuAnchor] = useState<MenuAnchor | null>(null);
   const [menuPosition, setMenuPosition] = useState<MenuAnchor | null>(null);
-  const [isMainWindowFocused, setIsMainWindowFocused] = useState(false);
   const [dismissedBubbles, setDismissedBubbles] = useState<Record<string, BubbleDismissBucket>>({});
   const [composerValue, setComposerValue] = useState('');
   const [isSendingComposer, setIsSendingComposer] = useState(false);
   const [hoveredBubbleSessionId, setHoveredBubbleSessionId] = useState<string | null>(null);
   const dockRef = useRef<HTMLDivElement>(null);
+  const windowResizer = useMemo(() => createCompanionWindowResizer(
+    size => api.invoke('resize_agent_companion_desktop_pet', { width: size.width, height: size.height }),
+    error => log.warn('Failed to resize Agent companion window', error),
+  ), []);
   const bubblesRef = useRef<HTMLDivElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const composerInputRef = useRef<HTMLInputElement>(null);
@@ -200,13 +233,9 @@ export const AgentCompanionDesktopPet: React.FC = () => {
     () => tasks.filter(task => dismissedBubbles[task.sessionId] !== bubbleDismissBucket(task.state)),
     [dismissedBubbles, tasks],
   );
-  // Memoized so a focused main window (empty bubble list) does not hand the
-  // layout effect below a fresh array identity on every render.
-  const bubbleTasks = useMemo(
-    () => (isMainWindowFocused ? [] : visibleTasks),
-    [isMainWindowFocused, visibleTasks],
-  );
-  const displayTasks = [...bubbleTasks].reverse();
+  // Task activity and explicit dismissals own visibility. Depending on the
+  // main window's focus made new tasks appear only after touching the pet.
+  const displayTasks = [...visibleTasks].reverse();
   const activePetSize = pet && petFrameSize
     ? petFrameSize
     : pet
@@ -260,21 +289,6 @@ export const AgentCompanionDesktopPet: React.FC = () => {
     });
 
     let removeActivityListener: (() => void) | null = null;
-    let removeMainWindowStateListener: (() => void) | null = null;
-    const mainWindowStateListenerReady = listen<{ focused: boolean }>(MAIN_WINDOW_STATE_EVENT, event => {
-      setIsMainWindowFocused(event.payload.focused);
-    }).then(unlisten => {
-      if (disposed) {
-        unlisten();
-        return false;
-      }
-      removeMainWindowStateListener = unlisten;
-      return true;
-    }).catch(error => {
-      log.warn('Failed to listen for main window state updates', error);
-      return false;
-    });
-
     const activityListenerReady = listen<AgentCompanionActivityPayload>('agent-companion://activity-updated', event => {
       const emittedAt = event.payload.emittedAt ?? 0;
       const sequence = event.payload.sequence ?? 0;
@@ -302,9 +316,9 @@ export const AgentCompanionDesktopPet: React.FC = () => {
       return false;
     });
 
-    void Promise.all([settingsListenerReady, activityListenerReady, mainWindowStateListenerReady])
-      .then(([settingsReady, activityReady, mainWindowStateReady]) => {
-        if (!disposed && settingsReady && activityReady && mainWindowStateReady) {
+    void Promise.all([settingsListenerReady, activityListenerReady])
+      .then(([settingsReady, activityReady]) => {
+        if (!disposed && settingsReady && activityReady) {
           void emit('agent-companion://ready');
         }
       })
@@ -318,7 +332,6 @@ export const AgentCompanionDesktopPet: React.FC = () => {
       disposed = true;
       removeTauriListener?.();
       removeActivityListener?.();
-      removeMainWindowStateListener?.();
       document.documentElement.classList.remove('openbitfun-agent-companion-window-root');
       document.body.classList.remove('openbitfun-agent-companion-window-body');
     };
@@ -447,13 +460,15 @@ export const AgentCompanionDesktopPet: React.FC = () => {
   }, [typedOutputBySessionId]);
 
   const visibleTaskCountRef = useRef(0);
+  // Only the inline composer changes bubble layout; floating menus do not.
+  const composingSessionId = overlay?.kind === 'composer' ? overlay.sessionId : null;
 
   useLayoutEffect(() => {
     // Written here (not during render) so an abandoned/double render cannot
     // leave the count out of sync with the committed layout epoch.
     visibleTaskCountRef.current = visibleTasks.length;
     layoutEpochRef.current += 1;
-    const bubbleCount = bubbleTasks.length;
+    const bubbleCount = visibleTasks.length;
     const bubbleElements = Array.from(bubblesRef.current?.children ?? [])
       .slice(0, MAX_VISIBLE_BUBBLES);
     // Sum of the bubbles themselves: the slot's own vertical buffer is chrome
@@ -485,23 +500,43 @@ export const AgentCompanionDesktopPet: React.FC = () => {
       activePetSize.width,
       Math.min(WINDOW_MAX_WIDTH, Math.ceil(measuredDockWidth)),
     );
+    // Rounded up so converting to physical pixels cannot shave a row or column.
+    const nextWindowHeight = Math.ceil(nextHeight);
 
-    if (!Number.isFinite(nextWidth) || !Number.isFinite(nextHeight)) {
+    if (!Number.isFinite(nextWidth) || !Number.isFinite(nextWindowHeight)) {
       log.warn('Skipped invalid Agent companion window resize', {
         width: nextWidth,
-        height: nextHeight,
+        height: nextWindowHeight,
       });
       return;
     }
 
-    void api.invoke('resize_agent_companion_desktop_pet', {
-        width: nextWidth,
-        height: nextHeight,
-      })
-      .catch(error => {
-        log.warn('Failed to resize Agent companion window', error);
-      });
-  }, [activePetSize.height, activePetSize.width, overlay, bubbleTasks, visibleTasks.length]);
+    windowResizer.request({ width: nextWidth, height: nextWindowHeight });
+  }, [activePetSize.height, activePetSize.width, composingSessionId, visibleTasks, windowResizer]);
+
+  useEffect(() => {
+    // The host can change the window behind the dock's back (display or DPI
+    // changes, a request the platform did not apply). Ask again whenever the
+    // viewport comes out smaller than the dock needs; the host ignores requests
+    // that already match, so this cannot loop.
+    const reassertWindowSize = () => {
+      const target = windowResizer.target();
+      if (target && isCompanionViewportShort(
+        { width: window.innerWidth, height: window.innerHeight },
+        target,
+      )) {
+        log.debug('Re-requesting Agent companion window size', {
+          viewportWidth: window.innerWidth,
+          viewportHeight: window.innerHeight,
+          width: target.width,
+          height: target.height,
+        });
+        windowResizer.request(target);
+      }
+    };
+    window.addEventListener('resize', reassertWindowSize);
+    return () => window.removeEventListener('resize', reassertWindowSize);
+  }, [windowResizer]);
 
   useEffect(() => {
     if (IS_WINDOWS_WEBVIEW && !trackPetLook) {
@@ -647,18 +682,22 @@ export const AgentCompanionDesktopPet: React.FC = () => {
       }
     };
 
-    const intervalId = window.setInterval(() => {
-      // Pause the IPC poll while the pet window is not visible.
-      if (document.visibilityState === 'hidden') {
-        return;
-      }
+    let intervalId: number | undefined;
+    const syncPointerPolling = () => {
+      window.clearInterval(intervalId);
+      intervalId = undefined;
+      if (document.visibilityState === 'hidden') return;
+      // Keep the same visible hover latency, and refresh immediately on return.
       void pollPointerHover();
-    }, POINTER_HOVER_POLL_INTERVAL_MS);
-    void pollPointerHover();
+      intervalId = window.setInterval(() => { void pollPointerHover(); }, POINTER_HOVER_POLL_INTERVAL_MS);
+    };
+    document.addEventListener('visibilitychange', syncPointerPolling);
+    syncPointerPolling();
 
     return () => {
       disposed = true;
       window.clearInterval(intervalId);
+      document.removeEventListener('visibilitychange', syncPointerPolling);
       window.removeEventListener('resize', invalidateRectCache);
       removeWindowMovedListener?.();
       removeScaleChangedListener?.();
@@ -731,7 +770,7 @@ export const AgentCompanionDesktopPet: React.FC = () => {
     }
     // Finished / failed / interrupted bubbles are pure "unread" notices, so tell
     // the main window the user has seen this one.
-    void sendPetCommand({ type: 'dismiss-task', sessionId: task.sessionId })
+    void sendPetCommand({ type: 'dismiss-task', sessionId: task.sessionId, ...(task.surfaceId ? { surfaceId: task.surfaceId } : {}) })
       .catch(error => {
         log.warn('Failed to acknowledge Agent companion task', {
           sessionId: task.sessionId,
@@ -979,7 +1018,10 @@ export const AgentCompanionDesktopPet: React.FC = () => {
 
   const openTaskSession = async (task: AgentCompanionTaskStatus) => {
     try {
-      await emit('agent-companion://open-session', { sessionId: task.sessionId });
+      await emit('agent-companion://open-session', {
+        sessionId: task.sessionId,
+        ...(task.surfaceId ? { surfaceId: task.surfaceId, workspaceId: task.workspaceId } : {}),
+      });
       await api.invoke('show_main_window');
     } catch (error) {
       log.warn('Failed to open Agent companion task session', {
@@ -999,10 +1041,10 @@ export const AgentCompanionDesktopPet: React.FC = () => {
     '--openbitfun-agent-companion-gap': `${WINDOW_HORIZONTAL_GAP}px`,
     '--openbitfun-agent-companion-vertical-buffer': `${WINDOW_VERTICAL_BUFFER}px`,
   } as React.CSSProperties;
-  const isSingleTask = bubbleTasks.length === 1;
-  const hasAttentionTask = bubbleTasks.some(task => task.state === 'attention');
+  const isSingleTask = visibleTasks.length === 1;
+  const hasAttentionTask = visibleTasks.some(task => task.state === 'attention');
   const overlayTask = overlay && overlay.kind !== 'pet-menu'
-    ? bubbleTasks.find(task => task.sessionId === overlay.sessionId) ?? null
+    ? visibleTasks.find(task => task.sessionId === overlay.sessionId) ?? null
     : null;
   const menuItems = overlay?.kind === 'pet-menu'
     ? [
@@ -1057,9 +1099,10 @@ export const AgentCompanionDesktopPet: React.FC = () => {
           ref={dockRef}
           className="openbitfun-agent-companion-window__dock"
          data-openbitfun-component="agent-companion-desktop-pet" data-openbitfun-part="dock">
-          {bubbleTasks.length > 0 && (
+          {visibleTasks.length > 0 && (
             <ScrollArea
               ref={bubblesRef}
+              scrollbarVisibility="hidden"
               className={`openbitfun-agent-companion-window__bubbles${isSingleTask ? ' openbitfun-agent-companion-window__bubbles--single' : ''}`}
               aria-live="polite"
               onDoubleClick={event => event.stopPropagation()}
@@ -1068,15 +1111,31 @@ export const AgentCompanionDesktopPet: React.FC = () => {
                 const isComposingTask = overlay?.kind === 'composer'
                   && overlay.sessionId === task.sessionId;
                 const isHoveredTask = hoveredBubbleSessionId === task.sessionId;
-                const bubbleClassName = `openbitfun-agent-companion-window__bubble openbitfun-agent-companion-window__bubble--${task.state}${isSingleTask ? ' openbitfun-agent-companion-window__bubble--single' : ''}${isComposingTask ? ' openbitfun-agent-companion-window__bubble--composing' : ''}`;
+                // A session that finished in the background may only have metadata
+                // here, so there is no reply text yet: keep the single bubble
+                // compact instead of reserving an empty output block.
+                const isCompactSingle = isSingleTask && !task.latestOutput && !isComposingTask;
+                const bubbleClassName = `openbitfun-agent-companion-window__bubble openbitfun-agent-companion-window__bubble--${task.state}${isSingleTask ? ' openbitfun-agent-companion-window__bubble--single' : ''}${isCompactSingle ? ' openbitfun-agent-companion-window__bubble--compact' : ''}${isComposingTask ? ' openbitfun-agent-companion-window__bubble--composing' : ''}`;
+                const statusLabel = t(task.labelKey, { defaultValue: task.defaultLabel });
+                const StateGlyph = TASK_STATE_GLYPHS[task.state] ?? LucideLoaderCircle;
                 const bubbleBody = (
                   <>
-                    <OverflowText className="openbitfun-agent-companion-window__bubble-title" data-openbitfun-component="agent-companion-desktop-pet" data-openbitfun-part="bubbleTitle">
-                      {task.title}
-                    </OverflowText>
-                    <OverflowText className="openbitfun-agent-companion-window__bubble-status" data-openbitfun-component="agent-companion-desktop-pet" data-openbitfun-part="bubbleStatus">
-                      {t(task.labelKey, { defaultValue: task.defaultLabel })}
-                    </OverflowText>
+                    <span className="openbitfun-agent-companion-window__bubble-head">
+                      <StateGlyph
+                        className="openbitfun-agent-companion-window__bubble-state"
+                        width="13"
+                        height="13"
+                        strokeWidth={2.25}
+                        aria-hidden="true"
+                      />
+                      {/* Bubbles show no tooltip; an overflowing title scrolls on hover instead. */}
+                      <OverflowText className="openbitfun-agent-companion-window__bubble-title" title="" data-openbitfun-component="agent-companion-desktop-pet" data-openbitfun-part="bubbleTitle">
+                        {task.title}
+                      </OverflowText>
+                    </span>
+                    <span className="openbitfun-agent-companion-window__bubble-status" data-openbitfun-component="agent-companion-desktop-pet" data-openbitfun-part="bubbleStatus">
+                      {task.deviceName ? `${statusLabel} · ${task.deviceName}` : statusLabel}
+                    </span>
                     {isSingleTask && task.latestOutput && (() => {
                       const typedOutput = typedOutputBySessionId[task.sessionId];
                       const visibleOutput = typedOutput?.visible ?? seedTypewriterOutput(task.latestOutput);
@@ -1106,7 +1165,7 @@ export const AgentCompanionDesktopPet: React.FC = () => {
                   <div
                     key={task.sessionId}
                     data-agent-companion-session-id={task.sessionId}
-                    className={`openbitfun-agent-companion-window__bubble-shell${isSingleTask ? ' openbitfun-agent-companion-window__bubble-shell--single' : ''}${isHoveredTask ? ' openbitfun-agent-companion-window__bubble-shell--hovered' : ''}`}
+                    className={`openbitfun-agent-companion-window__bubble-shell${isSingleTask ? ' openbitfun-agent-companion-window__bubble-shell--single' : ''}${isCompactSingle ? ' openbitfun-agent-companion-window__bubble-shell--compact' : ''}${task.canReply !== false && !isComposingTask ? ' openbitfun-agent-companion-window__bubble-shell--replyable' : ''}${isHoveredTask ? ' openbitfun-agent-companion-window__bubble-shell--hovered' : ''}`}
                     onContextMenu={event => onBubbleContextMenu(event, task.sessionId)}
                   >
                     {isComposingTask ? (
@@ -1138,7 +1197,7 @@ export const AgentCompanionDesktopPet: React.FC = () => {
                             aria-label={t('agentCompanion.composer.cancel')}
                             onClick={cancelBubbleComposer}
                           >
-                            <LucideX width="11" height="11" aria-hidden="true" />
+                            <LucideX width="11" height="11" strokeWidth={2.25} aria-hidden="true" />
                           </button>
                           <button
                             type="button"
@@ -1148,7 +1207,7 @@ export const AgentCompanionDesktopPet: React.FC = () => {
                             disabled={!composerValue.trim() || isSendingComposer}
                             onClick={() => void submitBubbleComposer()}
                           >
-                            <LucideArrowUp width="11" height="11" aria-hidden="true" />
+                            <LucideArrowUp width="12" height="12" strokeWidth={2.5} aria-hidden="true" />
                           </button>
                         </div>
                       </div>
@@ -1171,7 +1230,7 @@ export const AgentCompanionDesktopPet: React.FC = () => {
                         aria-label={t('agentCompanion.composer.openTitle')}
                         onClick={() => openBubbleComposer(task.sessionId)}
                       >
-                        <LucidePencilLine width="11" height="11" aria-hidden="true" />
+                        <LucidePencilLine width="12" height="12" aria-hidden="true" />
                       </button>
                     )}
                   </div>
@@ -1200,6 +1259,7 @@ export const AgentCompanionDesktopPet: React.FC = () => {
               lookDirection={trackPetLook && !isDraggingPet ? lookDirection : null}
               nativePetdexSize
               petdexScale={PETDEX_DESKTOP_SCALE}
+              petdexMaxSize={PET_MAX_DISPLAY_SIZE}
               onPetFrameSizeChange={handlePetFrameSizeChange}
               className="openbitfun-agent-companion-window__pet"
              data-openbitfun-component="agent-companion-desktop-pet" data-openbitfun-part="pet"/>

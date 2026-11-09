@@ -1,5 +1,5 @@
 import { GitHubAccountProfile, GitHubProfileLoader } from '../../services/GitHubAccountProfile';
-import { normalizeAccountRelayUrl, OFFICIAL_RELAY_URL } from '../../services/AccountDeviceLink';
+import { normalizeAccountRelayUrl, OFFICIAL_RELAY_URL, sameRelayDeployment } from '../../services/AccountDeviceLink';
 import { RemoteI18n } from '../../i18n/RemoteI18n';
 import { stampRemoteSessionsDevice } from '../../services/RemoteSessionIdentity';
 import {
@@ -17,7 +17,7 @@ import { Encoding } from '../../services/Encoding';
 import { RemoteLogger } from '../../services/RemoteLogger';
 import { RemoteSessionManager } from '../../services/RemoteSessionManager';
 import { WatchProvisionOutcome } from '../../services/WatchProvisionController';
-import { RemotePermissionMode } from '../../model/RemoteModels';
+import { RemoteDefaultModels, RemoteModelCatalog, RemotePermissionMode } from '../../model/RemoteModels';
 import { RemotePageState } from '../state/RemotePageState';
 
 export interface CloudAccountSettingsHooks {
@@ -173,7 +173,7 @@ export class SettingsController {
   selectAccountRelay(relayUrl: string): void {
     const endpoint = normalizeAccountRelayUrl(relayUrl);
     if (!endpoint) throw new Error('Invalid Relay URL');
-    if (this.cloudRelayUrl !== endpoint) {
+    if (!sameRelayDeployment(this.cloudRelayUrl, endpoint)) {
       this.teardownCloudAccountProjection(this.requireCloud());
       this.selectedRelayUrl = endpoint;
     }
@@ -481,6 +481,35 @@ export class SettingsController {
   }
 
   /**
+   * The connected desktop's own model catalog: no session id, so the read is
+   * device scope and carries the reconciled default models.
+   */
+  async getDeviceModelCatalog(): Promise<RemoteModelCatalog> {
+    const cloud = this.requireCloud();
+    if (!cloud.hooks.remoteAvailable()) {
+      throw new Error(RemoteI18n.t('status.remoteUnavailable'));
+    }
+    return cloud.sessionManager.getModelCatalog();
+  }
+
+  /**
+   * Writes the three phone-managed model slots as one object and answers with
+   * the desktop's reconciled values. `null` is a value: the fast model then
+   * follows the primary one and the others are left unconfigured.
+   */
+  async setDeviceModelDefaults(
+    primary: string | null,
+    fast: string | null,
+    imageUnderstanding: string | null
+  ): Promise<RemoteDefaultModels> {
+    const cloud = this.requireCloud();
+    if (!cloud.hooks.remoteAvailable()) {
+      throw new Error(RemoteI18n.t('status.remoteUnavailable'));
+    }
+    return cloud.sessionManager.setModelDefaults(primary, fast, imageUnderstanding);
+  }
+
+  /**
    * Puts the account back on the desktop it was last driving.
    *
    * `navigateHome` is off for the cold-start restore: the launch route is the
@@ -755,7 +784,8 @@ export class SettingsController {
       if (!persisted) {
         return;
       }
-      if (/^https:\/\/remote\.openbitfun\.com\/v\/[^/]+\/?$/.test(persisted.relayUrl) && persisted.relayUrl.replace(/\/+$/, '') !== OFFICIAL_RELAY_URL) {
+      if (/^https:\/\/remote\.openbitfun\.com\/v\/[^/]+\/?$/.test(persisted.relayUrl)
+        && !sameRelayDeployment(persisted.relayUrl, OFFICIAL_RELAY_URL)) {
         // Relay credentials are database-scoped; never replay an older credential at a new endpoint.
         this.selectedRelayUrl = OFFICIAL_RELAY_URL;
         this.cloudRelayUrl = OFFICIAL_RELAY_URL;

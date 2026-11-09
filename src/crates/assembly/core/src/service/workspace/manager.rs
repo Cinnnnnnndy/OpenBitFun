@@ -13,7 +13,8 @@ pub use openbitfun_runtime_ports::RelatedPath;
 use openbitfun_services_core::workspace_identity::{
     canonical_ssh_connection_id, canonicalize_local_workspace_root,
     local_workspace_stable_storage_id, normalize_local_workspace_root_for_stable_id,
-    normalize_remote_workspace_path, remote_workspace_stable_id, LOCAL_WORKSPACE_SSH_HOST,
+    normalize_remote_workspace_path, remote_workspace_stable_id_for_connection,
+    LOCAL_WORKSPACE_SSH_HOST,
 };
 
 use serde::{Deserialize, Serialize};
@@ -49,17 +50,17 @@ pub(crate) trait WorkspaceIdentityRuntimeExt: Sized {
 impl WorkspaceIdentityRuntimeExt for WorkspaceIdentity {
     async fn load_from_workspace_root(workspace_root: &Path) -> Result<Option<Self>, String> {
         let identity_path = workspace_root.join(IDENTITY_FILE_NAME);
-        if !identity_path.exists() {
-            return Ok(None);
-        }
-
-        let content = fs::read_to_string(&identity_path).await.map_err(|e| {
-            format!(
-                "Failed to read identity file '{}': {}",
-                identity_path.display(),
-                e
-            )
-        })?;
+        let content = match fs::read_to_string(&identity_path).await {
+            Ok(content) => content,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => {
+                return Err(format!(
+                    "Failed to read identity file '{}': {}",
+                    identity_path.display(),
+                    error
+                ))
+            }
+        };
 
         let identity = Self::from_markdown(&content)?;
         if identity.is_empty() {
@@ -359,7 +360,7 @@ impl WorkspaceInfoRuntimeExt for WorkspaceInfo {
                         "Remote workspace requires a non-empty sshHost in the current OpenBitFun format",
                     )
                 })?;
-            options
+            let connection_id = options
                 .remote_connection_id
                 .as_deref()
                 .map(str::trim)
@@ -377,7 +378,11 @@ impl WorkspaceInfoRuntimeExt for WorkspaceInfo {
                     root_path.display()
                 )));
             }
-            let expected_id = remote_workspace_stable_id(ssh_host, &normalized_root);
+            let expected_id = remote_workspace_stable_id_for_connection(
+                ssh_host,
+                Some(connection_id),
+                &normalized_root,
+            );
             let supplied_id = options
                 .stable_workspace_id
                 .as_ref()
@@ -475,21 +480,25 @@ impl WorkspaceInfoRuntimeExt for WorkspaceInfo {
                     self.root_path.join(IDENTITY_FILE_NAME).display(),
                     error
                 );
-                self.identity = None;
                 return;
             }
         };
 
-        if self.workspace_kind == WorkspaceKind::Assistant {
-            if let Some(name) = identity
-                .as_ref()
-                .and_then(|identity| identity.name.as_ref())
-            {
-                self.name = name.clone();
-            }
+        // A temporarily missing file must not erase the last known identity.
+        // A readable document with an empty name still explicitly clears it.
+        if identity.is_none()
+            && self.identity.is_some()
+            && !fs::try_exists(self.root_path.join(IDENTITY_FILE_NAME))
+                .await
+                .unwrap_or(false)
+        {
+            return;
         }
-
         self.identity = identity;
+        super::assistant_naming::refresh_name(
+            self,
+            crate::service::config::app_language::get_app_language().await,
+        );
     }
 
     async fn load_worktree(&mut self, freshness: WorktreeTopologyFreshness) {
@@ -814,6 +823,8 @@ pub struct WorkspaceManager {
     recent_assistant_workspaces: Vec<String>,
     primary_assistant_key: Option<PrimaryAssistantKey>,
     max_recent_workspaces: usize,
+    pub(crate) assistant_name_sequence: u64,
+    assistant_name_registry: Option<PathBuf>,
 }
 
 /// Workspace manager configuration.
@@ -845,7 +856,45 @@ impl WorkspaceManager {
             recent_assistant_workspaces: Vec::new(),
             primary_assistant_key: None,
             max_recent_workspaces: config.max_recent_workspaces,
+            assistant_name_sequence: 0,
+            assistant_name_registry: None,
         }
+    }
+
+    pub(crate) fn with_assistant_name_registry(mut self, path: PathBuf) -> Self {
+        self.assistant_name_registry = Some(path);
+        self
+    }
+
+    pub(crate) fn restore_assistant_name_sequence(&mut self, saved: u64) {
+        self.assistant_name_sequence = saved.max(
+            self.workspaces
+                .values()
+                .filter_map(super::assistant_naming::number)
+                .max()
+                .unwrap_or(0),
+        );
+    }
+
+    async fn allocate_assistant_name_number(&mut self, id: &str) -> OpenBitFunResult<u64> {
+        let next = if let Some(path) = &self.assistant_name_registry {
+            let known = self
+                .workspaces
+                .values()
+                .filter_map(|workspace| {
+                    super::assistant_naming::number(workspace)
+                        .map(|number| (workspace.id.clone(), number))
+                })
+                .collect();
+            super::assistant_naming::allocate_number(path, id, self.assistant_name_sequence, known)
+                .await?
+        } else {
+            self.assistant_name_sequence.checked_add(1).ok_or_else(|| {
+                OpenBitFunError::service("Assistant name number capacity exhausted")
+            })?
+        };
+        self.assistant_name_sequence = self.assistant_name_sequence.max(next);
+        Ok(next)
     }
 
     /// Opens a workspace.
@@ -963,6 +1012,20 @@ impl WorkspaceManager {
                     )?;
                 }
             }
+            let needs_number = options.workspace_kind == WorkspaceKind::Assistant
+                && self
+                    .workspaces
+                    .get(&workspace_id)
+                    .and_then(super::assistant_naming::number)
+                    .is_none();
+            if needs_number {
+                let number = self.allocate_assistant_name_number(&workspace_id).await?;
+                if let Some(workspace) = self.workspaces.get_mut(&workspace_id) {
+                    workspace
+                        .metadata
+                        .insert(super::assistant_naming::NUMBER.into(), number.into());
+                }
+            }
             if let Some(workspace) = self.workspaces.get_mut(&workspace_id) {
                 workspace.workspace_kind = options.workspace_kind.clone();
                 workspace.assistant_id = if options.workspace_kind == WorkspaceKind::Assistant {
@@ -970,8 +1033,12 @@ impl WorkspaceManager {
                 } else {
                     None
                 };
-                if let Some(display_name) = &options.display_name {
-                    workspace.name = display_name.clone();
+                // Discovery supplies a generated fallback, never an instruction
+                // to overwrite a saved assistant name.
+                if workspace.workspace_kind != WorkspaceKind::Assistant {
+                    if let Some(display_name) = &options.display_name {
+                        workspace.name = display_name.clone();
+                    }
                 }
                 if options.workspace_kind == WorkspaceKind::Remote {
                     if let Some(ssh_host) = options
@@ -995,8 +1062,12 @@ impl WorkspaceManager {
                         );
                     }
                 }
-                if let Some(worktree) = refresh_worktree {
+                if workspace.workspace_kind == WorkspaceKind::Assistant
+                    || refresh_worktree.is_some()
+                {
                     workspace.load_identity().await;
+                }
+                if let Some(worktree) = refresh_worktree {
                     workspace.worktree = worktree;
                 }
             }
@@ -1019,7 +1090,7 @@ impl WorkspaceManager {
             });
         }
 
-        let workspace = match refresh_worktree {
+        let mut workspace = match refresh_worktree {
             Some(worktree) => {
                 let mut workspace =
                     WorkspaceInfo::new_without_worktree(path, options.clone()).await?;
@@ -1028,6 +1099,14 @@ impl WorkspaceManager {
             }
             None => WorkspaceInfo::new(path, options.clone()).await?,
         };
+        if workspace.workspace_kind == WorkspaceKind::Assistant {
+            let number = self.allocate_assistant_name_number(&workspace.id).await?;
+            workspace
+                .metadata
+                .insert(super::assistant_naming::NUMBER.into(), number.into());
+            // Re-read before migration: unreadable identities must preserve their name.
+            workspace.load_identity().await;
+        }
         let workspace_id = workspace.id.clone();
 
         self.workspaces
@@ -1178,7 +1257,15 @@ impl WorkspaceManager {
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(str::to_string)
-            .or_else(|| host.map(|host| remote_workspace_stable_id(host, &path_norm)))?;
+            .or_else(|| {
+                host.map(|host| {
+                    remote_workspace_stable_id_for_connection(
+                        host,
+                        options.remote_connection_id.as_deref(),
+                        &path_norm,
+                    )
+                })
+            })?;
         self.workspaces.get(&stable).filter(|workspace| {
             workspace.workspace_kind == WorkspaceKind::Remote
                 && normalize_remote_workspace_path(&workspace.root_path.to_string_lossy())
@@ -1384,9 +1471,16 @@ impl WorkspaceManager {
     }
 
     fn find_next_workspace_id_after_close(&self, preferred_kind: &WorkspaceKind) -> Option<String> {
-        let same_kind = self
-            .opened_workspace_ids
+        // The opened list keeps the user's arrangement, so recency comes from
+        // the recent lists: the most recently used opened workspace wins.
+        let mut by_recency = self
+            .recent_workspaces
             .iter()
+            .chain(self.recent_assistant_workspaces.iter())
+            .filter(|id| self.opened_workspace_ids.contains(id))
+            .chain(self.opened_workspace_ids.iter());
+        let same_kind = by_recency
+            .clone()
             .find(|id| {
                 self.workspaces
                     .get(id.as_str())
@@ -1406,12 +1500,20 @@ impl WorkspaceManager {
             return None;
         }
 
-        self.opened_workspace_ids.first().cloned()
+        by_recency.next().cloned()
     }
 
-    /// Ensures a workspace stays in the opened list.
+    /// Ensures a workspace is in the opened list. A newly opened workspace goes
+    /// first; an already opened one keeps its place, so activating a workspace
+    /// never reorders the list users arrange (recency lives in the recent list).
     fn ensure_workspace_open(&mut self, workspace_id: &str) {
-        self.opened_workspace_ids.retain(|id| id != workspace_id);
+        if self
+            .opened_workspace_ids
+            .iter()
+            .any(|id| id == workspace_id)
+        {
+            return;
+        }
         self.opened_workspace_ids
             .insert(0, workspace_id.to_string());
     }
@@ -1604,6 +1706,130 @@ mod tests {
                 .remote_ssh_connection_id(),
             Some("ssh-second")
         );
+    }
+
+    #[test]
+    fn activating_an_opened_workspace_keeps_the_opened_order() {
+        let mut manager = super::WorkspaceManager::new(super::WorkspaceManagerConfig::default());
+        manager.opened_workspace_ids = vec!["a".into(), "b".into(), "c".into()];
+        manager.ensure_workspace_open("c");
+        assert_eq!(manager.opened_workspace_ids, vec!["a", "b", "c"]);
+        manager.ensure_workspace_open("d");
+        assert_eq!(manager.opened_workspace_ids, vec!["d", "a", "b", "c"]);
+    }
+
+    #[tokio::test]
+    async fn closing_the_current_workspace_activates_the_most_recently_used_one() {
+        use super::{WorkspaceInfo, WorkspaceInfoRuntimeExt, WorkspaceKind, WorkspaceOpenOptions};
+
+        let mut manager = super::WorkspaceManager::new(super::WorkspaceManagerConfig::default());
+        let options = WorkspaceOpenOptions {
+            workspace_kind: WorkspaceKind::Remote,
+            remote_connection_id: Some("ssh-recent".into()),
+            remote_ssh_host: Some("remote.example".into()),
+            auto_set_current: false,
+            ..Default::default()
+        };
+        let mut ids = Vec::new();
+        for root in ["/srv/a", "/srv/b", "/srv/c"] {
+            let workspace = WorkspaceInfo::new_without_worktree(root.into(), options.clone())
+                .await
+                .unwrap();
+            ids.push(workspace.id.clone());
+            manager.workspaces.insert(workspace.id.clone(), workspace);
+        }
+        manager.opened_workspace_ids = ids.clone();
+        manager.recent_workspaces = vec![ids[2].clone(), "closed".into(), ids[0].clone()];
+        assert_eq!(
+            manager.find_next_workspace_id_after_close(&WorkspaceKind::Remote),
+            Some(ids[2].clone())
+        );
+        manager.recent_workspaces.clear();
+        assert_eq!(
+            manager.find_next_workspace_id_after_close(&WorkspaceKind::Remote),
+            Some(ids[0].clone())
+        );
+    }
+
+    #[tokio::test]
+    async fn port_scoped_connections_open_distinct_workspaces_beside_legacy_records() {
+        use super::{
+            remote_workspace_stable_id_for_connection, RemoteConnectionRebind, WorkspaceKind,
+            WorkspaceManager, WorkspaceManagerConfig, WorkspaceOpenOptions,
+        };
+        use openbitfun_services_core::workspace_identity::remote_workspace_stable_id;
+
+        let mut manager = WorkspaceManager::new(WorkspaceManagerConfig::default());
+        let open = |connection_id: &str| WorkspaceOpenOptions {
+            workspace_kind: WorkspaceKind::Remote,
+            remote_connection_id: Some(connection_id.into()),
+            remote_ssh_host: Some("cluster.example".into()),
+            remote_connection_rebind: RemoteConnectionRebind::Reject,
+            ..Default::default()
+        };
+
+        // A record created by an older build (port-less id, any port) keeps
+        // the host + root stable id byte-for-byte.
+        let legacy = manager
+            .open_workspace_with_options("/srv/app".into(), open("ssh-root@cluster.example"))
+            .await
+            .unwrap();
+        assert_eq!(
+            legacy.id,
+            remote_workspace_stable_id("cluster.example", "/srv/app")
+        );
+
+        // Nodes behind the same address on other ports are separate
+        // workspaces instead of a rebind conflict on the legacy record.
+        let node_a = manager
+            .open_workspace_with_options("/srv/app".into(), open("ssh-root@cluster.example#2201"))
+            .await
+            .unwrap();
+        let node_b = manager
+            .open_workspace_with_options("/srv/app".into(), open("ssh-root@cluster.example#2202"))
+            .await
+            .unwrap();
+        assert_eq!(
+            node_a.id,
+            remote_workspace_stable_id_for_connection(
+                "cluster.example",
+                Some("ssh-root@cluster.example#2201"),
+                "/srv/app"
+            )
+        );
+        assert_ne!(node_a.id, legacy.id);
+        assert_ne!(node_b.id, legacy.id);
+        assert_ne!(node_a.id, node_b.id);
+        assert_eq!(
+            manager
+                .get_workspace(&legacy.id)
+                .unwrap()
+                .remote_ssh_connection_id(),
+            Some("ssh-root@cluster.example")
+        );
+        assert_eq!(
+            node_a
+                .metadata
+                .get("sshHost")
+                .and_then(|value| value.as_str()),
+            Some("cluster.example"),
+            "sshHost metadata keeps the plain host"
+        );
+
+        // A supplied id that ignores the port scope is still rejected.
+        let mismatched = manager
+            .open_workspace_with_options(
+                "/srv/other".into(),
+                WorkspaceOpenOptions {
+                    stable_workspace_id: Some(remote_workspace_stable_id(
+                        "cluster.example",
+                        "/srv/other",
+                    )),
+                    ..open("ssh-root@cluster.example#2201")
+                },
+            )
+            .await;
+        assert!(mismatched.is_err());
     }
 
     #[tokio::test]

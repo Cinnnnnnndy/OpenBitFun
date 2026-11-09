@@ -23,12 +23,16 @@ import { useDismissibleLayer } from "../../overlay/useDismissibleLayer";
 import { useFocusScope } from "../../overlay/useFocusScope";
 import { usePresence } from "../../overlay/usePresence";
 import { IconButton, type IconButtonProps } from "../IconButton";
+import { inertProps } from "../../internal/inert";
+import { useAnchoredLayer } from "../../internal/useAnchoredLayer";
+import type { ConfirmationAnchor } from "../../internal/confirmationAnchor";
 import styles from "./Dialog.module.css";
 
 const EXIT_DURATION_MS = 180;
 
 export type DialogCloseReason = "close-button" | "escape-key" | "pointer-outside";
 export type DialogFooterAppearance = "attached" | "floating";
+export type DialogPreset = "default" | "panel";
 export type DialogSize = "sm" | "md" | "lg" | "xl" | "2xl";
 export type SheetPlacement = "left" | "right" | "bottom";
 export type SheetSize = "sm" | "md" | "lg";
@@ -66,12 +70,15 @@ interface OverlaySurfaceProps
   closeOnEscape?: boolean;
   closeOnPointerOutside?: boolean;
   initialFocusRef?: RefObject<HTMLElement | null>;
+  /** A compact, non-modal confirmation attached to an explicit user action. */
+  anchor?: ConfirmationAnchor;
   kind: "dialog" | "sheet";
   onOpenChange: (open: false, reason: DialogCloseReason) => void;
   /** Called after the closed surface has finished exiting and unmounted. */
   onExitComplete?: () => void;
   open: boolean;
   placement?: SheetPlacement;
+  preset?: DialogPreset;
   preventScroll?: boolean;
   role?: "dialog" | "alertdialog";
   size: DialogSize | SheetSize;
@@ -91,11 +98,13 @@ const OverlaySurface = forwardRef<HTMLDivElement, OverlaySurfaceProps>(function 
   closeOnEscape = true,
   closeOnPointerOutside = true,
   initialFocusRef,
+  anchor,
   kind,
   onOpenChange,
   onExitComplete,
   open,
   placement,
+  preset,
   preventScroll = true,
   role = "dialog",
   size,
@@ -111,15 +120,15 @@ const OverlaySurface = forwardRef<HTMLDivElement, OverlaySurfaceProps>(function 
   const titleId = `openbitfun-dialog-title-${useId()}`;
   const descriptionId = `openbitfun-dialog-description-${useId()}`;
   const { present, state } = usePresence(open, EXIT_DURATION_MS);
-  const presentation = { children, className, overlayProps, placement, size, style };
+  const presentation = { children, className, overlayProps, placement, preset, size, style, anchor };
   const lastOpenPresentation = useRef<typeof presentation | null>(null);
   const wasPresent = useRef(present);
   // Owners often clear selection or form state in the same update as closing.
   // Retain the content and its geometry together until the exit finishes.
   useLayoutEffect(() => {
-    if (open) lastOpenPresentation.current = { children, className, overlayProps, placement, size, style };
+    if (open) lastOpenPresentation.current = { children, className, overlayProps, placement, preset, size, style, anchor };
     else if (!present) lastOpenPresentation.current = null;
-  }, [children, className, open, overlayProps, placement, present, size, style]);
+  }, [children, className, open, overlayProps, placement, preset, present, size, style, anchor]);
   useEffect(() => {
     const completed = wasPresent.current && !present && !open;
     wasPresent.current = present;
@@ -129,6 +138,21 @@ const OverlaySurface = forwardRef<HTMLDivElement, OverlaySurfaceProps>(function 
   const renderedChildren = rendered.children;
   const hasTitle = containsType(renderedChildren, DialogTitle);
   const hasDescription = containsType(renderedChildren, DialogDescription);
+  const anchorRef = useRef<HTMLElement | null>(null);
+  const ownerRef = useRef<HTMLElement | null>(null);
+  const returnFocusRef = useRef<HTMLElement | null>(null);
+  anchorRef.current = rendered.anchor?.element ?? null;
+  ownerRef.current = rendered.anchor?.owner ?? null;
+  returnFocusRef.current = anchorRef.current?.isConnected ? anchorRef.current : ownerRef.current;
+  const anchored = Boolean(rendered.anchor);
+  const layout = useAnchoredLayer({
+    open: present && anchored,
+    anchorRef,
+    layerRef: surfaceRef,
+    // Confirmations sit under the trailing actions that open them.
+    align: "end",
+    fallbackRect: rendered.anchor?.rect,
+  });
 
   const close = useCallback((reason: DialogCloseReason) => {
     if (open) onOpenChange(false, reason);
@@ -161,6 +185,7 @@ const OverlaySurface = forwardRef<HTMLDivElement, OverlaySurfaceProps>(function 
     autoFocus,
     containerRef: surfaceRef,
     initialFocusRef,
+    returnFocusRef: anchored ? returnFocusRef : undefined,
     ownerDocument,
     trapFocus,
     restoreFocus,
@@ -170,10 +195,10 @@ const OverlaySurface = forwardRef<HTMLDivElement, OverlaySurfaceProps>(function 
   const exiting = state === "exiting";
 
   return (
-    <Portal target={resolvedPortalHost} open={open} modal preventScroll={preventScroll}>
+    <Portal target={resolvedPortalHost} open={open} modal={!anchored} preventScroll={!anchored && preventScroll} ownerRef={anchored ? ownerRef : undefined}>
       <div
         {...rendered.overlayProps}
-        className={classNames(styles.overlay, rendered.overlayProps?.className)}
+        className={classNames(styles.overlay, anchored && styles.anchoredOverlay, rendered.overlayProps?.className)}
         data-openbitfun-component={kind}
         data-openbitfun-part="overlay"
         data-openbitfun-native-webview-occlusion
@@ -182,22 +207,26 @@ const OverlaySurface = forwardRef<HTMLDivElement, OverlaySurfaceProps>(function 
       >
         <DialogContext.Provider value={context}>
           <div
+            data-motion="presence"
             {...surfaceProps}
-            {...(!open ? { inert: "" } : {})}
+            {...inertProps(!open)}
             aria-describedby={ariaDescribedBy ?? (hasDescription ? descriptionId : undefined)}
             aria-hidden={exiting || undefined}
             aria-label={ariaLabel}
             aria-labelledby={ariaLabelledBy ?? (!ariaLabel && hasTitle ? titleId : undefined)}
-            aria-modal="true"
-            className={classNames(styles.surface, rendered.className)}
+            aria-modal={!anchored}
+            className={classNames(styles.surface, anchored && styles.anchoredSurface, rendered.className)}
             data-openbitfun-component={kind}
             data-openbitfun-part="surface"
-            data-placement={rendered.placement}
+            data-placement={anchored ? layout?.placement : rendered.placement}
+            data-presentation={anchored ? "anchored" : "modal"}
+            data-openbitfun-native-webview-occlusion={anchored || undefined}
+            data-preset={rendered.preset}
             data-size={rendered.size}
             data-state={exiting ? "exiting" : "open"}
             ref={setSurfaceRef}
             role={role}
-            style={rendered.style}
+            style={anchored ? { ...rendered.style, ...layout?.style, visibility: layout ? undefined : "hidden" } : rendered.style}
             tabIndex={-1}
           >
             {renderedChildren}
@@ -214,14 +243,15 @@ export interface DialogProps
 }
 
 export const Dialog = forwardRef<HTMLDivElement, DialogProps>(function Dialog({
+  preset = "default",
   size = "md",
   ...props
 }, ref) {
-  return <OverlaySurface {...props} kind="dialog" ref={ref} size={size} />;
+  return <OverlaySurface {...props} kind="dialog" preset={preset} ref={ref} size={preset === "panel" ? "xl" : size} />;
 });
 
 export interface SheetProps
-  extends Omit<OverlaySurfaceProps, "kind" | "placement" | "size"> {
+  extends Omit<OverlaySurfaceProps, "kind" | "placement" | "preset" | "size"> {
   placement?: SheetPlacement;
   size?: SheetSize;
 }
@@ -258,12 +288,17 @@ export const DialogHeading = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDivEl
   },
 );
 
-export const DialogTitle = forwardRef<HTMLHeadingElement, HTMLAttributes<HTMLHeadingElement>>(
-  function DialogTitle({ children, className, id, ...props }, ref) {
+export interface DialogTitleProps extends HTMLAttributes<HTMLHeadingElement> {
+  /** Wrap the title up to this many lines instead of truncating it to one. */
+  lines?: number;
+}
+
+export const DialogTitle = forwardRef<HTMLHeadingElement, DialogTitleProps>(
+  function DialogTitle({ children, className, id, lines, ...props }, ref) {
     const context = useDialogContext("DialogTitle");
     return (
       <h2 {...props} className={classNames(styles.title, className)} data-openbitfun-part="title" id={id ?? context.titleId} ref={ref}>
-        <OverflowText>{children}</OverflowText>
+        <OverflowText lines={lines}>{children}</OverflowText>
       </h2>
     );
   },
@@ -279,6 +314,12 @@ export const DialogDescription = forwardRef<HTMLParagraphElement, HTMLAttributes
 export const DialogHeaderActions = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDivElement>>(
   function DialogHeaderActions({ className, ...props }, ref) {
     return <div {...props} className={classNames(styles.headerActions, className)} data-openbitfun-part="header-actions" ref={ref} />;
+  },
+);
+
+export const DialogHeaderLeading = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDivElement>>(
+  function DialogHeaderLeading({ className, ...props }, ref) {
+    return <div {...props} className={classNames(styles.headerLeading, className)} data-openbitfun-part="header-leading" ref={ref} />;
   },
 );
 

@@ -6,7 +6,7 @@ These rules apply to all changes under `src/apps/mobile/harmonyos`.
 
 Phone, tablet, and foldable entrypoints are remote controllers. They must not
 instantiate a local Agent Runtime, model provider, local chat command owner, or
-model configuration store. GitHub identity and the authenticated device directory
+model configuration store. OpenBitFun account identity and the authenticated device directory
 are the authority for selection and reconnect; QR data supplies only a device id.
 Keep old persisted records readable and retained without activating legacy room
 credentials or local execution. Compact and wide hosts enforce the same boundary.
@@ -76,6 +76,12 @@ source scripts/ohos-env.sh
 "$HVIGORW" --mode module -p module=entry@default -p ohos.test.type=LocalTest test --no-daemon
 ```
 
+Relay Zstd encode/decode uses N-API async work through
+`services/RelayMessageEncoding.ets`. The wrapper bounds the worker wait, and
+compressed messages retain their capability generation until submission. Verify
+presence changes during upload, settled replies, and codec waits with
+`node --test tools/tests/relay-message-generation.test.cjs`.
+
 For window inset subscription lifecycle and late completion regressions, run
 `node --test tools/tests/window-insets-lifecycle.test.cjs tools/tests/immersive-bottom.test.cjs`.
 The lifecycle tests run the production service with deferred platform window
@@ -100,6 +106,19 @@ fake RPC: send must clear the input before pressing **Acknowledge**, and a
 **Next draft** entered while pending must survive acknowledgment. Exercise both
 compact and wide layouts and return to normal `EntryAbility` afterward.
 
+For rollback reply ownership and session switching, run
+`node --test tools/tests/rollback-session-isolation.test.cjs`.
+In the `copy-rollback` native preview, stage a rollback, use **Resize**, and verify
+the preview remains for the same session. Use **Switch session** and verify the
+staging bar and full-text panel close while `SESSION-B-DRAFT` remains untouched.
+Exercise compact and wide widths in light and dark modes, then restore normal
+`EntryAbility`. Deferred-response unit tests cover switching while rollback,
+send acknowledgment, and voice shutdown are pending; the preview uses a mock
+host and is not evidence of live relay or physical fold behavior.
+After installing the debug HAP on a wide device/emulator, run
+`python3 tools/check-rollback-session-isolation.py --hdc "$HDC" --device <target>`
+for compact/wide, light/dark and live resize checks with layout/screenshot evidence.
+
 For history loading and explicit jump-to-bottom navigation, install the debug
 HAP and run `python3 tools/check-history-scroll.py --hdc "$HDC"`. The
 `history-scroll` preview holds a mock history response while the production
@@ -115,6 +134,14 @@ production reducer, timeline store and rows. **Next replay** exercises late tool
 insertion, 30 identical publications, text correction, deletion and completion;
 block counts must be 2, 3, 3, 3, 2, 2, with one visible answer. Verify compact,
 wide and live fold transitions, then return to normal `EntryAbility`.
+
+For chat Markdown tildes, escapes, streaming prefixes and plain/rich copy, run
+`node --test tools/tests/markdown-html-serializer.test.cjs tools/tests/streaming-markdown.test.cjs`.
+These host tests execute the production parser and serializer; they do not
+replace native rendering checks.
+For a parser-only ArkTS compile without packaging/signing, source
+`scripts/ohos-env.sh`, then run
+`"$HVIGORW" --mode module -p product=default -p module=entry@default 'default@CompileArkTS' --no-daemon`.
 
 For host shutdown/restart handling, run
 `node --test tools/tests/connection-health.test.cjs tools/tests/session-record.test.cjs tools/tests/host-stream.test.cjs`.
@@ -183,3 +210,12 @@ node --test src/apps/mobile/harmonyos/tools/tests/workspace-editor.test.cjs
 
 The Chrome renderer test does not replace Harmony device-level keyboard and
 sheet-layout checks.
+
+For queue capability negotiation, session isolation and mutation/read races:
+
+```bash
+node --test tools/tests/message-queue.test.cjs
+```
+
+The fixture uses the production queue store with a simulated host. Native drag
+presentation and live remote dispatch need separate device verification.

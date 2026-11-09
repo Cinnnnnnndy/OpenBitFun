@@ -15,22 +15,31 @@ import { TaskToolDisplay } from './TaskToolDisplay';
 import { AgentControlToolCard } from './AgentControlToolCard';
 import { AgentInteractionToolCard } from './AgentInteractionToolCard';
 import { OpenBitFunControlToolCard } from './OpenBitFunControlToolCard';
+import { DefaultToolCard } from './DefaultToolCard';
+import { compatibilityToolPresentationOwners, genericToolNames } from '@openbitfun/flow-chat-presentation/registry';
+import { GenerateImageToolCard } from './GenerateImageToolCard';
 
 // These cards remain available for rendering historical or explicitly
 // configured tool calls, but are no longer part of the current presentation
 // registry: AgentControl replaced the AgentInterrupt/AgentDelete tools, and
 // Task remains only as a compatibility tool.
-const COMPATIBILITY_ONLY_TOOL_CARD_NAMES = new Set([
-  'AgentInterrupt',
-  'AgentDelete',
-  'Task',
-]);
+const COMPATIBILITY_ONLY_TOOL_CARD_NAMES = new Set(Object.keys(compatibilityToolPresentationOwners));
+
+// GenUI remains in the shared tool catalog for metadata and policy lookup, but
+// its content is mounted by FlowToolCard's inline surface rather than this
+// legacy component registry.
+const INLINE_FLOWCHAT_TOOL_NAMES = new Set(['GenerativeUI']);
 
 describe('tool card registry', () => {
   it('keeps OpenBitFun controls visible through their dedicated product card', () => {
     expect(getToolCardComponent('OpenBitFunControl')).toBe(OpenBitFunControlToolCard);
     expect(usesDefaultToolCard('OpenBitFunControl')).toBe(false);
     expect(isCollapsibleTool('OpenBitFunControl')).toBe(false);
+  });
+
+  it('uses the dedicated always-open image card for generated images', () => {
+    expect(getToolCardComponent('generate_image')).toBe(GenerateImageToolCard);
+    expect(isCollapsibleTool('generate_image')).toBe(false);
   });
   it('projects managed Review workers through the unified coverage card', () => {
     expect(getToolCardComponent('LaunchReviewAgent')).toBe(TaskToolDisplay);
@@ -43,11 +52,17 @@ describe('tool card registry', () => {
   });
 
   it('keeps current lightweight dedicated-card classification aligned with the component registry', () => {
-    expect([...DEDICATED_TOOL_CARD_NAMES].sort()).toEqual(
-      Object.keys(TOOL_CARD_COMPONENTS)
+    expect([...DEDICATED_TOOL_CARD_NAMES]
+      .filter((toolName) => !INLINE_FLOWCHAT_TOOL_NAMES.has(toolName))
+      .sort()).toEqual(Object.keys(TOOL_CARD_COMPONENTS)
         .filter((toolName) => !COMPATIBILITY_ONLY_TOOL_CARD_NAMES.has(toolName))
-        .sort(),
-    );
+        .sort());
+  });
+
+  it.each([...genericToolNames])('keeps %s on its explicit generic-card path', (toolName) => {
+    expect(getToolCardComponent(toolName)).toBe(DefaultToolCard);
+    expect(usesDefaultToolCard(toolName)).toBe(true);
+    expect(TOOL_CARD_COMPONENTS).not.toHaveProperty(toolName);
   });
 
   it('keeps standard design-system adapters separate from bespoke product cards', () => {
@@ -83,6 +98,7 @@ describe('tool card registry', () => {
       'ExecCommand',
       'WriteStdin',
       'ExecControl',
+      'PageManage',
       'PageDeploy',
       'PagePublish',
       'view_image',
@@ -93,6 +109,7 @@ describe('tool card registry', () => {
       'AgentDelete',
       'SessionHistory',
       'analyze_image',
+      'generate_image',
       'GetTime',
       'ListMCPResources',
       'ReadMCPResource',
@@ -106,6 +123,7 @@ describe('tool card registry', () => {
       'PublishMiniApp',
       'PublishAppearance',
       'Playbook',
+      'DesktopCard',
     ]);
     expect(productOwnedNames).toEqual([
       'Task',
@@ -114,18 +132,14 @@ describe('tool card registry', () => {
       'AskUserQuestion',
       'CreatePlan',
       'InitMiniApp',
-      'GenerativeUI',
       'ComputerUse',
       'OpenBitFunControl',
-      'CreateCanvas',
-      'ReadCanvas',
-      'UpdateCanvas',
-      'PatchCanvas',
     ]);
     expect(standardNames.some((toolName) => productOwnedNames.includes(toolName))).toBe(false);
     expect([...standardNames, ...productOwnedNames].sort()).toEqual(
       Object.keys(TOOL_CARD_COMPONENTS).sort(),
     );
+    expect(TOOL_CARD_COMPONENTS).not.toHaveProperty('GenerativeUI');
   });
 
   it.each(['Bash', 'TerminalControl', 'Git'])(

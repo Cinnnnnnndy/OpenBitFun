@@ -22,6 +22,16 @@ where
     }
 }
 
+/// Observable selection facts for one logical round; not a billing estimate.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelRoutingDecision {
+    pub route: String,
+    pub latency_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback_reason: Option<String>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum AgenticEventPriority {
     Critical = 0, // Immediately send (error, cancellation)
@@ -141,6 +151,14 @@ pub enum AgenticEvent {
         title: String,
         method: String,
     },
+
+    /// One-sentence next-input suggestion offered after a completed turn.
+    /// Session-scoped hint: it is not part of the turn lifecycle or journal.
+    PromptSuggestionGenerated {
+        session_id: String,
+        turn_id: String,
+        suggestion: String,
+    },
     ImageAnalysisStarted {
         session_id: String,
         image_count: usize,
@@ -206,6 +224,8 @@ pub enum AgenticEvent {
         /// Whether the turn produced a user-visible final response.
         #[serde(skip_serializing_if = "Option::is_none")]
         has_final_response: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        background_delivery: Option<openbitfun_core_types::background_delivery::BackgroundDelivery>,
     },
 
     DialogTurnCancelled {
@@ -303,6 +323,8 @@ pub enum AgenticEvent {
         model_config_id: String,
         /// Provider model name sent on the request.
         effective_model_name: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        routing: Option<ModelRoutingDecision>,
     },
 
     /// Emitted as soon as an automatic retry supersedes one model attempt.
@@ -332,6 +354,9 @@ pub enum AgenticEvent {
         first_visible_output_ms: Option<u64>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         stream_duration_ms: Option<u64>,
+        /// Request start to first effective output for the accepted model attempt.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ttft_ms: Option<u64>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         attempt_count: Option<u32>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -509,6 +534,29 @@ pub enum ToolEventData {
         identity: ToolEventIdentity,
         params: String,
     },
+    /// Native OpenUI Lang source bytes emitted while a GenerativeUI call is
+    /// still being assembled. The event deliberately carries only the
+    /// decoded source delta; the provider's enclosing tool-call JSON is not
+    /// part of the rendering contract.
+    GenUIStream {
+        #[serde(flatten)]
+        identity: ToolEventIdentity,
+        message_id: String,
+        seq: u64,
+        format: String,
+        text: String,
+        reset: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        app_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        title: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        template: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        library_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        library_revision: Option<u64>,
+    },
     Queued {
         #[serde(flatten)]
         identity: ToolEventIdentity,
@@ -662,6 +710,7 @@ impl AgenticEvent {
             | Self::SessionHistoryChanged { session_id, .. }
             | Self::SessionDeleted { session_id }
             | Self::SessionTitleGenerated { session_id, .. }
+            | Self::PromptSuggestionGenerated { session_id, .. }
             | Self::ImageAnalysisStarted { session_id, .. }
             | Self::ImageAnalysisCompleted { session_id, .. }
             | Self::DialogTurnStarted { session_id, .. }
@@ -747,6 +796,7 @@ impl AgenticEvent {
             | Self::ContextCompressionStarted { .. }
             | Self::ThreadGoalUpdated { .. }
             | Self::UserSteeringInjected { .. }
+            | Self::PromptSuggestionGenerated { .. }
             | Self::ContextCompressionCompleted { .. } => AgenticEventPriority::Normal,
 
             Self::ToolEvent { tool_event, .. } => tool_event.default_priority(),
@@ -761,6 +811,7 @@ impl ToolEventData {
         match self {
             Self::EarlyDetected { identity }
             | Self::ParamsPartial { identity, .. }
+            | Self::GenUIStream { identity, .. }
             | Self::Queued { identity, .. }
             | Self::Waiting { identity, .. }
             | Self::Started { identity, .. }
@@ -800,6 +851,7 @@ impl ToolEventData {
 
             Self::EarlyDetected { .. }
             | Self::ParamsPartial { .. }
+            | Self::GenUIStream { .. }
             | Self::Queued { .. }
             | Self::Waiting { .. }
             | Self::Progress { .. }
@@ -849,6 +901,7 @@ mod tests {
             first_chunk_ms: Some(10),
             first_visible_output_ms: Some(12),
             stream_duration_ms: Some(100),
+            ttft_ms: Some(35),
             attempt_count: Some(1),
             failure_category: None,
             token_details: Some(serde_json::json!({ "reasoningTokens": 7 })),
@@ -860,6 +913,7 @@ mod tests {
         assert_eq!(json["model_config_id"], "model-config");
         assert_eq!(json["effective_model_name"], "provider-model");
         assert_eq!(json["first_chunk_ms"], 10);
+        assert_eq!(json["ttft_ms"], 35);
         assert_eq!(json["token_details"]["reasoningTokens"], 7);
     }
 
@@ -875,11 +929,17 @@ mod tests {
             "effective_model_name": "provider-model"
         });
 
-        let event: AgenticEvent = serde_json::from_value(json).expect("event");
+        let event: AgenticEvent = serde_json::from_value(json.clone()).expect("event");
+        assert_eq!(serde_json::to_value(&event).unwrap(), json);
 
         match event {
-            AgenticEvent::ModelRoundCompleted { duration_ms, .. } => {
+            AgenticEvent::ModelRoundCompleted {
+                duration_ms,
+                ttft_ms,
+                ..
+            } => {
                 assert_eq!(duration_ms, None);
+                assert_eq!(ttft_ms, None);
             }
             _ => panic!("unexpected event"),
         }
@@ -976,6 +1036,31 @@ mod tests {
 
         assert_eq!(json["duration_ms"], 120);
         assert_eq!(json["execution_ms"], 90);
+    }
+
+    #[test]
+    fn native_genui_stream_event_serializes_decoded_source_delta() {
+        let event = ToolEventData::GenUIStream {
+            identity: ToolEventIdentity::direct("tool-genui", "GenerativeUI"),
+            message_id: "tool-genui".to_string(),
+            seq: 3,
+            format: "openui-lang".to_string(),
+            text: "root = Text(\"Hello\")".to_string(),
+            reset: false,
+            app_id: Some("app-1".to_string()),
+            title: Some("Hello".to_string()),
+            template: Some("openbitfun.app".to_string()),
+            library_id: Some("openbitfun.composable.v1".to_string()),
+            library_revision: Some(2),
+        };
+
+        let json = serde_json::to_value(&event).expect("serialize genui stream event");
+        assert_eq!(json["event_type"], "GenUIStream");
+        assert_eq!(json["format"], "openui-lang");
+        assert_eq!(json["seq"], 3);
+        assert_eq!(json["text"], "root = Text(\"Hello\")");
+        assert_eq!(json["app_id"], "app-1");
+        assert_eq!(json["library_revision"], 2);
     }
 
     #[test]

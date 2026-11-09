@@ -5,6 +5,18 @@ Scope: this guide applies to `src/crates/services/services-integrations`.
 `openbitfun-services-integrations` owns reviewed integration contracts and runtime
 slices that are outside pure product logic but still platform-neutral.
 
+## GenUI durable state
+
+GenUI IO is gated by generative-ui. The caller supplies the session artifact
+directory; this service must not resolve the current controller. Preserve
+unknown record/state fields and corrupt records. Acceptance checks the base
+owner revision; isolated probes never mutate accepted user data.
+
+    cargo test --locked -p openbitfun-services-integrations --no-default-features --features generative-ui --lib generative_ui
+
+These tests prove local atomic IO, conflicts, retry/readback and data retention;
+they do not prove live SSH/Peer/relay behavior.
+
 ## Guardrails
 
 - Do not depend on `openbitfun-core`, app crates, desktop adapters, CLI UI, or web
@@ -28,20 +40,59 @@ slices that are outside pure product logic but still platform-neutral.
   orchestration ports, LAN endpoint helpers, IM bot provider clients,
   provider-private cursor caches, mobile-web relay upload, image-context adapter
   contracts, remote workspace helpers, and command/response assembly.
+- Device RPC requests, responses and one-way events share the optional
+  `accept_encoding: "zstd-1"` offer on their opaque encrypted envelope.
+  Machine hosts announce on presence. Hidden controllers offer on their first
+  ordinary request. Each reply uses its caller's offer. Connection and directory
+  changes expire learned capabilities. Relay-consumed fields keep their current
+  encoding.
+- Capable senders try Zstandard level 1 on UTF-8 bodies over 256 bytes, up to
+  64 MiB. Use the result only if the full frame is smaller. AES-GCM seals the
+  bytes `FF 4F 5A 01`, a little-endian u32 original length and one Zstandard
+  frame, or the original UTF-8 JSON. Receivers authenticate before decoding
+  and verify the size and frame boundary. The cross-client vector lives in
+  `src/shared/relay-protocol-contract-fixtures/relay-message-encoding.json`.
 - `remote_connect::host_stream` is the host-side owner of on-demand session,
   terminal and catalog streams: an in-memory, byte-bounded per-stream log with
   an epoch, `read_stream`/`unsubscribe_stream` handling, and `HostStreamNotifier`
   hint leases. `remote_connect::host_stream_subscriber` is the Rust controller
   reader. Neither the relay nor any client persists stream content; do not add
   relay-stored history, `get_session_key`, or a durable stream cache here.
+- Compressed Relay ciphertext carries its peer capability generation through
+  key lookup and bulk upload. Check that generation immediately before wire
+  submission. A retired generation is an unsent failure. Preserve an already
+  acknowledged result and leave mutation replay to the durable request owner.
 - Session history reads use `HostStreamHub::read_history` with a Core-owned
-  source loader. Backfill allocates decreasing JS-safe sequences below the
+  source loader. The optional `turn_history` v1 offer selects exactly one Turn;
+  its response acknowledgement enables the mode, while older hosts retain the
+  existing record-page reader. Hosts advertise `host_stream_turn_history_v1`.
+  The immutable snapshot spans bounded packets, carries an older-Turn boundary
+  separately from its packet offset, and uses the live cursor captured before
+  source IO as its revision fence. It never allocates live event sequences.
+  Controllers may offer `turn_history.max_bytes` to receive up to 4 MiB of
+  snapshot records per response. Omitted offers retain the ordinary page byte
+  budget. Older hosts ignore the hint and readers follow `next_offset` until
+  the same snapshot is complete. Live pages keep their own byte budget.
+  Snapshot IDs are controller/stream scoped and epoch fenced; retained bodies
+  are byte bounded and expire with leases/grace (one oversized Turn may exceed
+  the budget). Identity-only tombstone tracking must not suppress subsequent
+  live publication to other controllers. The subscriber publishes only a
+  validated complete snapshot and catches up live events during older reads.
+  Legacy record-page backfill allocates decreasing JS-safe sequences below the
   live sequence range; it never advances the forward cursor. One source gate
   orders backfill, live publication, and history invalidation. Undo/import and
   cache misses across evicted pages require an epoch fence, never silent skips.
   Only the requested page's bodies enter the bounded log; the pending source
-  batch is at most one persisted turn, which can itself be large. No wire or
-  persisted-format migration is required; all controllers retain `read_stream`.
+  batch is at most one persisted turn, which can itself be large. No persisted
+  migration is required; the optional wire fields keep `read_stream` compatible.
+  In legacy record paging, `limit` is a budget: a page grows to the first record of its
+  oldest turn so no turn splits across pages, within the hard event and byte
+  bounds. Controllers must not assume a page holds at most `limit` events.
+  Root records carry optional `turnRecordIds` membership. The Rust subscriber
+  joins bounded history pages until those members are present, even if a live
+  root moved ahead of its unchanged children; legacy hosts without membership
+  finish their available history read before presentation. Never treat a page
+  limit, a terminal header or a timeout as proof of a complete Turn.
 - The `remote-persistence` feature is the lightweight persisted-shape owner shared
   by Remote Connect, remote SSH, and offline migration. Keep it free of network,
   SSH transport, and runtime orchestration dependencies so owner readers and
@@ -50,7 +101,9 @@ slices that are outside pure product logic but still platform-neutral.
   session-selected `WorkspaceFileSystem`; `remote-connect` therefore selects
   `runtime-ports/workspace-ports` without enabling an SSH implementation. Core
   supplies the session root and provider. IM adapters consume authorized bytes
-  and must not re-resolve paths on the bot host.
+  and must not re-resolve paths on the bot host. Explicit controller file reads may use
+  provider scope outside the workspace; automatic output delivery and runtime
+  artifact URIs retain workspace/root confinement.
 - Remote workspace facts, session metadata, file projection DTOs, and
   workspace/projection host traits belong in `openbitfun-runtime-ports`.
 - Workspace-root source selection, persistence/workspace service reads,
@@ -129,6 +182,7 @@ streamable HTTP stay independent. Representative stable entry points are:
 
 ```bash
 cargo check -p openbitfun-services-integrations --no-default-features
+cargo test -p openbitfun-services-integrations --no-default-features --features browser-control --lib browser_control::cdp::tests::
 cargo test -p openbitfun-services-integrations --no-default-features --features remote-persistence --lib remote_persistence::tests::
 cargo test -p openbitfun-services-integrations --no-default-features --features mcp --test mcp_contracts
 cargo test -p openbitfun-services-integrations --no-default-features --features mcp --test mcp_streamable_http_contracts
@@ -136,12 +190,16 @@ cargo test -p openbitfun-services-integrations --no-default-features --features 
 cargo test -p openbitfun-services-integrations --no-default-features --features remote-ssh-concrete --lib remote_ssh::manager::tests::workspace_
 cargo test -p openbitfun-services-integrations --no-default-features --features remote-ssh-concrete --lib remote_ssh::wsl::tests::
 cargo test --locked -p openbitfun-services-integrations --no-default-features --features remote-ssh-concrete --lib remote_ssh::relay_deploy::tests::
+cargo test --locked -p openbitfun-services-integrations --no-default-features --features remote-connect --lib remote_connect::message_encoding::tests
+cargo test --locked -p openbitfun-services-integrations --no-default-features --features remote-connect --lib remote_connect::account::tests
 cargo test --locked -p openbitfun-services-integrations --no-default-features --features remote-connect --lib remote_connect::relay_client::tests::
-cargo test --locked -p openbitfun-services-integrations --no-default-features --features remote-connect --lib remote_connect::host_stream::tests::
+cargo test --locked -p openbitfun-services-integrations --no-default-features --features remote-connect --lib remote_connect::host_stream::
 cargo test --locked -p openbitfun-services-integrations --no-default-features --features remote-connect --lib remote_connect::host_stream_subscriber::tests::
 cargo test -p openbitfun-services-integrations --no-default-features --features file-watch --test file_watch_contracts
+cargo test --locked -p openbitfun-services-integrations --no-default-features --features git,remote-ssh --test git_contracts tracked_change_count
 cargo test --locked -p openbitfun-services-integrations --no-default-features --features workspace-search --test workspace_search_contracts
 cargo test --locked -p openbitfun-services-integrations --no-default-features --features deep-research --lib deep_research::tests::
+cargo test --locked -p openbitfun-services-integrations --no-default-features --features web-tools --lib web_tools::tests
 cargo test --locked -p openbitfun-services-integrations --no-default-features --features review-platform --lib review_platform
 pnpm run check:core-boundaries
 ```
@@ -149,12 +207,20 @@ pnpm run check:core-boundaries
 Other family-specific targets remain in `Cargo.toml`; add a guide command only
 for a recurring workflow, not to mirror every test target.
 
+The tracked-change count fixture exercises the SSH command through a local
+POSIX shell on Unix. It does not establish live SSH or container routing.
+
 For persistent public marketplace image caching (restart/offline reuse, URL
 boundaries, and bounded disk storage), run:
 
 ```bash
 cargo test --locked -p openbitfun-services-integrations --no-default-features --features miniapp-market --lib market_image::tests
 ```
+
+For MiniApp instance leases, storage transactions, and Worker lifecycle, use
+`cargo test --locked -p openbitfun-services-integrations --no-default-features --features miniapp-runtime --lib miniapp::`.
+Framework Worker storage shares the host JSON transaction owner; preserve custom
+`worker.js` method overrides before routing built-in `storage.*` requests.
 
 On Windows with an initialized WSL distribution, set `OPENBITFUN_TEST_WSL_DISTRO`
 and run `cargo test -p openbitfun-services-integrations --no-default-features
@@ -170,6 +236,18 @@ advertise a small handle limit and are included in the existing CI
 `OPENBITFUN_TEST_SFTP_SERVER` to an installed `sftp-server` executable and run
 the same command with the filter ending in
 `workspace_sftp::openssh_real_files_over_loopback_ssh -- --ignored`.
+
+For directory symlink browsing and workspace-path validation, use the same
+package/features with `--lib directory_symlink_browsing -- --include-ignored`
+and `OPENBITFUN_TEST_SFTP_SERVER` set. This runs real OpenSSH SFTP over loopback
+and the Docker command adapter against a local POSIX shell fixture; the latter
+does not establish real Docker-daemon or Windows WSL coverage.
+
+For recursive remote directory deletion, use the same package/features with
+`--lib recursive_directory_delete`. This covers one SSH exec with no per-file
+SFTP requests, literal filenames, symlink preservation, invalid targets and
+command rejection, plus the Docker command adapter against a local POSIX shell.
+It does not establish real Docker, Windows WSL, Peer Device or mobile coverage.
 
 For the remote Flashgrep distribution gate and retained protocol helpers, use:
 
@@ -191,3 +269,44 @@ For models.dev snapshot reuse, last-valid recovery, and background refresh:
 ```bash
 cargo test --locked -p openbitfun-services-integrations --no-default-features --features models-dev --lib models_dev::tests
 ```
+
+For workspace-confined HTML resources, revision-checked chunk reads, bounded
+prefetch, cache invalidation and cancellation, run:
+
+```bash
+cargo test --locked -p openbitfun-services-integrations --no-default-features --features remote-connect --lib remote_connect::html_preview
+```
+
+To use a real OpenSSH SFTP executable over loopback SSH, set
+`OPENBITFUN_TEST_SFTP_SERVER` and run the same package with
+`--features remote-connect,remote-ssh-concrete --lib openssh_html_preview_reads_nested_site_resources -- --ignored`.
+This checks the production remote filesystem provider, root-relative assets,
+parent-relative resources and workspace boundaries; it does not establish
+multi-device relay or physical-host coverage.
+
+For the reproducible resource-loading experiment, use the same OpenSSH fixture
+with `--lib openssh_html_preview_loading_benchmark -- --ignored --nocapture`.
+It adds 40 ms to each complete SFTP response without serializing replies, loads
+HTML followed by four assets (about 2.72 MiB), checks every byte, and reports
+three serial-baseline / prefetched-cold / revalidated-warm samples. The baseline
+retains the previous serial chunk algorithm with the same filesystem provider;
+browser rendering and public-network variability are outside this measurement.
+Do not turn timing ratios into CI assertions.
+
+For workspace icon RemoteCommand reads, capability negotiation and explicit
+mobile/IM editing rejection:
+
+```bash
+cargo test --locked -p openbitfun-services-integrations --no-default-features --features remote-connect --lib remote_connect::tests::workspace_icon_
+```
+
+For WeChat inbound CDN files, attachment storage, and provider-neutral bot contracts:
+
+```bash
+cargo test --locked -p openbitfun-services-integrations --no-default-features --features remote-connect --lib remote_connect::bot::
+cargo test --locked -p openbitfun-services-integrations --no-default-features --features remote-connect --lib session_attachment_contract_tests
+```
+
+The attachment fixtures exercise real local file IO and a simulated POSIX remote
+filesystem, including offline rejection. They do not establish live WeChat, SSH,
+Peer Device, or Detached Dispatch coverage.

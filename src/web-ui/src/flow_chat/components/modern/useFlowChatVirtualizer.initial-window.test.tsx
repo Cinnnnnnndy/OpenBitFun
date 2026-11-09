@@ -7,11 +7,33 @@ import { useFlowChatVirtualizer, type FlowChatVirtualizer } from './useFlowChatV
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
 const windows: number[][] = [];
+const viewportWrites: Array<{ topPx: number; behavior?: ScrollBehavior }> = [];
 let latestApi: FlowChatVirtualizer;
 let reconcileEnabled = false;
 let shortOverscan = false;
 let viewportSuspended = false;
 let shiftEnabled = false;
+const unobserve = vi.fn();
+const rowObservers: Array<{ callback: ResizeObserverCallback; elements: Set<Element> }> = [];
+
+function KeyedHarness({ items, endOrigin }: { items: string[]; endOrigin: boolean }) {
+  const scrollerRef = useRef<HTMLDivElement>(null);
+  const headerRef = useRef<HTMLDivElement>(null);
+  const api = useFlowChatVirtualizer({
+    items, scrollerRef, headerRef, endOrigin,
+    isViewportSuspended: () => viewportSuspended,
+    getItemKey: item => item,
+    estimateItemHeightPx: () => 80,
+    scrollPaddingStartPx: 0,
+    writeViewport: () => true,
+  });
+  latestApi = api;
+  return <div ref={scrollerRef} data-scroller>
+    <div ref={headerRef} />
+    {api.rows.map(row => <div key={row.key} data-row-key={row.key}
+      data-virtual-index={row.index} ref={api.measureRowElement} />)}
+  </div>;
+}
 function Harness({ count, tail }: { count: number; tail: boolean }) {
   const scrollerRef = useRef<HTMLDivElement>(null);
   const headerRef = useRef<HTMLDivElement>(null);
@@ -37,7 +59,8 @@ function Harness({ count, tail }: { count: number; tail: boolean }) {
       return true;
     },
     scrollPaddingStartPx: 0,
-    writeViewport: ({ topPx }) => {
+    writeViewport: ({ topPx, behavior }) => {
+      viewportWrites.push({ topPx, behavior });
       const element = scrollerRef.current;
       if (!element) return false;
       // Model a browser clamping a write while no rows have mounted yet.
@@ -60,17 +83,29 @@ describe('initial virtual window with the real virtualizer', () => {
   let root: Root;
   beforeEach(() => {
     windows.length = 0;
+    viewportWrites.length = 0;
     reconcileEnabled = false;
     shortOverscan = false;
     viewportSuspended = false;
     shiftEnabled = false;
+    unobserve.mockClear();
+    rowObservers.length = 0;
     vi.useFakeTimers();
     vi.stubGlobal('requestAnimationFrame', vi.fn().mockReturnValue(1));
     vi.stubGlobal('cancelAnimationFrame', vi.fn());
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function () {
+      const height = this.offsetHeight;
+      return { top: 0, bottom: height, height, width: this.offsetWidth } as DOMRect;
+    });
     vi.stubGlobal('ResizeObserver', class {
-      observe() {}
-      unobserve() {}
-      disconnect() {}
+      entry: (typeof rowObservers)[number];
+      constructor(callback: ResizeObserverCallback) {
+        this.entry = { callback, elements: new Set() };
+        rowObservers.push(this.entry);
+      }
+      observe(element: Element) { this.entry.elements.add(element); }
+      unobserve(element: Element) { unobserve(element); this.entry.elements.delete(element); }
+      disconnect() { this.entry.elements.clear(); }
     });
     // Explicit geometry supplies jsdom's missing layout, not performance proof.
     vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockImplementation(function () {
@@ -99,6 +134,57 @@ describe('initial virtual window with the real virtualizer', () => {
   });
   const render = (count: number, tail: boolean) => act(() => root.render(<Harness count={count} tail={tail} />));
 
+  it.each([
+    [false, false], [false, true], [true, false],
+  ])('observes rows mounted during suspension after resuming (%s → %s)', (initialOrigin, resumedOrigin) => {
+    viewportSuspended = true;
+    act(() => root.render(<KeyedHarness items={['a', 'b', 'c']} endOrigin={initialOrigin} />));
+    const row = host.querySelector<HTMLElement>('[data-row-key="b"]')!;
+    expect(row).not.toBeNull();
+    expect(rowObservers.some(entry => entry.elements.has(row))).toBe(false);
+    // A still-suspended commit can discard other rows and switch the origin.
+    act(() => root.render(<KeyedHarness items={['a', 'b', 'd']} endOrigin={resumedOrigin} />));
+    viewportSuspended = false;
+    act(() => root.render(<KeyedHarness items={['a', 'b', 'd']} endOrigin={resumedOrigin} />));
+    expect(host.querySelector('[data-row-key="b"]')).toBe(row);
+    const observer = rowObservers.find(entry => entry.elements.has(row));
+    expect(observer).toBeDefined();
+    vi.spyOn(row, 'getBoundingClientRect').mockReturnValue({ height: 221.5 } as DOMRect);
+    act(() => observer!.callback([{ target: row } as ResizeObserverEntry], {} as ResizeObserver));
+    const bounds = latestApi.getItemBounds(1)!;
+    expect(bounds.endPx - bounds.startPx).toBe(221.5);
+  });
+
+  it.each([false, true])('keeps observer measurements on surviving keys after insertion (endOrigin=%s)', endOrigin => {
+    const initial = ['a', 'b', 'c'];
+    act(() => root.render(<KeyedHarness items={initial} endOrigin={endOrigin} />));
+    const row = host.querySelector<HTMLElement>('[data-row-key="b"]')!;
+    const updated = endOrigin ? [...initial, 'new-tail'] : ['older', ...initial];
+    act(() => root.render(<KeyedHarness items={updated} endOrigin={endOrigin} />));
+    expect(host.querySelector('[data-row-key="b"]')).toBe(row);
+    const observer = rowObservers.find(entry => entry.elements.has(row))!;
+    expect(observer).toBeDefined();
+    vi.spyOn(row, 'getBoundingClientRect').mockReturnValue({ height: 221.5 } as DOMRect);
+    act(() => observer.callback([{ target: row } as ResizeObserverEntry], {} as ResizeObserver));
+    const height = (key: string) => {
+      const bounds = latestApi.getItemBounds(updated.indexOf(key))!;
+      return bounds.endPx - bounds.startPx;
+    };
+    expect(height('b')).toBe(221.5);
+    expect(height('a')).toBe(80);
+    expect(height('c')).toBe(80);
+  });
+
+  it('unobserves removed rows when the transcript becomes empty without new attachments', () => {
+    render(8, false);
+    const rows = [...host.querySelectorAll('[data-virtual-index]')];
+    expect(rows.length).toBeGreaterThan(0);
+    unobserve.mockClear();
+    render(0, false);
+    expect(host.querySelectorAll('[data-virtual-index]')).toHaveLength(0);
+    for (const row of rows) expect(unobserve).toHaveBeenCalledWith(row);
+  });
+
   it('mounts the tail first without measuring head rows, then accepts user scrolling', () => {
     render(34, true);
     const populated = windows.filter(window => window.length);
@@ -120,6 +206,84 @@ describe('initial virtual window with the real virtualizer', () => {
     const first = windows.find(window => window.length)!;
     expect(first[0]).toBeGreaterThan(0);
     expect(first.at(-1)).toBe(33);
+  });
+
+  it('measures newly mounted rows during a gesture before ResizeObserver delivers', () => {
+    render(100, false);
+    const firstWindow = new Set(windows.at(-1));
+    const scroller = host.querySelector<HTMLElement>('[data-scroller]')!;
+    act(() => {
+      scroller.scrollTop = 4000;
+      scroller.dispatchEvent(new Event('scroll'));
+    });
+    const arrived = windows.at(-1)!.filter(index => !firstWindow.has(index));
+    expect(arrived.length).toBeGreaterThan(0);
+    // No observer delivery or animation frame: the first scrolling commit
+    // must already agree with the rows' actual heights, not their estimates.
+    for (const index of arrived) {
+      const bounds = latestApi.getItemBounds(index)!;
+      expect(bounds.endPx - bounds.startPx).toBe(80);
+    }
+  });
+
+  it('keeps a smooth aim stable and resumes immediate measurement on reader takeover', () => {
+    // A short Turn header precedes an answer taller than the viewport. While
+    // returning to that mounted header, earlier overscan rows enter the window.
+    vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockImplementation(function () {
+      if (this.hasAttribute('data-scroller')) return 500;
+      if (!this.hasAttribute('data-virtual-index')) return 0;
+      return Number(this.getAttribute('data-virtual-index')) === 40 ? 3000 : 80;
+    });
+    render(100, false);
+    const scroller = host.querySelector<HTMLElement>('[data-scroller]')!;
+    act(() => {
+      scroller.scrollTop = 4000;
+      scroller.dispatchEvent(new Event('scroll'));
+    });
+    act(() => latestApi.measureRenderedItems());
+    act(() => {
+      scroller.scrollTop = 5200;
+      scroller.dispatchEvent(new Event('scroll'));
+    });
+    const target = 39;
+    expect(host.querySelector(`[data-virtual-index="${target}"]`)).not.toBeNull();
+    const targetStart = latestApi.getItemBounds(target)!.startPx;
+    const beforeAim = new Set(windows.at(-1));
+    const pendingFrames: FrameRequestCallback[] = [];
+    vi.mocked(requestAnimationFrame).mockImplementation(callback => {
+      pendingFrames.push(callback);
+      return pendingFrames.length + 100;
+    });
+    viewportWrites.length = 0;
+    act(() => latestApi.scrollItemIntoView(target, {
+      align: 'start', behavior: 'smooth', owner: 'one-shot-navigation',
+    }));
+    // Deliver an in-flight native animation offset, without a reader gesture
+    // or ResizeObserver delivery. The adapter must preserve the library's
+    // smooth-scroll measurement policy for newly mounted overscan rows.
+    act(() => {
+      scroller.scrollTop = targetStart + 20;
+      scroller.dispatchEvent(new Event('scroll'));
+    });
+    expect(windows.at(-1)!.some(index => index < target && !beforeAim.has(index))).toBe(true);
+    for (const callback of pendingFrames.splice(0)) act(() => callback(16));
+    expect(latestApi.getItemBounds(target)!.startPx).toBe(targetStart);
+    expect(viewportWrites).toEqual([{ topPx: targetStart, behavior: 'smooth' }]);
+
+    // The ordinary intent handler cancels the aim before reader scrolling.
+    // New rows must still be measured synchronously in that first commit.
+    const beforeTakeover = new Set(windows.at(-1));
+    act(() => {
+      latestApi.cancelAim();
+      scroller.scrollTop = 8000;
+      scroller.dispatchEvent(new Event('scroll'));
+    });
+    const arrived = windows.at(-1)!.filter(index => !beforeTakeover.has(index));
+    expect(arrived.length).toBeGreaterThan(0);
+    for (const index of arrived) {
+      const bounds = latestApi.getItemBounds(index)!;
+      expect(bounds.endPx - bounds.startPx).toBe(80);
+    }
   });
 
   it('preserves the default head window for history and reading restoration', () => {

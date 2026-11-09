@@ -87,7 +87,7 @@
       "max": 0
     },
     "colorDomainContracts.registeredUnique": {
-      "max": 15
+      "max": 14
     },
     "colorDomainContracts.missingRegisteredUnique": {
       "max": 0
@@ -197,12 +197,6 @@
     "colorDomainNearPairs.generatedWidget.nearTotal": {
       "max": 0
     },
-    "colorDomainNearPairs.openbitfunCanvas.indistinguishableTotal": {
-      "max": 0
-    },
-    "colorDomainNearPairs.openbitfunCanvas.nearTotal": {
-      "max": 0
-    },
     "colorDomainNearPairs.mermaid.indistinguishableTotal": {
       "max": 0
     },
@@ -278,12 +272,6 @@
     "colorDomainScopes.generatedWidget.uniqueColors": {
       "max": 0
     },
-    "colorDomainScopes.openbitfunCanvas.occurrences": {
-      "max": 0
-    },
-    "colorDomainScopes.openbitfunCanvas.uniqueColors": {
-      "max": 0
-    },
     "colorDomainScopes.editor.occurrences": {
       "max": 0
     },
@@ -312,7 +300,7 @@
       "max": 0
     },
     "colorDomainScopes.assetMetadata.uniqueColors": {
-      "max": 7
+      "max": 4
     },
     "colorDomainScopes.mermaid.occurrences": {
       "max": 0

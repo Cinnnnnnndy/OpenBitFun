@@ -4,7 +4,6 @@ import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 import path from "path";
 import { versionInjectionPlugin } from "./vite.config.version-plugin";
-import { openbitfunCanvasRuntimeBundlePlugin } from "./vite.config.canvas-runtime-plugin";
 import { watchSourcePlugin } from "../../design-system/tooling/vite/watch-source.mjs";
 import {
   APPLE_SYSTEM_FONT_PROFILE,
@@ -169,7 +168,6 @@ export default defineConfig(({ mode, command }) => {
       createWebFontProfilePlugin(fontProfile, command),
       react(),
       watchSourcePlugin(designSystemUiSourceDirectory),
-      openbitfunCanvasRuntimeBundlePlugin(),
       versionInjectionPlugin()
     ],
 
@@ -177,6 +175,12 @@ export default defineConfig(({ mode, command }) => {
     resolve: {
       dedupe: ['react', 'react-dom', 'lucide-react'],
       alias: [
+        // The browser export uses document at module load and crashes Markdown workers.
+        // Use the package's portable decoder in both the page and its workers.
+        {
+          find: /^decode-named-character-reference$/,
+          replacement: requireFromWebUi.resolve('decode-named-character-reference'),
+        },
         // @xterm/headless 6.1.0-beta.141 advertises a missing lib/xterm.mjs.
         // Resolve its published ESM entry for both dev optimization and builds.
         {

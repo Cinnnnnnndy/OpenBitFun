@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { workspaceSessionCatalogTotal } from './workspaceSessionCatalogQuery';
 
 function read(relativePath: string): string {
   return readFileSync(
@@ -11,6 +12,7 @@ function read(relativePath: string): string {
 
 const sessionsSection = read('./SessionsSection.tsx');
 const sessionsSectionStyles = read('./SessionsSection.scss');
+const sessionRowActions = read('./sessionRowActions.ts');
 
 describe('worktree isolated session row', () => {
   it('derives the worktree fact from the shared session ordering helper', () => {
@@ -54,21 +56,12 @@ describe('worktree isolated session row', () => {
   });
 
   it('counts only the rows a linked worktree owns when sizing the expand toggle', () => {
-    // A linked worktree shares its main workspace's session directory, so the
-    // metadata page total counts the project's sessions too and must not drive
-    // the expand toggle.
-    expect(sessionsSection).toMatch(
-      /const sectionWorkspace = workspaceId\s*\n\s*\? openedWorkspacesList\.find\(workspace => workspace\.id === workspaceId\) \?\? null\s*\n\s*: null;/,
-    );
-    expect(sessionsSection).toContain(
-      'const countOnlyOwnedTopLevelSessions = isLinkedWorktreeWorkspace(sectionWorkspace);',
-    );
-    expect(sessionsSection).toMatch(
-      /!hasActiveSessionFilter && !workspaceScopes\?\.length && !countOnlyOwnedTopLevelSessions\s*\n\s*\? getEffectiveTopLevelSessionCount\(/,
-    );
-    expect(sessionsSection).toMatch(
-      /import \{ isLinkedWorktreeWorkspace \} from '@\/shared\/types\/global-state';/,
-    );
+    // Both the main checkout and linked worktrees share the storage total.
+    // Ownership behavior is covered with real hierarchies in sessionNavHierarchy.test.ts.
+    expect(sessionsSection).toContain('getWorkspaceSessionHierarchy(');
+    expect(workspaceSessionCatalogTotal(3, { paged: false, total: 655 })).toBe(3);
+    expect(workspaceSessionCatalogTotal(3, { paged: true, total: 94, knownCount: 3 })).toBe(94);
+    expect(sessionsSection).not.toContain('getEffectiveTopLevelSessionCount');
   });
 
   it('explains the worktree execution in the row tooltip and badge title', () => {
@@ -89,17 +82,18 @@ describe('worktree isolated session row', () => {
   });
 
   it('activates an already open worktree workspace and opens it otherwise', () => {
-    expect(sessionsSection).toContain("isSamePath(workspace.rootPath ?? '', worktreePath)");
-    expect(sessionsSection).toContain('await setActiveWorkspace(opened.id);');
-    expect(sessionsSection).toContain('await openWorkspace(worktreePath);');
-    expect(sessionsSection).toContain('const { setActiveWorkspace, openWorkspace, openedWorkspacesList, currentWorkspace } = useWorkspaceContext();');
+    // The live row and device catalog rows share this action.
+    expect(sessionsSection).toContain('await openWorktreeWorkspaceRow(worktreePath, t);');
+    expect(sessionRowActions).toContain("isSamePath(workspace.rootPath ?? '', worktreePath)");
+    expect(sessionRowActions).toContain('await workspaceManager.setActiveWorkspace(opened.id);');
+    expect(sessionRowActions).toContain('await workspaceManager.openWorkspace(worktreePath);');
   });
 
   it('reports a failure to open instead of failing silently', () => {
-    expect(sessionsSection).toContain(
+    expect(sessionRowActions).toContain(
       "log.error('Failed to open the worktree directory as a workspace'",
     );
-    expect(sessionsSection).toContain(
+    expect(sessionRowActions).toContain(
       "notificationService.error(t('nav.sessions.openWorktreeWorkspaceFailed')",
     );
   });

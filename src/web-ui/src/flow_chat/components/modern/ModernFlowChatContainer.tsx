@@ -1,10 +1,12 @@
+import { captureConfirmationAnchor } from '@openbitfun/ui';
+import { globalEventBus } from '@/infrastructure/event-bus';
 import { requireSessionOwningWorkspaceId } from '../../utils/sessionOrdering';
 /**
  * Modern FlowChat container.
  * Uses virtual scrolling with Zustand and syncs legacy store state.
  */
 
-import React, { useMemo, useCallback, useRef, useEffect, useLayoutEffect, useState, useSyncExternalStore } from 'react';
+import React, { useMemo, useCallback, useRef, useEffect, useLayoutEffect, useState, useSyncExternalStore, useId } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useShortcut } from '@/infrastructure/hooks/useShortcut';
 import { FlowChatManager } from '@/flow_chat/services/FlowChatManager';
@@ -25,6 +27,7 @@ import { composerPresentationToTurnRailPreview, parseComposerPresentation } from
 import { BackgroundCommandInputDialog } from '../background-command/BackgroundCommandInputDialog';
 import { WelcomePanel } from '../WelcomePanel';
 import { HistorySessionPlaceholder } from './HistorySessionPlaceholder';
+import { HistorySessionLoadingBoundary } from './HistorySessionLoadingBoundary';
 import {
   FlowChatContext,
   FlowChatContextValue,
@@ -38,8 +41,13 @@ import { useFlowChatCopyDialog } from './useFlowChatCopyDialog';
 import { useFlowChatSync } from './useFlowChatSync';
 import { useFlowChatToolActions } from './useFlowChatToolActions';
 import { useFlowChatSearch } from './useFlowChatSearch';
+import { TrajectoryExplorer, type TrajectoryExplorerRef, type TrajectorySearchState, type TrajectorySelection } from '../../trajectory/TrajectoryExplorer';
+import { trajectoryNodeKey } from '../../trajectory/trajectoryModel';
+import { TRAJECTORY_NAVIGATE_EVENT, type TrajectoryPanelData, showTrajectoryRange } from '../../trajectory/trajectoryPanel';
+import type { TrajectoryRangeSummary } from '../../trajectory/trajectoryRange';
+import { useTrajectoryNavigation } from '../../trajectory/useTrajectoryNavigation';
 import {
-  sessionToVirtualItems,
+  createSessionVirtualItemProjector,
   useVirtualItems,
   useActiveSession,
   useVisibleTurnInfo,
@@ -66,8 +74,8 @@ import { useConversationViewScope } from '../../contexts/conversationViewScope';
 import { useWorkspaceContext } from '@/infrastructure/contexts/WorkspaceContext';
 import { flowChatSessionConfigForCurrentWorkspace } from '@/app/utils/projectSessionWorkspace';
 import { createLogger } from '@/shared/utils/logger';
-import { parsePullRequestUrl } from '@/shared/utils/pullRequestLinks';
-import { createBackgroundCommandOutputTab, createReviewPlatformPullRequestDetailTab } from '@/shared/utils/tabUtils';
+import { createBackgroundCommandOutputTab } from '@/shared/utils/tabUtils';
+import { useFlowChatHttpLinkClick } from './useFlowChatHttpLinkClick';
 import { isAcpFlowSession } from '../../utils/acpSession';
 import { flowChatStore } from '../../store/FlowChatStore';
 import { openBtwSessionInAuxPane } from '../../services/btwSessionPane';
@@ -79,10 +87,6 @@ import {
   shouldUseLatestTurnFollowOutput,
 } from '../../utils/flowChatTurnScrollPolicy';
 import { isRemoteTraceContext, startupTrace } from '@/shared/utils/startupTrace';
-import {
-  traceViewport,
-  traceViewportRepeating,
-} from '@/infrastructure/diagnostics/flowChatViewportDiagnostics';
 import { scheduleAfterStartupPaint } from '@/shared/utils/startupTaskScheduling';
 import { agentAPI } from '@/infrastructure/api/service-api/AgentAPI';
 import { notificationService } from '@/shared/notification-system';
@@ -132,6 +136,10 @@ const log = createLogger('ModernFlowChatContainer');
 interface ModernFlowChatContainerProps {
   className?: string;
   isViewportActive?: boolean;
+  /** The hosting pane is being resized; width-derived measurement waits for it to settle. */
+  resizeSuspended?: boolean;
+  /** Preferred reading-column width; invalidates cached row heights on change. */
+  contentWidth?: number;
   /** Whether the host-owned session right panel is open. */
   isRightPanelOpen?: boolean;
   /** Toggle the host-owned session right panel. */
@@ -211,7 +219,6 @@ type BackgroundCommandSummary = {
 };
 
 const LATEST_TURN_AUTO_PIN_MAX_ATTEMPTS = 8;
-const HISTORY_INITIAL_CONTENT_PAINT_MAX_ATTEMPTS = 30;
 const HISTORY_LOADING_LAYER_STALL_WARN_MS = 800;
 const TURN_PIN_RETRY_MAX_ATTEMPTS = 120;
 const MOCK_BACKGROUND_COMMANDS_STORAGE_KEY = 'openbitfun.flowChat.mockBackgroundCommands';
@@ -303,6 +310,8 @@ function backgroundCommandSummaryFromActivity(activity: BackgroundCommandActivit
 export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = ({
   className = '',
   isViewportActive = true,
+  resizeSuspended = false,
+  contentWidth,
   isRightPanelOpen = false,
   onToggleRightPanel,
   emptyState,
@@ -313,6 +322,8 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
   const { t } = useTranslation('flow-chat');
   const canonicalVirtualItems = useVirtualItems();
   const activeSession = useActiveSession();
+  const [projectContinuousHistory] = useState(createSessionVirtualItemProjector);
+  const [projectHistory] = useState(createSessionVirtualItemProjector);
   const surfaceScope = getActiveSurfaceScope();
   useLayoutEffect(() => activeSession?.sessionId
     ? flowChatStore.retainSessionHistory(activeSession.sessionId)
@@ -344,6 +355,12 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
     after: null,
   });
   const historyPresentationOwnerGenerationRef = useRef(0);
+  const invalidateHistoryPresentationOwner = useCallback(() => {
+    // A superseded restore can no longer clear its own status. Transfer the
+    // loading state together with ownership, before discarding its reply.
+    historyPresentationOwnerGenerationRef.current += 1;
+    setHistoryRestore(null);
+  }, []);
   const activeHistoryPresentation = historyPresentation?.sessionId === activeSession?.sessionId
     ? historyPresentation
     : null;
@@ -401,13 +418,14 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
   }, [activeSession, canonicalizedHistoryPresentation]);
   const continuousHistoryVirtualItems = useMemo(() => {
     if (!activeSession || !continuousHistoryPresentation) {
+      projectContinuousHistory(null);
       return null;
     }
-    return sessionToVirtualItems({
+    return projectContinuousHistory({
       ...activeSession,
       dialogTurns: continuousHistoryPresentation.turns,
     });
-  }, [activeSession, continuousHistoryPresentation]);
+  }, [activeSession, continuousHistoryPresentation, projectContinuousHistory]);
   const continuousHistoryProjectionEligible = canRetainContinuousHistoryProjection(
     continuousHistoryPresentation,
     continuousHistoryVirtualItems?.length ?? Number.POSITIVE_INFINITY,
@@ -468,14 +486,16 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
   const virtualItems = useMemo(() => {
     let items: VirtualItem[];
     if (!activeSession || !renderedHistoryPresentation) {
+      projectHistory(null);
       items = canonicalVirtualItems;
     } else if (
       isRenderingContinuousHistoryProjection
       && continuousHistoryVirtualItems
     ) {
+      projectHistory(null);
       items = continuousHistoryVirtualItems;
     } else {
-      items = sessionToVirtualItems({
+      items = projectHistory({
         ...activeSession,
         dialogTurns: renderedHistoryPresentation.turns,
       });
@@ -503,6 +523,7 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
     isViewportDetachedFromLiveTail,
     renderedHistoryPresentation,
     submittedPreviews,
+    projectHistory,
   ]);
 
   // The transcript reads the pending list to mark the tool cards that are
@@ -511,7 +532,11 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
   const { requests: permissionRequests } = usePermissionRequests(activeSession?.sessionId);
   const visibleTurnInfo = useVisibleTurnInfo();
   const [queuedTurnNavigation, setQueuedTurnNavigation] = useState<QueuedTurnNavigation | null>(null);
-  const [pendingHistoryOpenSession, setPendingHistoryOpenSession] = useState<HistorySessionOpenIntentDetail | null>(null);
+  // A view mounted mid-open (for example by a device switch) adopts it.
+  const [pendingHistoryOpenSession, setPendingHistoryOpenSession] = useState<HistorySessionOpenIntentDetail | null>(() => {
+    const transition = getHistorySessionOpenTransitionSnapshot();
+    return transition ? { sessionId: transition.sessionId, sessionTitle: transition.sessionTitle, maxMs: transition.maxMs } : null;
+  });
   const [searchOpenRequest, setSearchOpenRequest] = useState(0);
   const backgroundCommandActivities = useBackgroundCommandActivityStore(state => state.activities);
   const [stoppingBackgroundCommandIds, setStoppingBackgroundCommandIds] = useState<Set<string>>(() => new Set());
@@ -523,7 +548,14 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
   const turnSummariesRef = useRef<FlowChatTurnSummary[]>([]);
   const turnRailTurnIdsRef = useRef<Set<string>>(new Set());
   const requestTurnNavigationRef = useRef<((turnId: string) => FlowChatTurnNavigationStatus) | null>(null);
-  const searchFullHistorySessionIdRef = useRef<string | null>(null);
+  const trajectoryViewId = useId();
+  const [trajectoryOpen, setTrajectoryOpen] = useState(false);
+  const [trajectorySelection, setTrajectorySelection] = useState<TrajectorySelection>();
+  const [trajectorySelectionClearRequest, setTrajectorySelectionClearRequest] = useState(0);
+  const [trajectorySearchInput, setTrajectorySearchInput] = useState('');
+  const [trajectorySearchState, setTrajectorySearchState] = useState<TrajectorySearchState>({ count: 0, current: 0 });
+  const trajectoryRef = useRef<TrajectoryExplorerRef>(null);
+  const openTrajectory = useCallback(() => setTrajectoryOpen(true), []);
   const virtualListRef = useRef<VirtualMessageListRef>(null);
   const chatScopeRef = useRef<HTMLDivElement>(null);
   const activeSessionIdRef = useRef<string | null>(null);
@@ -544,6 +576,15 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
   }, [incomingViewTransfer, activeSession?.sessionId, surfaceScope.surfaceId, viewScope]);
   const viewportRestorePendingSessionIdRef = useRef<string | null>(null);
   const [viewportRestorePendingSessionId, setViewportRestorePendingSessionId] = useState<string | null>(null);
+  const rememberedHistoryRange = activeSession?.sessionId
+    ? incomingViewTransfer?.state.historyPresentation?.range
+      ?? sessionViewportStateRef.current.get(activeSession.sessionId)?.historyPresentation?.range
+    : undefined;
+  const isRememberedHistoryRangeInvalid = Boolean(
+    activeSession?.historyState === 'ready'
+    && rememberedHistoryRange
+    && rememberedHistoryRange.endOrdinalExclusive > activeSessionKnownTurnCount
+  );
   const activeSessionViewportSnapshot = activeSession?.sessionId
     ? incomingViewTransfer?.state.snapshot ?? sessionViewportStateRef.current.get(activeSession.sessionId)?.snapshot ?? null
     : null;
@@ -560,17 +601,17 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
         ? activeSession?.sessionId ?? null
         : null
     );
-  const [historyInitialContentReadyKey, setHistoryInitialContentReadyKey] = useState<string | null>(null);
   const [historyInitialContentPostPaintKey, setHistoryInitialContentPostPaintKey] = useState<string | null>(null);
+  const [historyLoadingPresentation, setHistoryLoadingPresentation] = useState<{ identity: string; ready: boolean } | null>(null);
+  const handleHistoryPresentationChange = useCallback((identity: string, ready: boolean) => {
+    setHistoryLoadingPresentation(previous => previous?.identity === identity && previous.ready === ready
+      ? previous : { identity, ready });
+  }, []);
   const workspaceContext = useWorkspaceContext();
   const workspacePath = viewScope ? activeSession?.workspacePath : workspaceContext.workspacePath;
   const activeWorkspace = viewScope ? undefined : workspaceContext.activeWorkspace;
   const allowUserMessageRollback = !isAcpFlowSession(activeSession);
   const historyState = activeSession?.historyState;
-  const hasRestoredTurnsPendingVirtualItems =
-    historyState === 'ready' &&
-    (activeSession?.dialogTurns.length ?? 0) > 0 &&
-    virtualItems.length === 0;
 
   const rememberSessionViewportState = useCallback((
     sessionId: string,
@@ -593,22 +634,6 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
 
   const acceptViewportSnapshot = useCallback((snapshot: FlowChatViewportSnapshot) => {
     rememberSessionViewportState(snapshot.sessionId, { snapshot });
-    traceViewportRepeating(`sessionSnapshot|${snapshot.sessionId}|${snapshot.presentationMode}`, {
-      location: 'viewport.sessionSnapshotCaptured',
-      message: 'FlowChat stored a semantic viewport snapshot for a session',
-      data: () => ({
-        sessionId: snapshot.sessionId,
-        presentationMode: snapshot.presentationMode,
-        viewportMode: snapshot.viewportMode,
-        historyWindow: snapshot.historyWindow,
-        anchorItemKey: snapshot.anchorItemKey,
-        anchorItemType: snapshot.anchorItemType,
-        anchorTurnId: snapshot.anchorTurnId,
-        anchorOffsetPx: snapshot.anchorOffsetPx,
-        scrollTopPx: snapshot.scrollTopPx,
-        isAtTail: snapshot.isAtTail,
-      }),
-    });
   }, [rememberSessionViewportState]);
 
   const handleViewportSnapshot = useCallback((snapshot: FlowChatViewportSnapshot) => {
@@ -616,19 +641,6 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
       viewportRestorePendingSessionIdRef.current === snapshot.sessionId
       || restoreGateSessionId === snapshot.sessionId
     ) {
-      traceViewportRepeating(`sessionSnapshotIgnored|${snapshot.sessionId}`, {
-        location: 'viewport.sessionSnapshotIgnoredDuringRestore',
-        message: 'FlowChat ignored a provisional viewport snapshot while restoring a session',
-        data: () => ({
-          sessionId: snapshot.sessionId,
-          anchorItemKey: snapshot.anchorItemKey,
-          anchorItemType: snapshot.anchorItemType,
-          anchorTurnId: snapshot.anchorTurnId,
-          anchorOffsetPx: snapshot.anchorOffsetPx,
-          scrollTopPx: snapshot.scrollTopPx,
-          isAtTail: snapshot.isAtTail,
-        }),
-      });
       return;
     }
     acceptViewportSnapshot(snapshot);
@@ -663,9 +675,13 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
   const showHistoryPlaceholder = virtualItems.length === 0 && (
     historyState === 'metadata-only' ||
     historyState === 'hydrating' ||
-    historyState === 'failed' ||
-    hasRestoredTurnsPendingVirtualItems
+    historyState === 'failed'
   );
+  // Session and projected rows commit atomically. A ready internal Turn may
+  // deliberately project no rows; it is not an unfinished hydration. Keep the
+  // list/navigation mounted so earlier history remains reachable.
+  const showSessionTranscript = virtualItems.length > 0
+    || (historyState === 'ready' && activeSessionKnownTurnCount > 0);
   const isPendingHistoryOpenActiveSession =
     pendingHistoryOpenSession !== null &&
     activeSession?.sessionId === pendingHistoryOpenSession.sessionId;
@@ -687,38 +703,28 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
     workspacePath,
     onFileViewRequest,
   });
-  const handleHttpLinkClick = useCallback((url: string, _event: React.MouseEvent<HTMLAnchorElement>) => {
-    const pullRequestTarget = parsePullRequestUrl(url);
-    if (!pullRequestTarget) {
-      return false;
-    }
-
-    if (!activeSession?.workspaceId) return false;
-    createReviewPlatformPullRequestDetailTab({
-      workspaceId: activeSession.workspaceId,
-      workspacePath: activeSession?.workspacePath || workspacePath,
-      pullRequestId: pullRequestTarget.pullRequestId,
-      pullRequestUrl: pullRequestTarget.webUrl,
-      title: `PR #${pullRequestTarget.pullRequestId}`,
-    });
-    return true;
-  }, [activeSession?.workspaceId, activeSession?.workspacePath, workspacePath]);
+  const handleHttpLinkClick = useFlowChatHttpLinkClick(
+    activeSession?.workspaceId,
+    activeSession?.workspacePath || workspacePath,
+  );
   const {
     searchQuery,
     onSearchChange: setSearchQuery,
     matches: searchMatches,
     matchesByVirtualIndex: searchMatchesByVirtualIndex,
-    currentMatchIndex: searchCurrentMatchIndex,
-    goToNext: handleSearchNext,
-    goToPrev: handleSearchPrev,
     clearSearch,
   } = useFlowChatSearch(virtualItems);
-  const searchCurrentMatch = searchMatches[searchCurrentMatchIndex];
-  const searchCurrentMatchFlowItemId = searchCurrentMatch?.flowItemId;
-  const searchCurrentMatchTurnId = searchCurrentMatch?.turnId;
-  const searchCurrentMatchVirtualItemIndex = searchCurrentMatch?.virtualItemIndex ?? -1;
-  const searchCurrentMatchOccurrenceIndex = searchCurrentMatch?.occurrenceIndex ?? 0;
-  const searchCurrentMatchExpandableKey = searchCurrentMatch?.expandableIds?.join('\u0000') ?? '';
+  const searchCurrentMatch = trajectorySelection ? searchMatches.find(match =>
+    match.turnId === trajectorySelection.node.turnId && (trajectorySelection.node.focusItemId
+      ? match.flowItemId === trajectorySelection.node.focusItemId : match.type === 'user-message')) : undefined;
+  const closeTrajectory = useCallback(() => {
+    setTrajectoryOpen(false); setTrajectorySelection(undefined); clearSearch();
+    setTrajectorySearchInput(''); setTrajectorySearchState({ count: 0, current: 0 });
+    setTrajectorySelectionClearRequest(value => value + 1);
+    virtualListRef.current?.clearSearchMatch();
+  }, [clearSearch]);
+
+  useEffect(() => { virtualListRef.current?.clearSearchMatch(); }, [searchQuery]);
 
   useFlowChatSync();
   useFlowChatCopyDialog();
@@ -727,8 +733,7 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
     sessionId: string,
     options?: { discardRecentHistory?: boolean },
   ) => {
-    historyPresentationOwnerGenerationRef.current += 1;
-    setHistoryRestore(null);
+    invalidateHistoryPresentationOwner();
     const retainContinuousProjection = (
       options?.discardRecentHistory !== true
       && activeSession?.sessionId === sessionId
@@ -744,13 +749,20 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
       historyPresentationRef.current = null;
       setHistoryPresentation(null);
     }
-    rememberSessionViewportState(sessionId, { snapshot: null });
+    viewportRestorePendingSessionIdRef.current = null;
+    setViewportRestorePendingSessionId(null);
+    rememberSessionViewportState(sessionId, {
+      snapshot: null,
+      ...(options?.discardRecentHistory ? { historyPresentation: null } : {}),
+      viewportIntent: { kind: 'live-tail', sessionId },
+    });
     updateViewportIntent({ kind: 'live-tail', sessionId });
     setHistoryBoundaryState(IDLE_HISTORY_BOUNDARY_STATE);
     setQueuedTurnNavigation(null);
   }, [
     activeSession?.sessionId,
     continuousHistoryProjectionEligible,
+    invalidateHistoryPresentationOwner,
     rememberSessionViewportState,
     updateViewportIntent,
   ]);
@@ -783,10 +795,15 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
       });
     }
     activeSessionIdRef.current = sessionId ?? null;
+    // A history rewrite can remove the saved range while this Session stays
+    // selected. Never start restoring that retired bookmark (or resurrect it
+    // on a later hydration/session switch).
+    if (sessionId && isRememberedHistoryRangeInvalid) {
+      sessionViewportStateRef.current.delete(sessionId);
+    }
     const remembered = sessionId ? sessionViewportStateRef.current.get(sessionId) : undefined;
-    historyPresentationOwnerGenerationRef.current += 1;
+    invalidateHistoryPresentationOwner();
     const bookmark = remembered?.historyPresentation;
-    setHistoryRestore(null);
     const cached = sessionId && bookmark
       ? flowChatStore.reactivateSessionHistoryWindow(sessionId, bookmark.range)
       : null;
@@ -814,17 +831,6 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
       if (!restoredHistoryPresentation && !bookmark) {
         flowChatStore.restoreSessionTailPresentation(sessionId);
       }
-      traceViewport({
-        location: 'viewport.sessionStateRestored',
-        message: 'FlowChat restored the remembered session viewport state',
-        data: () => ({
-          sessionId,
-          previousSessionId,
-          restoredPresentationMode: restoredHistoryPresentation ? 'history-window' : 'tail',
-          restoredViewportIntent: restoredIntent,
-          snapshot: rememberedSnapshot,
-        }),
-      });
     }
     if (sessionId && bookmark && !cached && activeSession?.historyState === 'ready') {
       setHistoryRestore({ sessionId, status: 'loading' });
@@ -850,7 +856,7 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
       });
       return () => { cancelled = true; };
     }
-  }, [activeSession?.sessionId, activeSession?.historyState, rememberSessionViewportState, updateViewportIntent, restoreRevision, historyRestoreRetry, surfaceScope]);
+  }, [activeSession?.sessionId, activeSession?.historyState, isRememberedHistoryRangeInvalid, invalidateHistoryPresentationOwner, rememberSessionViewportState, updateViewportIntent, restoreRevision, historyRestoreRetry, surfaceScope]);
 
   useEffect(() => {
     const retainedSessionId = continuousProjectionSessionId;
@@ -880,28 +886,11 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
     if (!activeHistoryPresentation || activeHistoryPresentationFitsSession) {
       return;
     }
-    historyPresentationOwnerGenerationRef.current += 1;
-    historyPresentationRef.current = null;
-    setHistoryPresentation(null);
-    setContinuousProjectionSessionId(null);
-    if (activeSession?.sessionId) {
-      flowChatStore.restoreSessionTailPresentation(activeSession.sessionId);
-    }
-    if (
-      activeViewportIntent?.kind === 'turn'
-      && activeViewportIntent.source === 'history-range'
-    ) {
-      updateViewportIntent(activeSession?.sessionId
-        ? { kind: 'live-tail', sessionId: activeSession.sessionId }
-        : null);
-    }
-    setHistoryBoundaryState(IDLE_HISTORY_BOUNDARY_STATE);
+    switchToLiveTailForSession(activeHistoryPresentation.sessionId, { discardRecentHistory: true });
   }, [
     activeHistoryPresentation,
     activeHistoryPresentationFitsSession,
-    activeSession?.sessionId,
-    activeViewportIntent,
-    updateViewportIntent,
+    switchToLiveTailForSession,
   ]);
 
   useEffect(() => {
@@ -914,6 +903,7 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
       setPendingHistoryOpenSession({
         sessionId: detail.sessionId,
         sessionTitle: detail.sessionTitle,
+        maxMs: detail.maxMs,
       });
       startupTrace.markPhase('historical_session_open_intent_overlay', {
         sessionId: detail.sessionId,
@@ -946,7 +936,7 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
         }
         return current;
       });
-    }, 4000);
+    }, pendingHistoryOpenSession.maxMs ?? 4000);
 
     return () => {
       window.clearTimeout(timeoutId);
@@ -962,9 +952,9 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
       return;
     }
 
-    if (historyState === 'failed') {
-      clearHistorySessionOpenTransition(pendingHistoryOpenSession.sessionId);
-    }
+    // Settled either way: the open's transition ends now, not at its timeout
+    // (a cross-device open allows up to 20 s, and its readers defer work).
+    clearHistorySessionOpenTransition(pendingHistoryOpenSession.sessionId);
     setPendingHistoryOpenSession(null);
   }, [
     historyState,
@@ -1243,9 +1233,6 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
     )
       ? `${activeSession.sessionId}:${latestTurnId}`
       : null;
-  const shouldBlockHistoryInitialContentInteraction =
-    historyInitialContentKey !== null &&
-    historyInitialContentReadyKey !== historyInitialContentKey;
   const shouldDeferBackgroundCommandSnapshot =
     activeSession?.historyState === 'metadata-only' ||
     activeSession?.historyState === 'hydrating' ||
@@ -1265,13 +1252,14 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
       activeSession?.sessionId !== pendingHistoryOpenSession.sessionId ||
       (isPendingHistoryOpenActiveSession && showHistoryPlaceholder && !showFailedHistoryPlaceholder)
     );
-  const shouldBlockHistoryTransitionInteraction =
-    shouldBlockHistoryInitialContentInteraction ||
-    activeHistoryRestore?.status === 'loading' ||
-    showHistoryOpenIntentOverlay;
   const showHistoryLoadingLayer =
     !showHistoryOpenIntentOverlay && !showFailedHistoryPlaceholder
     && (showHistoryPlaceholder || activeHistoryRestore?.status === 'loading');
+  const historyLoadingIdentity = surfaceScope.key('history-loading', surfaceScope.epoch,
+    showHistoryOpenIntentOverlay ? pendingHistoryOpenSession?.sessionId : activeSession?.sessionId);
+  const isHistoryContentPresented = historyLoadingPresentation?.identity === historyLoadingIdentity && historyLoadingPresentation.ready;
+  const shouldBlockHistoryTransitionInteraction =
+    !isHistoryContentPresented || activeHistoryRestore?.status === 'loading' || showHistoryOpenIntentOverlay;
   useEffect(() => {
     if (!showHistoryLoadingLayer || !activeSession?.sessionId) {
       return;
@@ -1461,11 +1449,14 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
   useLayoutEffect(() => {
     autoTailTurnKeyRef.current = null;
     releasedHistoryCompletionKeyRef.current = null;
-    searchFullHistorySessionIdRef.current = null;
-  }, [activeSession?.sessionId]);
+    setTrajectoryOpen(false);
+    setTrajectorySelection(undefined);
+    setTrajectorySearchInput(''); setTrajectorySearchState({ count: 0, current: 0 });
+    clearSearch();
+    virtualListRef.current?.clearSearchMatch();
+  }, [activeSession?.sessionId, surfaceScope.epoch, clearSearch]);
 
   useEffect(() => {
-    setHistoryInitialContentReadyKey(null);
     setHistoryInitialContentPostPaintKey(null);
     setQueuedTurnNavigation(null);
   }, [activeSession?.sessionId]);
@@ -1525,14 +1516,11 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
 
   useEffect(() => {
     const sessionId = activeSession?.sessionId;
+    if (!isViewportActive) releasedHistoryCompletionKeyRef.current = null;
     if (
       !isViewportActive ||
       !sessionId ||
       activeSession.historyState !== 'ready' ||
-      (
-        activeSession.contextRestoreState !== 'pending' &&
-        !hasPendingHistoryCompletion
-      ) ||
       !latestTurnId
     ) {
       return;
@@ -1543,15 +1531,11 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
       return;
     }
 
-    let cancelled = false;
-    let frameId: number | null = null;
-    let cancelAfterPaint: (() => void) | null = null;
-    let attempts = 0;
+    if (!isHistoryContentPresented) return;
 
+    let cancelled = false;
     const releaseAfterPaint = () => {
-      if (cancelled) {
-        return;
-      }
+      if (cancelled) return;
       releasedHistoryCompletionKeyRef.current = releaseKey;
       const released = flowChatStore.releaseSessionHistoryCompletionAfterInitialPaint(sessionId);
       clearHistorySessionOpenTransition(sessionId);
@@ -1564,80 +1548,22 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
       setHistoryInitialContentPostPaintKey(releaseKey);
     };
 
-    const checkLatestTextVisibility = () => {
-      if (cancelled) {
-        return;
-      }
-
-      attempts += 1;
-      if (virtualListRef.current?.isTurnTextRenderedInViewport(latestTurnId) === true) {
-        setHistoryInitialContentReadyKey(releaseKey);
-        cancelAfterPaint = scheduleAfterStartupPaint(releaseAfterPaint, { frameCount: 2 });
-        return;
-      }
-
-      if (attempts >= HISTORY_INITIAL_CONTENT_PAINT_MAX_ATTEMPTS) {
-        setHistoryInitialContentReadyKey(releaseKey);
-        setHistoryInitialContentPostPaintKey(releaseKey);
-        releasedHistoryCompletionKeyRef.current = releaseKey;
-        clearHistorySessionOpenTransition(sessionId);
-        startupTrace.markPhase('historical_session_initial_content_paint_signal_missed', {
-          sessionId,
-          latestTurnId,
-          attempts,
-        });
-        return;
-      }
-
-      frameId = requestAnimationFrame(checkLatestTextVisibility);
-    };
-
-    frameId = requestAnimationFrame(checkLatestTextVisibility);
-
+    // The loading boundary already waits for complete content and the viewport
+    // owner. Background reads start after that presentation has painted.
+    const cancelAfterPaint = scheduleAfterStartupPaint(releaseAfterPaint, { frameCount: 2 });
     return () => {
       cancelled = true;
-      if (frameId !== null) {
-        cancelAnimationFrame(frameId);
-      }
-      cancelAfterPaint?.();
+      cancelAfterPaint();
     };
   }, [
     activeSession?.historyState,
-    activeSession?.contextRestoreState,
     activeSession?.sessionId,
-    hasPendingHistoryCompletion,
+    isHistoryContentPresented,
     isViewportActive,
     latestTurnId,
+    surfaceScope.surfaceId,
+    surfaceScope.epoch,
     turnSummaries.length,
-  ]);
-
-  useEffect(() => {
-    if (searchCurrentMatchVirtualItemIndex < 0 || !searchQuery.trim()) {
-      virtualListRef.current?.clearSearchMatch();
-      return;
-    }
-
-    const frameId = requestAnimationFrame(() => {
-      virtualListRef.current?.scrollToSearchMatch({
-        virtualItemIndex: searchCurrentMatchVirtualItemIndex,
-        query: searchQuery,
-        flowItemId: searchCurrentMatchFlowItemId,
-        occurrenceIndex: searchCurrentMatchOccurrenceIndex,
-        expandableIds: searchCurrentMatchExpandableKey
-          ? searchCurrentMatchExpandableKey.split('\u0000')
-          : undefined,
-      });
-    });
-    return () => {
-      cancelAnimationFrame(frameId);
-    };
-  }, [
-    searchCurrentMatchFlowItemId,
-    searchCurrentMatchTurnId,
-    searchCurrentMatchExpandableKey,
-    searchCurrentMatchVirtualItemIndex,
-    searchCurrentMatchOccurrenceIndex,
-    searchQuery,
   ]);
 
   const applyHistoryPresentation = useCallback((
@@ -1651,7 +1577,7 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
       };
     },
   ) => {
-    historyPresentationOwnerGenerationRef.current += 1;
+    invalidateHistoryPresentationOwner();
     setHistoryPresentation(previous => {
       const next: FlowChatHistoryPresentationState = {
         ...presentation,
@@ -1679,7 +1605,7 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
     } else {
       setHistoryBoundaryState(IDLE_HISTORY_BOUNDARY_STATE);
     }
-  }, [updateViewportIntent]);
+  }, [invalidateHistoryPresentationOwner, updateViewportIntent]);
 
   const restoreTailPresentation = useCallback((options?: {
     followLatest?: boolean;
@@ -1806,27 +1732,33 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
     restoreTailPresentation,
   ]);
 
-  const handleSearchChange = useCallback((query: string) => {
-    setSearchQuery(query);
-    const sessionId = activeSession?.sessionId;
-    if (
-      !query.trim()
-      || !sessionId
-      || activeSession.isPartial !== true
-      || searchFullHistorySessionIdRef.current === sessionId
-    ) {
-      return;
-    }
+  const handleTrajectoryRange = useCallback((range: TrajectoryRangeSummary | null, activate: boolean) => {
+    const session = flowChatStore.getState().sessions.get(activeSessionIdRef.current ?? '');
+    if (session) showTrajectoryRange(session, range, t('trajectory.rangeDetails'), activate, trajectoryViewId);
+  }, [t, trajectoryViewId]);
 
-    searchFullHistorySessionIdRef.current = sessionId;
-    void flowChatStore.ensureSessionFullHistory(sessionId, 'flowchat-search').then(ready => {
-      if (ready && activeSessionIdRef.current === sessionId) {
-        restoreTailPresentation({ discardRecentHistory: true });
-      } else if (activeSessionIdRef.current === sessionId) {
-        searchFullHistorySessionIdRef.current = null;
-      }
+  const navigateTrajectory = useTrajectoryNavigation({
+    session: activeSession, items: virtualItems, listRef: virtualListRef, rootRef: chatScopeRef,
+    present: applyHistoryPresentation, expand: handleExpandGroup, viewId: trajectoryViewId,
+    selectionClearRequest: trajectorySelectionClearRequest,
+  });
+  const clearTrajectorySelection = useCallback(() => {
+    setTrajectorySelection(undefined);
+    setTrajectorySelectionClearRequest(value => value + 1);
+    virtualListRef.current?.clearSearchMatch();
+  }, []);
+  const selectTrajectory = useCallback(async (selection: TrajectorySelection) => {
+    const located = await navigateTrajectory(selection);
+    if (located) setTrajectorySelection(selection);
+    return located;
+  }, [navigateTrajectory]);
+  useEffect(() => globalEventBus.on<TrajectoryPanelData>(TRAJECTORY_NAVIGATE_EVENT, request => {
+    if (!isViewportActive || request.viewId !== trajectoryViewId || request.surfaceId !== getActiveSurfaceScope().surfaceId
+      || request.sessionId !== activeSessionIdRef.current) return;
+    void selectTrajectory({ node: request.node, query: request.query }).catch(error => {
+      log.warn('Failed to locate trajectory endpoint', { error });
     });
-  }, [activeSession?.isPartial, activeSession?.sessionId, restoreTailPresentation, setSearchQuery]);
+  }), [isViewportActive, trajectoryViewId, selectTrajectory]);
 
   const navigateToTurn = useCallback(async (target: FlowChatTurnRailItem | string) => {
     const targetItem = typeof target === 'string'
@@ -2065,7 +1997,7 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
     options?: HistoryWindowBoundaryIntentOptions,
   ): Promise<HistoryWindowBoundaryIntentResult> => {
     const existingRequest = historyBoundaryRequestsRef.current[direction];
-    if (existingRequest) {
+    if (existingRequest && !options?.synchronizeHistory) {
       return existingRequest;
     }
 
@@ -2081,28 +2013,48 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
         return 'cancelled';
       }
 
+      const scope = getActiveSurfaceScope();
+      const isCurrent = () => scope.isCurrent()
+        && activeSessionIdRef.current === sessionId
+        && historyPresentationOwnerGenerationRef.current === presentationOwnerGeneration
+        && options?.isCurrent?.() !== false;
+      if (options?.synchronizeHistory) {
+        setHistoryBoundaryState(previous => ({ ...previous, [direction]: 'loading' }));
+        try {
+          await flowChatStore.synchronizeSessionHistory(sessionId, isCurrent);
+          if (!isCurrent()) return 'cancelled';
+        } catch (error) {
+          if (!isCurrent() || isSurfaceChangedError(error)) return 'cancelled';
+          recordHistoryPagingEvent(sessionId, 'outcome_not_ready', { direction, reason: 'source-synchronization-failed' });
+          log.warn('Failed to synchronize session history from its owner', { sessionId, direction, error });
+          setHistoryBoundaryState(previous => ({ ...previous, [direction]: 'error' }));
+          return 'not-ready';
+        }
+      }
       const session = flowChatStore.getState().sessions.get(sessionId);
-      if (getActiveSurfaceScope().surfaceId !== 'local' && !presentation) {
-        if (direction === 'after' || session?.isPartial === false) return 'exhausted';
-        const scope = getActiveSurfaceScope();
+      if (scope.surfaceId !== 'local' && !presentation) {
+        if (direction === 'after' || session?.isPartial === false) {
+          setHistoryBoundaryState(previous => ({ ...previous, [direction]: 'idle' }));
+          return 'exhausted';
+        }
         setHistoryBoundaryState(previous => ({ ...previous, [direction]: 'loading' }));
         try {
           const prepared = await options?.prepareViewportForPresentationCommit?.();
-          if (prepared === false || !scope.isCurrent() || activeSessionIdRef.current !== sessionId) {
+          if (prepared === false || !isCurrent()) {
             options?.cancelViewportPresentationCommit?.();
             return 'cancelled';
           }
           const loaded = await flowChatStore.loadOlderRelaySessionHistory(sessionId);
-          if (!scope.isCurrent() || activeSessionIdRef.current !== sessionId) return 'cancelled';
+          if (!isCurrent()) return 'cancelled';
           return loaded ? 'applied' : 'exhausted';
         } catch (error) {
           options?.cancelViewportPresentationCommit?.();
           if (isSurfaceChangedError(error)) return 'cancelled';
           log.error('Relay history page failed', { sessionId, error });
-          if (scope.isCurrent()) setHistoryBoundaryState(previous => ({ ...previous, [direction]: 'error' }));
+          if (isCurrent()) setHistoryBoundaryState(previous => ({ ...previous, [direction]: 'error' }));
           return 'not-ready';
         } finally {
-          if (scope.isCurrent() && activeSessionIdRef.current === sessionId) {
+          if (isCurrent()) {
             setHistoryBoundaryState(previous => previous[direction] === 'error'
               ? previous : { ...previous, [direction]: 'idle' });
           }
@@ -2161,6 +2113,7 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
               turnCatalogMatches: session?.turnCatalog?.sessionId === sessionId,
             },
           );
+          if (precondition === 'exhausted') setHistoryBoundaryState(previous => ({ ...previous, [direction]: 'idle' }));
           return precondition;
         }
         const canonicalTailRange = flowChatStore.getSessionCanonicalTailRange(sessionId);
@@ -2222,6 +2175,7 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
             targetOrdinal: renderedRange.startOrdinal - 1,
           });
         }
+        setHistoryBoundaryState(previous => ({ ...previous, [direction]: 'idle' }));
         return 'exhausted';
       }
       const targetOrdinal = target.targetOrdinal;
@@ -2229,12 +2183,14 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
       setHistoryBoundaryState(previous => ({ ...previous, [direction]: 'loading' }));
       let viewportPreparationStarted = false;
       try {
-        const result = await flowChatStore.loadSessionTurnWindow(sessionId, targetOrdinal, {
-          source: 'prefetch',
-          before: direction === 'before' ? 12 : 4,
-          after: direction === 'after' ? 12 : 1,
-        });
-        if (!result.isCurrent || activeSessionIdRef.current !== sessionId) {
+        const result = direction === 'before'
+          ? await flowChatStore.loadPreviousSessionTurnWindow(sessionId, targetOrdinal)
+          : await flowChatStore.loadSessionTurnWindow(sessionId, targetOrdinal, {
+            source: 'prefetch',
+            before: 4,
+            after: 12,
+          });
+        if (!result.isCurrent || !isCurrent()) {
           recordHistoryPagingEvent(sessionId, 'outcome_cancelled', {
             direction,
             reason: 'superseded',
@@ -2248,7 +2204,7 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
            * still reading `loading`, and the reader is shown history being
            * prepared by nobody for the rest of the session.
            */
-          if (activeSessionIdRef.current === sessionId) {
+          if (isCurrent()) {
             setHistoryBoundaryState(previous => ({ ...previous, [direction]: 'idle' }));
           }
           return 'cancelled';
@@ -2259,7 +2215,7 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
               sessionId,
               'sequential-history-navigation',
             );
-            if (historyReady && activeSessionIdRef.current === sessionId) {
+            if (historyReady && isCurrent()) {
               recordHistoryPagingEvent(sessionId, 'outcome_applied', {
                 direction,
                 targetOrdinal,
@@ -2276,6 +2232,7 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
            * status standing, with nothing in the trail between the ask and the
            * complaint.
            */
+          if (!isCurrent()) return 'cancelled';
           recordHistoryPagingEvent(sessionId, 'outcome_not_ready', {
             direction,
             reason: `load-${result.status}`,
@@ -2295,6 +2252,7 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
           preparationResult === false
           || !activeSessionIsCurrent
           || !presentationOwnerIsCurrent
+          || !isCurrent()
         ) {
           recordHistoryPagingEvent(sessionId, 'outcome_cancelled', {
             direction,
@@ -2362,9 +2320,10 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
         if (viewportPreparationStarted) {
           options?.cancelViewportPresentationCommit?.();
         }
-        if (activeSessionIdRef.current === sessionId) {
+        if (isCurrent()) {
           setHistoryBoundaryState(previous => ({ ...previous, [direction]: 'error' }));
         }
+        if (!isCurrent()) return 'cancelled';
         log.warn('Failed to prefetch an adjacent session Turn window', {
           sessionId,
           direction,
@@ -2540,7 +2499,7 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
     }
   }, [t]);
 
-  const handleDeleteSessionTreeSession = useCallback(async (selection: SessionTreeSelection) => {
+  const handleDeleteSessionTreeSession = useCallback(async (selection: SessionTreeSelection, anchor?: ReturnType<typeof captureConfirmationAnchor>) => {
     if (selection.isRoot) return false;
     if (activeSession && resolveSessionDriverId(activeSession.sessionId, activeSession) === 'dispatch') {
       notificationService.error(t('flowChatHeader.agentTreeDeleteUnsupported'), { duration: 5000 });
@@ -2551,7 +2510,7 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
       const confirmed = await confirmDanger(
         t('flowChatHeader.agentTreeDelete'),
         t('flowChatHeader.agentTreeDeleteConfirm', { name: selection.displayTitle }),
-        { confirmText: t('flowChatHeader.agentTreeDelete') },
+        { anchor, confirmText: t('flowChatHeader.agentTreeDelete') },
       );
       if (!confirmed) return false;
       await deleteSessionTreeBranch({ sessionId: selection.sessionId, workspaceId: requireSessionOwningWorkspaceId(flowChatStore.getState().sessions.get(selection.sessionId) || activeSession!) }, scope);
@@ -2747,17 +2706,16 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
         <FlowChatSelectionBar rootRef={chatScopeRef} sessionId={activeSession?.sessionId} active={isViewportActive}
           onSelectionIntent={() => virtualListRef.current?.notifyUserSelectionIntent()} />
         <FlowChatHeader
-          visible={virtualItems.length > 0}
+          visible={showSessionTranscript}
           sessionId={activeSession?.sessionId}
           isRightPanelOpen={isRightPanelOpen}
           onToggleRightPanel={onToggleRightPanel}
-          searchQuery={searchQuery}
-          onSearchChange={handleSearchChange}
-          searchMatchCount={searchMatches.length}
-          searchCurrentMatch={searchMatches.length > 0 ? searchCurrentMatchIndex + 1 : 0}
-          onSearchNext={handleSearchNext}
-          onSearchPrev={handleSearchPrev}
-          onSearchClose={clearSearch}
+          onTrajectoryOpen={openTrajectory}
+          trajectoryOpen={trajectoryOpen}
+          searchQuery={trajectorySearchInput} onSearchChange={setTrajectorySearchInput}
+          searchMatchCount={trajectorySearchState.count} searchCurrentMatch={trajectorySearchState.current}
+          onSearchNext={() => trajectoryRef.current?.next()} onSearchPrev={() => trajectoryRef.current?.previous()}
+          onSearchClose={closeTrajectory}
           searchOpenRequest={searchOpenRequest}
           backgroundCommands={headerBackgroundCommands}
           onOpenSessionTreeSession={handleOpenSessionTreeSession}
@@ -2769,6 +2727,14 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
           onStopBackgroundCommand={handleStopBackgroundCommand}
           onStopAllBackgroundCommands={handleStopAllBackgroundCommands}
         />
+
+        {trajectoryOpen && activeSession && <TrajectoryExplorer
+          ref={trajectoryRef}
+          key={surfaceScope.key('trajectory', activeSession.sessionId)} session={activeSession}
+          searchInput={trajectorySearchInput} onQueryChange={setSearchQuery} onSearchStateChange={setTrajectorySearchState}
+          onSelect={selectTrajectory} onClose={closeTrajectory} onRangeChange={handleTrajectoryRange}
+          onClearSelection={clearTrajectorySelection}
+          selectedNodeKey={trajectorySelection ? trajectoryNodeKey(trajectorySelection.node) : undefined} />}
 
         <BackgroundCommandInputDialog
           command={backgroundCommandInputTarget}
@@ -2797,30 +2763,35 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
           data-presentation-mode={isRenderingHistoryProjection ? 'history-window' : 'tail'}
           data-viewport-intent={activeViewportIntent?.kind ?? 'live-tail'}
           data-latest-turn-id={latestTurnId ?? ''}
-          data-history-initial-content-ready={
-            historyInitialContentKey === null || historyInitialContentReadyKey === historyInitialContentKey
-              ? 'true'
-              : 'false'
-          }
+          data-history-initial-content-ready={isHistoryContentPresented ? 'true' : 'false'}
           data-pending-history-open-session-id={pendingHistoryOpenSession?.sessionId ?? ''}
           onClickCapture={blockHistoryOverlayActivation}
           onContextMenuCapture={blockHistoryOverlayActivation}
           onMouseDownCapture={blockHistoryOverlayActivation}
           onPointerDownCapture={blockHistoryOverlayActivation}
         >
-          <>
+          <HistorySessionLoadingBoundary
+            identity={historyLoadingIdentity}
+            loading={showHistoryLoadingLayer || showHistoryOpenIntentOverlay}
+            hasTranscript={showSessionTranscript && activeHistoryRestore?.status !== 'loading' && !showFailedHistoryPlaceholder}
+            disabled={showFailedHistoryPlaceholder || !isViewportActive}
+            intent={showHistoryOpenIntentOverlay}
+            label={t('historyState.loadingTitle')}
+            onPresentationChange={handleHistoryPresentationChange}
+          >
             {showFailedHistoryPlaceholder ? (
               <HistorySessionPlaceholder
                 state="failed"
                 onRetry={handleRetryHistoryLoad}
               />
-            ) : activeHistoryRestore?.status === 'loading' ? null : virtualItems.length === 0 ? (
+            ) : activeHistoryRestore?.status === 'loading' ? null : !showSessionTranscript ? (
               showHistoryPlaceholder || showHistoryOpenIntentOverlay ? null : (
                 emptyState !== undefined ? emptyState : (
                   <WelcomePanel
                     key={surfaceScope.key('welcome', surfaceScope.epoch,
                       activeSession?.sessionId ?? '', activeSession?.draft?.workspaceId ?? '')}
                     session={activeSession}
+                    isActive={isViewportActive}
                     onQuickAction={(command) => {
                       window.dispatchEvent(new CustomEvent('fill-chat-input', {
                         detail: { message: command, sessionId: activeSession?.sessionId }
@@ -2836,6 +2807,8 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
                   items={virtualItems}
                   latestTurnId={latestTurnId}
                   isViewportActive={isViewportActive}
+                  measurementSuspended={resizeSuspended}
+                  contentWidth={contentWidth}
                   presentationMode={isRenderingHistoryProjection ? 'history-window' : 'tail'}
                   viewportMode={isViewportDetachedFromLiveTail ? 'history-reading' : 'live-tail'}
                   historyWindow={isShowingHistoryPresentation ? activeHistoryPresentation?.range ?? null : null}
@@ -2850,7 +2823,7 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
                 />
               </>
             )}
-            {virtualItems.length > 0 ? (
+            {showSessionTranscript ? (
               <FlowChatTurnRail
                 turns={turnRailItems}
                 currentTurnId={effectiveVisibleTurnInfo?.turnId ?? null}
@@ -2858,36 +2831,7 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
                 onNavigate={navigateToTurn}
               />
             ) : null}
-            {showHistoryLoadingLayer && (
-              <div
-                className="modern-flowchat-container__history-overlay"
-                role="status"
-                aria-label={t('historyState.loadingTitle')}
-                data-openbitfun-component="modern-flow-chat"
-                data-openbitfun-part="historyOverlay"
-              >
-                <HistorySessionPlaceholder
-                  state={historyState === 'metadata-only' ? 'metadata-only' : 'hydrating'}
-                />
-              </div>
-            )}
-            {showHistoryOpenIntentOverlay && (
-              <div
-                className="modern-flowchat-container__history-open-intent-shield"
-                data-openbitfun-component="modern-flow-chat"
-                data-openbitfun-part="historyOpenIntent"
-                role="status"
-                aria-label={t('historyState.loadingTitle')}
-              >
-                <span
-                  className="modern-flowchat-container__history-open-intent-spinner"
-                  data-openbitfun-component="modern-flow-chat"
-                  data-openbitfun-part="historyOpenIntentSpinner"
-                  aria-hidden="true"
-                />
-              </div>
-            )}
-          </>
+          </HistorySessionLoadingBoundary>
         </div>
       </div>
       </FlowChatVolatileContext.Provider>

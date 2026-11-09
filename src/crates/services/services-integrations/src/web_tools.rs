@@ -1,10 +1,14 @@
 //! Network providers for built-in web tools.
 
+mod deepseek;
 mod exa_search_api;
+mod keenable;
 mod openbitfun_search_http;
 mod tavily;
 
+pub use deepseek::DeepSeekSearchProvider;
 pub use exa_search_api::ExaSearchApiProvider;
+pub use keenable::KeenableSearchProvider;
 pub use openbitfun_search_http::{OpenBitFunSearchHttpAuth, OpenBitFunSearchHttpProvider};
 pub use tavily::TavilySearchProvider;
 
@@ -829,6 +833,313 @@ mod tests {
         assert!(request.ends_with(r#"{"query":"rust async","max_results":4}"#));
         assert!(response.results[0].published_at.is_none());
         assert!(response.results[0].author.is_none());
+    }
+
+    #[tokio::test]
+    async fn deepseek_uses_bearer_count_and_normalizes_metadata() {
+        let query = "界".repeat(128);
+        let (endpoint, request_task) = serve_once(json_response(
+            r#"{"results":[{"title":" One ","url":"https://example.com/one","date":"2026-06-01T00:00:00Z","summary":"ignored","site_name":"not an author"},{"title":"Duplicate","url":"https://example.com/one","date":null},{"title":"Unsafe","url":"file:///tmp/private"},{"title":"Two","url":"https://example.com/two","date":null},{"title":"Three","url":"https://example.com/three"}]}"#,
+        )).await;
+        let response = DeepSeekSearchProvider::with_endpoint(" ds-secret ", endpoint)
+            .search(WebSearchRequest {
+                query: query.clone(),
+                max_results: 2,
+            })
+            .await
+            .expect("DeepSeek fixture search should succeed");
+        let request = request_task.await.expect("DeepSeek fixture request task");
+        assert!(request.starts_with("POST /search HTTP/1.1"));
+        assert!(request
+            .to_ascii_lowercase()
+            .contains("authorization: bearer ds-secret\r\n"));
+        assert!(request
+            .to_ascii_lowercase()
+            .contains("content-type: application/json"));
+        let body: serde_json::Value =
+            serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1).unwrap();
+        assert_eq!(
+            body,
+            json!({"query": query, "count": 2, "need_content": false})
+        );
+        assert_eq!(response.provider.as_str(), "deepseek");
+        assert_eq!(response.results.len(), 2);
+        assert_eq!(response.results[0].title, "One");
+        assert_eq!(
+            response.results[0].published_at.as_deref(),
+            Some("2026-06-01T00:00:00+00:00")
+        );
+        assert!(response.results[0].author.is_none());
+        assert_eq!(response.results[1].title, "Two");
+        assert!(response.results[1].published_at.is_none());
+    }
+
+    #[tokio::test]
+    async fn deepseek_rejects_invalid_requests_and_missing_credentials_before_network_io() {
+        for (query, max_results, key, expected) in [
+            (
+                " ".to_string(),
+                1,
+                "key",
+                WebSearchErrorKind::InvalidRequest,
+            ),
+            (
+                "界".repeat(129),
+                1,
+                "key",
+                WebSearchErrorKind::InvalidRequest,
+            ),
+            (
+                "query".to_string(),
+                0,
+                "key",
+                WebSearchErrorKind::InvalidRequest,
+            ),
+            (
+                "query".to_string(),
+                21,
+                "key",
+                WebSearchErrorKind::InvalidRequest,
+            ),
+            (
+                "query".to_string(),
+                1,
+                " ",
+                WebSearchErrorKind::InvalidConfiguration,
+            ),
+        ] {
+            let error = DeepSeekSearchProvider::with_endpoint(key, "http://127.0.0.1:0")
+                .search(WebSearchRequest { query, max_results })
+                .await
+                .expect_err("invalid input must fail before connecting");
+            assert_eq!(error.provider.as_str(), "deepseek");
+            assert_eq!(error.kind, expected);
+        }
+    }
+
+    #[tokio::test]
+    async fn deepseek_distinguishes_empty_results_from_invalid_responses() {
+        for (body, expected) in [
+            (r#"{"results":[],"futureField":true}"#, None),
+            (r#"{}"#, Some(WebSearchErrorKind::InvalidResponse)),
+            (
+                r#"{"results":null}"#,
+                Some(WebSearchErrorKind::InvalidResponse),
+            ),
+            (
+                r#"{"results":[{"title":"Missing URL"}]}"#,
+                Some(WebSearchErrorKind::InvalidResponse),
+            ),
+            (
+                r#"{"results":[{"title":"Unsafe","url":"file:///tmp/private"}]}"#,
+                Some(WebSearchErrorKind::InvalidResponse),
+            ),
+            ("not JSON", Some(WebSearchErrorKind::InvalidResponse)),
+        ] {
+            let (endpoint, request_task) = serve_once(json_response(body)).await;
+            let response = DeepSeekSearchProvider::with_endpoint("key", endpoint)
+                .search(WebSearchRequest {
+                    query: "query".to_string(),
+                    max_results: 1,
+                })
+                .await;
+            request_task
+                .await
+                .expect("DeepSeek response fixture request task");
+            if let Some(kind) = expected {
+                assert_eq!(
+                    response.expect_err("malformed response must fail").kind,
+                    kind
+                );
+            } else {
+                assert!(response
+                    .expect("empty results are valid")
+                    .results
+                    .is_empty());
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn deepseek_maps_http_errors_and_retry_after() {
+        for (status, expected) in [
+            (400, WebSearchErrorKind::InvalidRequest),
+            (401, WebSearchErrorKind::Authentication),
+            (402, WebSearchErrorKind::QuotaExhausted),
+            (403, WebSearchErrorKind::PermissionDenied),
+            (408, WebSearchErrorKind::Timeout),
+            (429, WebSearchErrorKind::RateLimited),
+            (500, WebSearchErrorKind::ProviderUnavailable),
+            (504, WebSearchErrorKind::Timeout),
+        ] {
+            let body = r#"{"error":{"message":"Provider error","type":"api_error","param":null,"code":"api_error"}}"#;
+            let (endpoint, request_task) = serve_once(format!(
+                "HTTP/1.1 {status} Error\r\nContent-Type: application/json\r\nRetry-After: 7\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()
+            )).await;
+            let error = DeepSeekSearchProvider::with_endpoint("key", endpoint)
+                .search(WebSearchRequest {
+                    query: "query".to_string(),
+                    max_results: 1,
+                })
+                .await
+                .expect_err("provider error must fail");
+            request_task
+                .await
+                .expect("DeepSeek error fixture request task");
+            assert_eq!(error.provider.as_str(), "deepseek");
+            assert_eq!(error.kind, expected);
+            assert_eq!(error.message, "Provider error");
+            assert_eq!(error.retry_after_seconds, Some(7));
+        }
+    }
+
+    #[tokio::test]
+    async fn keenable_without_key_uses_public_endpoint_and_app_title() {
+        let (endpoint, request_task) = serve_once(json_response(
+            r#"{"query":"rust async","results":[{"title":" One ","url":"https://example.com/one","description":"","snippet":"ignored","published_at":"2026-06-01T00:00:00Z","acquired_at":"2026-06-02T00:00:00Z"},{"title":"Duplicate","url":"https://example.com/one"},{"title":"Unsafe","url":"file:///tmp/private"},{"title":"Two","url":"https://example.com/two","published_at":1780000000},{"title":"Three","url":"https://example.com/three"}]}"#,
+        ))
+        .await;
+        let base_url = endpoint.trim_end_matches("/search");
+        let response = KeenableSearchProvider::with_base_url(None, base_url)
+            .search(WebSearchRequest {
+                query: "rust async".to_string(),
+                max_results: 2,
+            })
+            .await
+            .expect("Keenable fixture search should succeed");
+        let request = request_task.await.expect("Keenable fixture request task");
+        let request_lower = request.to_ascii_lowercase();
+        assert!(request.starts_with("POST /v1/search/public HTTP/1.1"));
+        assert!(request_lower.contains("x-keenable-title: openbitfun\r\n"));
+        assert!(!request_lower.contains("x-api-key"));
+        assert!(!request_lower.contains("authorization"));
+        assert!(request.ends_with(r#"{"query":"rust async","max_results":2}"#));
+        assert_eq!(response.provider.as_str(), "keenable");
+        assert_eq!(response.results.len(), 2);
+        assert_eq!(response.results[0].title, "One");
+        assert_eq!(
+            response.results[0].published_at.as_deref(),
+            Some("2026-06-01T00:00:00+00:00")
+        );
+        assert!(response.results[0].author.is_none());
+        assert_eq!(response.results[1].title, "Two");
+        assert!(response.results[1].published_at.is_none());
+    }
+
+    #[tokio::test]
+    async fn keenable_sends_saved_key_to_keyed_endpoint_and_ignores_blank_key() {
+        for (key, path, sends_key) in [
+            (Some(" kn-secret "), "/v1/search", true),
+            (Some(" "), "/v1/search/public", false),
+        ] {
+            let (endpoint, request_task) = serve_once(json_response(
+                r#"{"results":[{"title":"One","url":"https://example.com/one"}]}"#,
+            ))
+            .await;
+            let base_url = endpoint.trim_end_matches("/search");
+            let response = KeenableSearchProvider::with_base_url(key.map(str::to_string), base_url)
+                .search(WebSearchRequest {
+                    query: "query".to_string(),
+                    max_results: 1,
+                })
+                .await
+                .expect("Keenable fixture search should succeed");
+            let request = request_task.await.expect("Keenable fixture request task");
+            let request_lower = request.to_ascii_lowercase();
+            assert!(request.starts_with(&format!("POST {path} HTTP/1.1")));
+            assert_eq!(
+                request_lower.contains("x-api-key: kn-secret\r\n"),
+                sends_key
+            );
+            assert!(request_lower.contains("x-keenable-title: openbitfun\r\n"));
+            assert_eq!(response.results.len(), 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn keenable_rejects_invalid_requests_before_network_io() {
+        for (query, max_results) in [
+            (" ".to_string(), 1),
+            ("query".to_string(), 0),
+            ("query".to_string(), 21),
+        ] {
+            let error = KeenableSearchProvider::with_base_url(None, "http://127.0.0.1:0")
+                .search(WebSearchRequest { query, max_results })
+                .await
+                .expect_err("invalid input must fail before connecting");
+            assert_eq!(error.provider.as_str(), "keenable");
+            assert_eq!(error.kind, WebSearchErrorKind::InvalidRequest);
+        }
+    }
+
+    #[tokio::test]
+    async fn keenable_distinguishes_empty_results_from_invalid_responses() {
+        for (body, expected) in [
+            (r#"{"query":"query","results":[]}"#, None),
+            (r#"{}"#, Some(WebSearchErrorKind::InvalidResponse)),
+            (
+                r#"{"results":null}"#,
+                Some(WebSearchErrorKind::InvalidResponse),
+            ),
+            (
+                r#"{"results":[{"title":"Unsafe","url":"file:///tmp/private"}]}"#,
+                Some(WebSearchErrorKind::InvalidResponse),
+            ),
+            ("not JSON", Some(WebSearchErrorKind::InvalidResponse)),
+        ] {
+            let (endpoint, request_task) = serve_once(json_response(body)).await;
+            let response =
+                KeenableSearchProvider::with_base_url(None, endpoint.trim_end_matches("/search"))
+                    .search(WebSearchRequest {
+                        query: "query".to_string(),
+                        max_results: 1,
+                    })
+                    .await;
+            request_task
+                .await
+                .expect("Keenable response fixture request task");
+            if let Some(kind) = expected {
+                assert_eq!(
+                    response.expect_err("malformed response must fail").kind,
+                    kind
+                );
+            } else {
+                assert!(response
+                    .expect("empty results are valid")
+                    .results
+                    .is_empty());
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn keenable_maps_http_errors_and_retry_after() {
+        for (status, expected) in [
+            (400, WebSearchErrorKind::InvalidRequest),
+            (401, WebSearchErrorKind::Authentication),
+            (429, WebSearchErrorKind::RateLimited),
+            (503, WebSearchErrorKind::ProviderUnavailable),
+        ] {
+            let body = r#"{"error":"Missing app identifier","message":"X-Keenable-Title header is required for token-less requests"}"#;
+            let (endpoint, request_task) = serve_once(format!(
+                "HTTP/1.1 {status} Error\r\nContent-Type: application/json\r\nRetry-After: 7\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()
+            )).await;
+            let error =
+                KeenableSearchProvider::with_base_url(None, endpoint.trim_end_matches("/search"))
+                    .search(WebSearchRequest {
+                        query: "query".to_string(),
+                        max_results: 1,
+                    })
+                    .await
+                    .expect_err("provider error must fail");
+            request_task
+                .await
+                .expect("Keenable error fixture request task");
+            assert_eq!(error.provider.as_str(), "keenable");
+            assert_eq!(error.kind, expected);
+            assert_eq!(error.message, "Missing app identifier");
+            assert_eq!(error.retry_after_seconds, Some(7));
+        }
     }
 
     #[tokio::test]

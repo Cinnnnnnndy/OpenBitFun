@@ -26,6 +26,7 @@ final class MobileAppModel: ObservableObject {
     /// transcript: a reopened session shows them at once, and the host has not
     /// answered for it yet. See `ChatTranscriptOrigin`.
     @Published var remoteTranscriptUnconfirmed = false
+    @Published var messageQueue: MessageQueueUiState?
     @Published var permissionMailbox: PermissionMailboxUiState?
     @Published var remoteConversationLoading = false
     @Published var remotePermissionMode = "ASK"
@@ -77,6 +78,21 @@ final class MobileAppModel: ObservableObject {
     @Published var remoteConnected = false
     @Published var remoteSessionSelected = false
     @Published var remoteOpenedSessionID: String? = nil
+    @Published var remotePromptSuggestion: String? = nil
+
+    var visiblePromptSuggestion: String? {
+        guard surface == .remote, remoteSessionSelected, remoteConnected,
+              connectionPhase == .connected, remoteOpenedSessionID == selectedSessionID,
+              !busy, !isSending, pendingComposerSend == nil, draft.isEmpty else { return nil }
+        return remotePromptSuggestion
+    }
+
+    @discardableResult
+    func acceptPromptSuggestion(_ suggestion: String) -> Bool {
+        guard visiblePromptSuggestion == suggestion else { return false }
+        draft = suggestion
+        return true
+    }
     @Published var localSessionSelected = false
     /// Account device picker. Native apps connect only through the signed-in
     /// account's device list; QR and link pairing belong to mobile web.

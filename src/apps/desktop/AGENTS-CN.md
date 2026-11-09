@@ -23,7 +23,7 @@
 Peer Device Mode 的所有权和边界见 `docs/architecture/peer-device-mode.md`。
 前端防回归清单见 `src/web-ui/src/infrastructure/peer-device/README.md`。
 
-GitHub 身份统一由 `account_identity_api.rs` 提供；Relay 设备注册和生命周期位于
+OpenBitFun 账号身份（GitHub 或邮箱验证码登录）统一由 `account_identity_api.rs` 提供；Relay 设备注册和生命周期位于
 `src/api/remote_connect_api.rs`。设置留在所属设备，不再提供云端/本地同步选择。
 Relay 部署向导已移除。保留 `src/apps/relay-server` 下供开发者使用的脚本和
 [运维文档](../relay-server/README.md)，不要重新加入产品 UI。
@@ -86,6 +86,11 @@ cargo check -p openbitfun-desktop && cargo test -p openbitfun-desktop
 cargo test -p openbitfun-desktop --lib window_state_support::tests
 pnpm --dir src/web-ui run test:run src/app/startup/startupPerformanceContract.test.ts
 ```
+
+macOS 浏览器空 URL 和原生导航失败使用
+[`third_party/wry/OPENBITFUN-PATCH.md`](../../../third_party/wry/OPENBITFUN-PATCH.md)
+中的 `wkwebview_url` 原生回归测试，并运行下方 Desktop 构建。测试覆盖原生 URL
+读取、页面加载回调、导航失败和手动导航恢复，不覆盖远程主机。panic hook 返回不代表捕获了 panic，日志不能宣称恢复成功。
 
 如果改动影响启动、WebDriver、browser/computer-use 或打包行为，还需要运行：
 

@@ -9,10 +9,6 @@ import {
 } from 'lucide-react';
 import { open } from '@tauri-apps/plugin-dialog';
 import { useSceneManager } from '@/app/hooks/useSceneManager';
-import { openMainSession } from '@/flow_chat/services/sessionActivation';
-import { flowChatSessionConfigForCurrentWorkspace } from '@/app/utils/projectSessionWorkspace';
-import { flowChatManager } from '@/flow_chat/services/FlowChatManager';
-import { isRemoteWorkspace } from '@/shared/types';
 import { isImeOwnedKeyboardEvent } from '@/shared/utils/ime';
 import MiniAppCard from '../components/MiniAppCard';
 import MiniAppDetailModal from '../components/MiniAppDetailModal';
@@ -23,7 +19,7 @@ import {
   type MarketPackageInspection,
 } from '@/infrastructure/api/service-api/MiniAppMarketAPI';
 import { createLogger } from '@/shared/utils/logger';
-import { subscribeOverlayInteraction, createOverlayPortal,
+import { captureConfirmationAnchor, subscribeOverlayInteraction, createOverlayPortal,
   ConfirmDialog,
   Icon,
   IconButton,
@@ -46,7 +42,9 @@ import { loadInstalledMarketOrigins } from '../utils/loadInstalledMarketOrigins'
 import { pickLocalizedString, pickLocalizedTags } from '../utils/pickLocalizedString';
 import { useCurrentWorkspace } from '@/infrastructure/contexts/WorkspaceContext';
 import { useMiniAppStore } from '../miniAppStore';
+import { useMiniAppCreation } from '../hooks/useMiniAppCreation';
 import { useI18n } from '@/infrastructure/i18n';
+import { isPeerDeviceModeActive } from '@/infrastructure/peer-device/peerModeFlag';
 import { useGallerySceneAutoRefresh } from '@/app/hooks/useGallerySceneAutoRefresh';
 import { useNotification } from '@/shared/notification-system';
 import { getAppearanceOverlayHost } from '@/infrastructure/appearance/runtime/AppearanceOverlayHost';
@@ -73,7 +71,7 @@ const MiniAppGalleryView: React.FC<MiniAppGalleryViewProps> = ({ tabs }) => {
   const setMarketOrigins = useMiniAppStore((state) => state.setMarketOrigins);
   const setRunningWorkerIds = useMiniAppStore((state) => state.setRunningWorkerIds);
   const markWorkerStopped = useMiniAppStore((state) => state.markWorkerStopped);
-  const { workspace, workspacePath } = useCurrentWorkspace();
+  const { workspacePath } = useCurrentWorkspace();
   const notification = useNotification();
   const { openScene, activateScene, closeScene, openTabs } = useSceneManager();
   const { t, currentLanguage } = useI18n('scenes/miniapp');
@@ -81,6 +79,7 @@ const MiniAppGalleryView: React.FC<MiniAppGalleryViewProps> = ({ tabs }) => {
 
   const [search, setSearch] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('all');
+  const [deleteAnchor, setDeleteAnchor] = useState<ReturnType<typeof captureConfirmationAnchor>>(undefined);
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
   const [selectedApp, setSelectedApp] = useState<MiniAppMeta | null>(null);
   const [pendingPackage, setPendingPackage] = useState<{
@@ -88,7 +87,7 @@ const MiniAppGalleryView: React.FC<MiniAppGalleryViewProps> = ({ tabs }) => {
     inspection: MarketPackageInspection;
   } | null>(null);
   const [importMenuOpen, setImportMenuOpen] = useState(false);
-  const [creatingWithCreative, setCreatingWithCreative] = useState(false);
+  const { creating: creatingWithCreative, createMiniApp } = useMiniAppCreation();
   const importTriggerRef = useRef<HTMLButtonElement>(null);
   const importMenuRef = useRef<HTMLDivElement>(null);
 
@@ -205,7 +204,8 @@ const MiniAppGalleryView: React.FC<MiniAppGalleryViewProps> = ({ tabs }) => {
     [activityById, closeScene, currentLanguage, markWorkerStopped, notification, t]
   );
 
-  const handleDeleteRequest = (appId: string) => {
+  const handleDeleteRequest = (appId: string, trigger?: HTMLElement) => {
+    setDeleteAnchor(captureConfirmationAnchor(trigger));
     setPendingDeleteId(appId);
   };
 
@@ -275,6 +275,12 @@ const MiniAppGalleryView: React.FC<MiniAppGalleryViewProps> = ({ tabs }) => {
 
   const preparePackageImport = useCallback(async (path: string) => {
     if (!path.toLowerCase().endsWith('.bfminiapp')) return;
+    // The package path belongs to this controller; a rendered peer would
+    // resolve it against its own filesystem.
+    if (isPeerDeviceModeActive()) {
+      notification.warning(t('market.import.peerUnsupported'));
+      return;
+    }
     try {
       const inspection = await miniAppMarketAPI.inspectPackage(path);
       setPendingPackage({ path, inspection });
@@ -285,6 +291,10 @@ const MiniAppGalleryView: React.FC<MiniAppGalleryViewProps> = ({ tabs }) => {
   }, [notification, t]);
 
   const handleAddPackage = async () => {
+    if (isPeerDeviceModeActive()) {
+      notification.warning(t('market.import.peerUnsupported'));
+      return;
+    }
     const selected = await open({
       directory: false,
       multiple: false,
@@ -339,39 +349,10 @@ const MiniAppGalleryView: React.FC<MiniAppGalleryViewProps> = ({ tabs }) => {
     }
   };
 
-  const handleCreateWithCreative = useCallback(async () => {
-    if (creatingWithCreative) return;
-    if (!workspace) {
-      notification.error(t('creationMode.noWorkspace'));
-      return;
-    }
-    if (isRemoteWorkspace(workspace)) {
-      notification.error(t('creationMode.remoteUnsupported'));
-      return;
-    }
-
-    setCreatingWithCreative(true);
+  const handleCreateWithCreative = useCallback(() => {
     closeImportMenu();
-    try {
-      const sessionId = await flowChatManager.createChatSession(
-        flowChatSessionConfigForCurrentWorkspace(workspace),
-        'Creative',
-      );
-      await openMainSession(sessionId);
-      notification.success(t('creationMode.started'));
-    } catch (error) {
-      log.error('Failed to start Creative MiniApp session', error);
-      notification.error(t('creationMode.startFailed'));
-    } finally {
-      setCreatingWithCreative(false);
-    }
-  }, [
-    closeImportMenu,
-    creatingWithCreative,
-    notification,
-    t,
-    workspace,
-  ]);
+    return createMiniApp();
+  }, [closeImportMenu, createMiniApp]);
 
   const renderGrid = () => {
     if (loading && apps.length === 0) {
@@ -447,7 +428,7 @@ const MiniAppGalleryView: React.FC<MiniAppGalleryViewProps> = ({ tabs }) => {
                 aria-haspopup="menu"
                 aria-expanded={importMenuOpen}
                 data-testid="miniapp-import-action"
-                icon={<Icon name="plus" size="sm" />}
+                icon={<Icon glyph={PackagePlus} size="sm" />}
               />
               {importMenuOpen ? createOverlayPortal(
                 <Menu
@@ -588,6 +569,7 @@ const MiniAppGalleryView: React.FC<MiniAppGalleryViewProps> = ({ tabs }) => {
       />
 
       <ConfirmDialog
+        anchor={deleteAnchor}
         open={pendingDeleteId !== null}
         onOpenChange={() => setPendingDeleteId(null)}
         onConfirm={handleDeleteConfirm}

@@ -42,6 +42,17 @@ describe('PendingQueueModule', () => {
     expect(window.localStorage.getItem(`flowChat.pendingQueue.${sessionId}`)).toBeNull();
   });
 
+  it('persists reserved turn IDs while retaining older queue entries without one', () => {
+    const sessionId = testSession();
+    pendingQueueManager.enqueue({ sessionId, content: 'legacy message' });
+    pendingQueueManager.enqueue({ sessionId, content: 'plan build', turnId: 'plan-turn' });
+    const key = `openbitfun.flowChat.pendingQueue.v1.${encodeURIComponent(JSON.stringify([LOCAL_SURFACE_ID, sessionId]))}`;
+    const roundTripped = JSON.parse(window.localStorage.getItem(key)!);
+    expect(roundTripped[0].turnId).toBeUndefined();
+    expect(roundTripped[1].turnId).toBe('plan-turn');
+    expect(roundTripped.map((item: { content: string }) => item.content)).toEqual(['legacy message', 'plan build']);
+  });
+
   it('promotes an existing item for explicit drain without rebuilding or losing its payload', () => {
     const sessionId = testSession();
     pendingQueueManager.enqueue({ sessionId, content: 'first' });
@@ -177,4 +188,17 @@ describe('PendingQueueModule', () => {
       }],
     )).toBe(true);
   });
+});
+
+
+it('persists reordered payloads and refuses to move a queue during an active send', () => {
+  const sessionId = testSession();
+  const first = pendingQueueManager.enqueue({ sessionId, content: 'first' });
+  const second = pendingQueueManager.enqueue({ sessionId, content: 'second', turnId: 'stable-turn' });
+  expect(pendingQueueManager.reorder(sessionId, second.id, first.id)).toBe(true);
+  const key = `openbitfun.flowChat.pendingQueue.v1.${encodeURIComponent(JSON.stringify([LOCAL_SURFACE_ID, sessionId]))}`;
+  expect(JSON.parse(window.localStorage.getItem(key)!).map((item: { content: string }) => item.content)).toEqual(['second', 'first']);
+  expect(JSON.parse(window.localStorage.getItem(key)!)[0].turnId).toBe('stable-turn');
+  pendingQueueManager.setStatus(sessionId, second.id, 'sending');
+  expect(pendingQueueManager.reorder(sessionId, first.id, second.id)).toBe(false);
 });

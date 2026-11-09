@@ -1,6 +1,7 @@
 /** Production composition for the window-wide device-surface controller. */
 
 import type { ITransportAdapter } from '@/infrastructure/api/adapters/base';
+import { getDeviceOpenIntent } from './deviceOpenIntent';
 import {
   createTransportAdapter,
   getTransportAdapter,
@@ -123,7 +124,6 @@ async function setPeerControllerActive(active: boolean, required: boolean): Prom
 }
 
 function emitPeerModeChanged(detail: { active: boolean; deviceId?: string }): void {
-  setPeerDeviceModeActiveFlag(detail.active);
   window.dispatchEvent(new CustomEvent('peer-mode:changed', { detail }));
 }
 
@@ -150,6 +150,7 @@ function createDependencies(): PeerDeviceSurfaceControllerDependencies {
     },
     resetProductSurface,
     reloadConfig: reloadConfigFromCurrentTransport,
+    deferConfigReload: () => getDeviceOpenIntent() !== null,
     rebootstrapWorkspaces: async (scope) => {
       await workspaceManager.reinitializeForPeerModeSwitch();
       scope.assertCurrent('rebootstrap device surface workspaces');
@@ -166,6 +167,7 @@ function createDependencies(): PeerDeviceSurfaceControllerDependencies {
         setTransportAdapter(current.adapter, current.surfaceId);
       });
     },
+    setPeerDeviceModeActiveFlag,
     emitPeerModeChanged,
     markSurfaceSwitched: markDeviceSurfaceSwitched,
     discardSurfaceState: surfaceId => {

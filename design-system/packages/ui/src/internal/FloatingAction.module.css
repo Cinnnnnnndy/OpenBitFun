@@ -24,6 +24,15 @@
     transition: opacity var(--openbitfun-motion-duration-fast) var(--openbitfun-motion-easing-standard);
   }
 
+  .action[data-floating-action-group] {
+    inline-size: max-content;
+  }
+
+  .action[data-floating-action-group] > button {
+    flex: 0 0 var(--_floating-action-size);
+    inline-size: var(--_floating-action-size);
+  }
+
   @media (hover: hover) and (pointer: fine) {
     .action {
       pointer-events: none;
@@ -33,11 +42,13 @@
       opacity: 0;
     }
 
-    .host:is(:hover, :focus-within, [data-openbitfun-preview-state="hover"], [data-openbitfun-preview-state="focus-visible"]) > .action {
+    /* Dialogs restore focus to their trigger. Pointer focus should not keep
+       actions exposed after hover ends; keyboard focus must still reveal them. */
+    .host:is(:hover, :focus-visible, :has(:focus-visible), [data-openbitfun-preview-state="hover"], [data-openbitfun-preview-state="focus-visible"]) > .action {
       pointer-events: auto;
     }
 
-    .host:is(:hover, :focus-within, [data-openbitfun-preview-state="hover"], [data-openbitfun-preview-state="focus-visible"]) > .action > button {
+    .host:is(:hover, :focus-visible, :has(:focus-visible), [data-openbitfun-preview-state="hover"], [data-openbitfun-preview-state="focus-visible"]) > .action > button {
       opacity: 1;
     }
   }

@@ -12,6 +12,7 @@ import { FlowChatReaderState } from '../../timeline/readerState';
 import { useTimelineInteraction } from '../../timeline/useTimelineInteraction';
 import { useFlowChatFollowOutput } from './useFlowChatFollowOutput';
 import { useFlowChatViewportOwner, type FlowChatViewportOwnerApi } from './useFlowChatViewportOwner';
+import { readFlowChatScrollTop } from './flowChatScrollCoordinates';
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 type Controller = ReturnType<typeof useFlowChatFollowOutput>;
@@ -21,6 +22,8 @@ describe('desktop follow ownership and lifecycle (supplied geometry, not visual 
   let frames: Map<number, FrameRequestCallback>, frameId: number, now: number;
   let normalTarget: number, floor: number | null, sentTop: number, output: boolean, renderable: boolean;
   let cancelledPlacements: number;
+  let layoutRevision: number;
+  let duringPlacement: (() => void) | undefined;
   let props: { session: string; active: boolean; suspended: boolean; opening: boolean; count: number; startAtTail: boolean; streaming: boolean };
   let reader: FlowChatReaderState;
   const placements: string[] = [];
@@ -29,17 +32,21 @@ describe('desktop follow ownership and lifecycle (supplied geometry, not visual 
     const ref = React.useRef<HTMLElement | null>(scroller);
     owner = useFlowChatViewportOwner(ref);
     controller = useFlowChatFollowOutput({
+      nativeEndOrigin: scroller.dataset.flowchatScrollOrigin === 'end',
       activeSessionId: props.session, virtualItemCount: props.count,
       isViewportActive: props.active, isViewportSuspended: () => props.suspended,
       isStreaming: props.streaming, startAtTailOnMount: props.startAtTail,
       scrollerRef: ref, viewportOwner: owner, viewportId: 1,
       isOpeningViewport: () => props.opening, onViewportOffset: value => readbacks.push(value),
       readLayoutTarget: () => Math.max(normalTarget, floor ?? 0),
+      readLayoutRevision: () => String(layoutRevision),
+      onLayoutReflow: () => { floor = null; },
       placeSubmittedMessage: intent => {
         if (!renderable) return null;
         floor = sentTop;
         if (!owner.write({ owner: 'follow-output', topPx: sentTop })) return null;
         placements.push(intent.turnId);
+        duringPlacement?.();
         return sentTop;
       },
       hasRenderedOutput: () => output,
@@ -66,7 +73,8 @@ describe('desktop follow ownership and lifecycle (supplied geometry, not visual 
     host = document.createElement('div'); scroller = document.createElement('div');
     document.body.append(host, scroller); root = createRoot(host);
     normalTarget = 1000; floor = null; sentTop = 1400; output = false; renderable = true;
-    cancelledPlacements = 0;
+    cancelledPlacements = 0; layoutRevision = 0;
+    duringPlacement = undefined;
     props = { session: 'session', active: true, suspended: false, opening: false, count: 2, startAtTail: true, streaming: true };
     reader = new FlowChatReaderState();
     frames = new Map(); frameId = 0; now = 0; placements.length = 0; readbacks.length = 0;
@@ -88,6 +96,67 @@ describe('desktop follow ownership and lifecycle (supplied geometry, not visual 
     expect(frames.size).toBe(0); expect(controller.isFollowingOutputNow()).toBe(true);
     normalTarget = 1250; signal(); expect(scroller.scrollTop).toBe(1250);
   });
+  it('repairs measured history above the viewport immediately without easing or losing stream lag', () => {
+    render(); settle();
+    normalTarget += 200;
+    signal(); tick();
+    const before = scroller.scrollTop;
+    const lag = controller.getFollowTargetScrollTop()! - before;
+    expect(lag).toBeGreaterThan(0);
+    normalTarget -= 300;
+    act(() => { expect(controller.shiftLayout(-300)).toBe(true); });
+    expect(scroller.scrollTop).toBe(before - 300);
+    expect(controller.getFollowTargetScrollTop()! - scroller.scrollTop).toBeCloseTo(lag);
+    signal(); settle();
+    expect(scroller.scrollTop).toBe(900);
+    normalTarget += 450;
+    act(() => { expect(controller.shiftLayout(450)).toBe(true); });
+    expect(scroller.scrollTop).toBe(1350);
+    signal(); settle();
+    expect(scroller.scrollTop).toBe(1350);
+  });
+  it('translates a reflow once across a native clamp and preserves only genuine output lag', () => {
+    let actual = 0;
+    Object.defineProperty(scroller, 'scrollTop', {
+      configurable: true,
+      get: () => Math.min(actual, scroller.scrollHeight - scroller.clientHeight),
+      set: value => { actual = Math.max(0, Math.min(value, scroller.scrollHeight - scroller.clientHeight)); },
+    });
+    render(); settle();
+    normalTarget = 1400; signal(); tick();
+    const before = scroller.scrollTop;
+    const lag = controller.getFollowTargetScrollTop()! - before;
+    floor = 1400; normalTarget = 1000; layoutRevision++;
+    signal(); // Releasing the floor clamps the browser before the registered write.
+    expect(scroller.scrollTop).toBeCloseTo(before - 400);
+    expect(controller.getFollowTargetScrollTop()! - scroller.scrollTop).toBeCloseTo(lag);
+    settle(); expect(scroller.scrollTop).toBe(1000);
+    floor = 1000; normalTarget = 600; layoutRevision++;
+    signal();
+    expect(scroller.scrollTop).toBe(600);
+    settle(); expect(scroller.scrollTop).toBe(600);
+  });
+  it('does not release layout space while another owner is navigating', () => {
+    render(); settle();
+    act(() => owner.claim('one-shot-navigation'));
+    floor = 1000; normalTarget = 600; layoutRevision++;
+    signal();
+    expect(floor).toBe(1000);
+    expect(scroller.scrollTop).toBe(1000);
+    act(() => owner.release('one-shot-navigation'));
+    act(() => owner.claim('follow-output'));
+    signal();
+    expect(floor).toBeNull(); expect(scroller.scrollTop).toBe(600);
+  });
+  it('does not use a layout correction to take ownership from a reader or navigation', () => {
+    render(); settle();
+    act(() => owner.claim('one-shot-navigation'));
+    expect(controller.shiftLayout(200)).toBe(false);
+    expect(scroller.scrollTop).toBe(1000);
+    depart();
+    expect(controller.shiftLayout(200)).toBe(false);
+    expect(controller.getFollowTargetScrollTop()).toBeNull();
+  });
   it('places a submitted user message once, waits at top until output crosses the reading line, then eases monotonically', () => {
     render(); submit(); expect(scroller.scrollTop).toBe(1400);
     output = true; normalTarget = 1350; signal(); settle();
@@ -98,11 +167,80 @@ describe('desktop follow ownership and lifecycle (supplied geometry, not visual 
     while (frames.size) { tick(); expect(scroller.scrollTop).toBeGreaterThanOrEqual(previous); previous = scroller.scrollTop; }
     expect(scroller.scrollTop).toBeCloseTo(1500, 0); expect(floor).toBe(1400);
   });
+  it('lands a large output batch without visiting intermediate virtual windows and leaves reader control intact', () => {
+    render(); submit(); output = true; normalTarget = 45000; signal();
+    const writesBefore = readbacks.length;
+    tick();
+    expect(scroller.scrollTop).toBe(45000);
+    expect(readbacks.slice(writesBefore)).toEqual([45000]);
+    expect(frames.size).toBe(0);
+    normalTarget = 45040; signal(); tick();
+    expect(scroller.scrollTop).toBeGreaterThan(45000);
+    expect(scroller.scrollTop).toBeLessThan(45040);
+    depart(); const readingTop = scroller.scrollTop;
+    normalTarget = 90000; signal(); settle();
+    expect(scroller.scrollTop).toBe(readingTop);
+  });
   it('does not place the same message again when completion notifies in a microtask', async () => {
     render(); submit();
     await act(async () => { await Promise.resolve(); });
     expect(placements).toEqual(['turn-2']);
     expect(controller.isFollowingOutputNow()).toBe(true);
+  });
+  it('consumes a submission once when measurement synchronously reenters follow', async () => {
+    render();
+    duringPlacement = () => controller.scheduleFollowToLatest();
+    submit();
+    await act(async () => { await Promise.resolve(); });
+    expect(placements).toEqual(['turn-2']);
+    expect(claimSubmittedMessageScrollIntent(props.session, 1)).toBeNull();
+    expect(controller.getFollowTargetScrollTop()).toBe(1400);
+  });
+  it.each(['reader', 'device', 'cancel'] as const)('does not restore follow after %s invalidation inside placement', async reason => {
+    render();
+    duringPlacement = () => {
+      duringPlacement = undefined;
+      if (reason === 'reader') controller.exitFollowOutput('reader-interaction');
+      else if (reason === 'device') activateSurface('peer');
+      else finishSubmittedMessageScrollIntent(claimSubmittedMessageScrollIntent(props.session, 1)!);
+    };
+    submit();
+    await act(async () => { await Promise.resolve(); });
+    expect(controller.isFollowingOutputNow()).toBe(false);
+    expect(controller.getFollowTargetScrollTop()).toBeNull();
+    expect(owner.currentOwner()).not.toBe('follow-output');
+  });
+  it('preserves a replacement submission registered during measurement', async () => {
+    render();
+    duringPlacement = () => {
+      duringPlacement = undefined;
+      registerSubmittedMessageScrollIntent(getActiveSurfaceScope(), props.session, 'replacement', 'user-replacement');
+    };
+    submit();
+    await act(async () => { await Promise.resolve(); });
+    expect(placements).toEqual(['turn-2', 'replacement']);
+    expect(claimSubmittedMessageScrollIntent(props.session, 1)).toBeNull();
+    expect(controller.getFollowTargetScrollTop()).toBe(1400);
+  });
+  it('releases the placement guard after a measurement failure', () => {
+    render();
+    duringPlacement = () => { throw new Error('Measurement failed'); };
+    expect(() => submit()).toThrow('Measurement failed');
+    duringPlacement = undefined;
+    signal();
+    expect(placements).toEqual(['turn-2']);
+  });
+  it('cancels a deferred send once while inactive and accepts a fresh send after reactivation', async () => {
+    render(); renderable = false; submit();
+    props.active = false; render();
+    for (let i = 0; i < 5; i++) render();
+    expect(cancelledPlacements).toBe(1);
+    expect(controller.isFollowingOutputNow()).toBe(false);
+    props.active = true; renderable = true; render(); signal();
+    expect(placements).toEqual([]);
+    submit('fresh');
+    await act(async () => { await Promise.resolve(); });
+    expect(placements).toEqual(['fresh']);
   });
   it('does not let a tall user message start following before assistant output exists', () => {
     render(); submit(); normalTarget = 2100; signal(); settle(); expect(scroller.scrollTop).toBe(1400);
@@ -127,6 +265,53 @@ describe('desktop follow ownership and lifecycle (supplied geometry, not visual 
     normalTarget = 1200; signal(); settle();
     expect(scroller.scrollTop).toBe(1200); expect(frames.size).toBe(0);
   });
+  it.each([16, 5].flatMap(interval => [1, 0.8].flatMap(quantum => ['start', 'end'].map(origin => ({ interval, quantum, origin })))))
+  ('finishes quantized follow without losing the ease ($origin origin, $quantum px, $interval ms)', ({ interval, quantum, origin }) => {
+    props.startAtTail = false;
+    scroller.dataset.flowchatScrollOrigin = origin;
+    let actual = origin === 'end' ? -80 : 920;
+    Object.defineProperty(scroller, 'scrollTop', { configurable: true,
+      get: () => actual,
+      set: value => { actual = Math.floor(value / quantum) * quantum; },
+    });
+    render();
+    act(() => controller.enterFollowOutput('jump-to-latest'));
+    expect(readFlowChatScrollTop(scroller)).toBe(920);
+    tick(interval);
+    expect(readFlowChatScrollTop(scroller)).toBeGreaterThan(920);
+    expect(readFlowChatScrollTop(scroller)).toBeLessThan(1000);
+    let previous = readFlowChatScrollTop(scroller);
+    for (let elapsed = interval; elapsed < 1000 && frames.size; elapsed += interval) {
+      tick(interval);
+      const position = readFlowChatScrollTop(scroller);
+      expect(position).toBeGreaterThanOrEqual(previous);
+      expect(position).toBeLessThanOrEqual(1000);
+      previous = position;
+    }
+    expect(readFlowChatScrollTop(scroller)).toBe(1000);
+    expect(frames.size).toBe(0);
+    expect(controller.isFollowingOutputNow()).toBe(true);
+    expect(readbacks.at(-1)).toBe(1000);
+  });
+  it('does not accumulate unapplied travel while a higher-priority writer refuses follow', () => {
+    let actual = 0;
+    Object.defineProperty(scroller, 'scrollTop', { configurable: true,
+      get: () => actual, set: value => { actual = Math.floor(value); },
+    });
+    render(); settle();
+    normalTarget = 1002; signal(); tick();
+    expect(scroller.scrollTop).toBe(1000);
+    act(() => owner.claim('one-shot-navigation', { holdForMs: 2000 }));
+    const published = readbacks.length;
+    for (let elapsed = 0; elapsed < 500; elapsed += 16) tick();
+    expect(scroller.scrollTop).toBe(1000);
+    expect(readbacks.length).toBe(published);
+    act(() => owner.release('one-shot-navigation'));
+    tick(); expect(scroller.scrollTop).toBe(1000);
+    settle(); expect(scroller.scrollTop).toBe(1002); expect(frames.size).toBe(0);
+    depart(); scroller.scrollTop = 900; normalTarget = 1200; signal(); settle();
+    expect(scroller.scrollTop).toBe(900); expect(frames.size).toBe(0);
+  });
   it.each(['complete', 'stop', 'error'])('keeps a short reply top-aligned on %s and explicit bottom navigation', () => {
     render(); submit(); output = true; normalTarget = 1200; props.streaming = false; render(); settle();
     expect(scroller.scrollTop).toBe(1400); expect(floor).toBe(1400);
@@ -148,7 +333,7 @@ describe('desktop follow ownership and lifecycle (supplied geometry, not visual 
   });
   it('releases a cancelled submission before its row has rendered', async () => {
     render(); renderable = false; submit();
-    cancelledPlacements = 0;
+    cancelledPlacements = 0; layoutRevision = 0;
     const intent = claimSubmittedMessageScrollIntent(props.session, 1, true)!;
     await act(async () => {
       finishSubmittedMessageScrollIntent(intent);

@@ -4,6 +4,11 @@ import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
+import React from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import remarkMath from 'remark-math';
 
 const testDirectory = path.dirname(fileURLToPath(import.meta.url));
 const sourceDirectory = path.resolve(testDirectory, '../src');
@@ -320,6 +325,132 @@ test('mobile transcript keeps one user bubble and projects file cards outside ma
   assert.doesNotMatch(markdownLinkRenderer, /<FileCard/);
   assert.match(markdownStyles, /\.message-file-cards\s*\{[\s\S]*?display:\s*grid;/);
   assert.match(markdownStyles, /\.file-card\s*\{[\s\S]*?inline-size:\s*100%;/);
+});
+
+test('mobile chat markdown lazily loads katex plugins and keeps mobile display styles', async () => {
+  const markdown = await readFile(path.join(sourceDirectory, 'components/ChatMarkdown.tsx'), 'utf8');
+  const math = await readFile(path.join(sourceDirectory, 'components/MarkdownMathContent.tsx'), 'utf8');
+  const mathDelimiters = await readFile(path.join(sourceDirectory, 'components/chatMarkdownMath.ts'), 'utf8');
+  const markdownStyles = await readFile(path.join(sourceDirectory, 'styles/components/markdown.scss'), 'utf8');
+
+  // KaTeX stays out of the chat chunk: only the math-capable renderer imports
+  // its plugins and styles, and ChatMarkdown loads it on demand.
+  assert.match(math, /import rehypeKatex from 'rehype-katex';/);
+  assert.match(math, /import remarkMath from 'remark-math';/);
+  assert.match(math, /import 'katex\/dist\/katex\.min\.css';/);
+  assert.match(math, /remarkPlugins=\{\[\[remarkGfm,\s*chatMarkdownGfmOptions\],\s*\[remarkMath,\s*\{\s*singleDollarTextMath:\s*false\s*\}\]\]\}/);
+  assert.match(math, /rehypePlugins=\{\[\[rehypeKatex,\s*\{\s*strict:\s*false,\s*throwOnError:\s*false\s*\}\]\]\}/);
+  assert.match(markdown, /import\('\.\/MarkdownMathContent'\)/);
+  assert.match(markdown, /mayContainMarkdownMath\(content\)/);
+  assert.match(markdown, /hasMath && MathRenderer/);
+  assert.doesNotMatch(markdown, /from 'remark-math'|from 'rehype-katex'|katex\.min\.css/);
+  assert.match(mathDelimiters, /export function normalizeMathDelimiters/);
+  assert.match(mathDelimiters, /export function mayContainMarkdownMath/);
+
+  assert.match(markdownStyles, /\.katex-display\s*\{[\s\S]*?overflow-x:\s*auto;/);
+  assert.match(markdownStyles, /\.katex-display\s*\{[\s\S]*?-webkit-overflow-scrolling:\s*touch;/);
+  assert.match(markdownStyles, /\.katex\s*\{[\s\S]*?font-size:\s*var\(--openbitfun-type-body-lg-font-size\);/);
+  assert.match(markdownStyles, /\.katex\s*\{[\s\S]*?line-height:\s*var\(--openbitfun-type-modifier-leading-dense-line-height\);/);
+  assert.match(markdownStyles, /\.katex-error\s*\{[\s\S]*?color:\s*var\(--openbitfun-color-status-danger-content\);/);
+});
+
+test('mobile chat markdown keeps single tildes literal in both renderers, like desktop chat', async () => {
+  const markdown = await readFile(path.join(sourceDirectory, 'components/ChatMarkdown.tsx'), 'utf8');
+  const math = await readFile(path.join(sourceDirectory, 'components/MarkdownMathContent.tsx'), 'utf8');
+  const options = await readFile(path.join(sourceDirectory, 'components/chatMarkdownGfm.ts'), 'utf8');
+  const code = ts.transpileModule(options, { compilerOptions: { module: ts.ModuleKind.ESNext } }).outputText;
+  const { chatMarkdownGfmOptions } = await import(`data:text/javascript;base64,${Buffer.from(code).toString('base64')}`);
+  for (const renderer of [markdown, math]) {
+    assert.match(renderer, /import \{ chatMarkdownGfmOptions \} from '\.\/chatMarkdownGfm';/);
+    assert.match(renderer, /\[remarkGfm,\s*chatMarkdownGfmOptions\]/);
+    assert.doesNotMatch(renderer, /remarkPlugins=\{\[remarkGfm[,\]]/);
+  }
+  const cases = [
+    ['24~30°C, rain 1~2mm; ~5 min; ~plain~', '24~30°C, rain 1~2mm; ~5 min; ~plain~'],
+    ['~~removed~~', '<del>removed</del>'],
+    [String.raw`\~escaped\~; \~~literal\~~`, '~escaped~; ~~literal~~'],
+    ['`~~code~~`', '<code>~~code~~</code>'],
+    ['before ~~~literal~~~ after', 'before ~~~literal~~~ after'],
+    ['~~ a~~; ~~b ~~; ~~unfinished', '~~ a~~; ~~b ~~; ~~unfinished'],
+    [String.raw`~~a\~~b~~`, '<del>a~~b</del>'],
+    ['24~30°C; ~~removed~', '24~30°C; ~~removed~'],
+  ];
+  for (const extraPlugins of [[], [[remarkMath, { singleDollarTextMath: false }]]]) {
+    for (const [source, expected] of cases) {
+      const html = renderToStaticMarkup(React.createElement(ReactMarkdown, {
+        remarkPlugins: [[remarkGfm, chatMarkdownGfmOptions], ...extraPlugins],
+      }, source));
+      assert.equal(html, `<p>${expected}</p>`, source);
+    }
+  }
+});
+
+test('math activation ignores currency-only dollar pairs', async () => {
+  const mathDelimiters = await readFile(path.join(sourceDirectory, 'components/chatMarkdownMath.ts'), 'utf8');
+  const code = ts.transpileModule(mathDelimiters, { compilerOptions: { module: ts.ModuleKind.ESNext } }).outputText;
+  const { mayContainMarkdownMath: mayContain } = await import(`data:text/javascript;base64,${Buffer.from(code).toString('base64')}`);
+
+  assert.equal(mayContain(''), false);
+  assert.equal(mayContain('plain text without math'), false);
+  assert.equal(mayContain('Cost is $5 and $10.'), false, 'currency amounts must not activate math rendering');
+  assert.equal(mayContain('Inline $x$'), true);
+  assert.equal(mayContain('Display $$E=mc^2$$'), true);
+  assert.equal(mayContain('Bracket \\(x\\)'), true);
+  assert.equal(mayContain('Bracket \\[x\\]'), true);
+});
+
+test('normalizeMathDelimiters protects code blocks and normalizes LaTeX delimiters', async () => {
+  const mathDelimiters = await readFile(path.join(sourceDirectory, 'components/chatMarkdownMath.ts'), 'utf8');
+  const code = ts.transpileModule(mathDelimiters, { compilerOptions: { module: ts.ModuleKind.ESNext } }).outputText;
+  const { normalizeMathDelimiters: normalize } = await import(`data:text/javascript;base64,${Buffer.from(code).toString('base64')}`);
+
+  // Empty or plain text without math brackets or raw dollar blocks
+  assert.equal(normalize(''), '');
+  assert.equal(normalize('plain text with $10 and $20'), 'plain text with $10 and $20');
+
+  // Inline bracket \( ... \) becomes inline $$ ... $$ math.
+  assert.equal(normalize('Inline \\( a + b = c \\) math'), 'Inline $$a + b = c$$ math');
+
+  // A display bracket that owns its line becomes a block; inside a container
+  // it stays inline so the list, table, or quote is not torn apart.
+  assert.match(normalize('\\[\\frac{1}{2}\\]'), /\$\$\s*\n\\frac\{1\}\{2\}\n\s*\$\$/);
+  assert.equal(normalize('Block \\[\\frac{1}{2}\\] math'), 'Block $$\\frac{1}{2}$$ math');
+  assert.equal(normalize('- Energy: $$E=mc^2$$'), '- Energy: $$E=mc^2$$');
+  assert.equal(normalize('| \\[x^2\\] | 2 |'), '| $$x^2$$ | 2 |');
+  assert.equal(normalize('> \\[x^2\\]'), '> $$x^2$$');
+
+  // Single line $$...$$ is a block only at a top-level line start.
+  assert.match(normalize('$$E=mc^2$$'), /\$\$\s*\nE=mc\^2\n\s*\$\$/);
+  assert.equal(normalize('Formula: $$E=mc^2$$'), 'Formula: $$E=mc^2$$');
+
+  // Single-dollar math is widened to $$ so remark-math can parse it with
+  // singleDollarTextMath disabled; currency, shell variables, and paths stay text.
+  assert.equal(normalize('Inline $x$ and $y$'), 'Inline $$x$$ and $$y$$');
+  assert.equal(normalize('The $n$th term'), 'The $$n$$th term');
+  assert.equal(normalize('Cost $5; formula \\(x\\)'), 'Cost $5; formula $$x$$');
+  assert.equal(normalize('Cost is $5 and $10.'), 'Cost is $5 and $10.');
+  assert.equal(normalize('Use $HOME and $PATH'), 'Use $HOME and $PATH');
+  assert.equal(normalize('Use ${HOME} and ${PATH}'), 'Use ${HOME} and ${PATH}');
+  assert.equal(normalize('C:\\[data\\]\\file.txt'), 'C:\\[data\\]\\file.txt');
+
+  // Escaped delimiters are literal text, not math.
+  assert.equal(normalize('Escaped \\\\[index\\\\] and \\\\(x\\\\)'), 'Escaped \\\\[index\\\\] and \\\\(x\\\\)');
+
+  // Code fence with special replacement patterns ($$, $&, $1) and escaped characters must not be corrupted
+  const codeFenceSample = 'Formula \\(x\\)\n```bash\necho $$ $1 $&\n```\nDone';
+  const codeFenceNormalized = normalize(codeFenceSample);
+  assert.ok(codeFenceNormalized.includes('echo $$ $1 $&'), 'code blocks must preserve literal $$ and $& without replace corruption');
+  assert.ok(codeFenceNormalized.includes('$$x$$'), 'formula outside code fence must be normalized');
+
+  // Blockquoted fences are code too.
+  const quotedFence = '> ```bash\n> echo \\(x\\)\n> ```';
+  assert.equal(normalize(quotedFence), quotedFence);
+
+  // Multi-backtick inline code with internal backtick or brackets
+  const multiBacktickSample = 'Look at ``code ` with \\[index\\] inside`` and \\(y\\)';
+  const multiBacktickNormalized = normalize(multiBacktickSample);
+  assert.ok(multiBacktickNormalized.includes('``code ` with \\[index\\] inside``'), 'multi-backtick inline code must be preserved verbatim');
+  assert.ok(multiBacktickNormalized.includes('$y$'), 'formula outside inline code must be normalized');
 });
 
 test('mobile file card failures stay readable and repeatable', async () => {

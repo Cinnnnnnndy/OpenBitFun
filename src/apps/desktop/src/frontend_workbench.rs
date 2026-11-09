@@ -348,9 +348,8 @@ impl FrontendWorkbenchManager {
         self: &Arc<Self>,
         request: FrontendWorkbenchHostRequest,
     ) -> Result<Value, String> {
-        ensure_local_confirmation_surface(
-            crate::api::peer_host_invoke::attached_controllers().len(),
-        )?;
+        // Core admits the invoking turn's origin. Peer event subscribers may
+        // remain attached while the user customizes the visible local desktop.
         match request.action.as_str() {
             "prepare" => self.prepare(),
             "status" => self.status(),
@@ -949,14 +948,14 @@ impl FrontendWorkbenchManager {
         transaction_id: Option<&str>,
     ) -> Result<(), String> {
         let url = revision_frontend_url_value(revision_id, transaction_id)?;
-        let window = app
-            .get_webview_window("main")
+        let webview = app
+            .get_webview("main")
             .ok_or_else(|| "Main window is unavailable".to_string())?;
         {
             let mut navigation = self.main_navigation.lock().map_err(lock_error)?;
             navigation.armed_url = Some(url.clone());
         }
-        if let Err(error) = window.navigate(url.clone()) {
+        if let Err(error) = webview.navigate(url.clone()) {
             if let Ok(mut navigation) = self.main_navigation.lock() {
                 if navigation
                     .armed_url
@@ -1231,16 +1230,6 @@ impl FrontendWorkbenchManager {
     }
 }
 
-fn ensure_local_confirmation_surface(attached_peer_controllers: usize) -> Result<(), String> {
-    if attached_peer_controllers > 0 {
-        return Err(
-            "FrontendWorkbench is unavailable while this OpenBitFun host is controlled through Peer Device Mode; run Creative mode on the visible local desktop instead"
-                .to_string(),
-        );
-    }
-    Ok(())
-}
-
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FrontendUpdateDecisionRequest {
@@ -1250,10 +1239,10 @@ pub struct FrontendUpdateDecisionRequest {
 #[tauri::command]
 pub async fn frontend_update_candidate_ready(
     state: tauri::State<'_, Arc<FrontendWorkbenchManager>>,
-    webview: tauri::WebviewWindow,
+    webview: tauri::Webview,
     request: FrontendUpdateDecisionRequest,
 ) -> Result<Value, String> {
-    require_main_window(&webview)?;
+    require_main_webview(&webview)?;
     let document_url = webview
         .url()
         .map_err(|error| format!("Failed to inspect the main frontend URL: {error}"))?;
@@ -1270,10 +1259,10 @@ pub struct FrontendUpdateFailureRequest {
 #[tauri::command]
 pub async fn frontend_update_candidate_failed(
     state: tauri::State<'_, Arc<FrontendWorkbenchManager>>,
-    webview: tauri::WebviewWindow,
+    webview: tauri::Webview,
     request: FrontendUpdateFailureRequest,
 ) -> Result<Value, String> {
-    require_main_window(&webview)?;
+    require_main_webview(&webview)?;
     let url = webview.url().map_err(|error| error.to_string())?;
     state.mark_candidate_failed(&request.transaction_id, &url, &request.message)
 }
@@ -1318,7 +1307,7 @@ fn require_confirmation_window(webview: &tauri::WebviewWindow) -> Result<(), Str
     Ok(())
 }
 
-fn require_main_window(webview: &tauri::WebviewWindow) -> Result<(), String> {
+fn require_main_webview(webview: &tauri::Webview) -> Result<(), String> {
     if webview.label() != "main" {
         return Err("Frontend readiness can only be reported by the main window".to_string());
     }
@@ -2025,12 +2014,32 @@ mod tests {
         assert!(validate_revision_id("creative-38e14f63-30ad-4ad7-9e4e-5ad556450ba3").is_ok());
     }
 
-    #[test]
-    fn peer_control_requires_a_visible_local_confirmation_surface() {
-        assert!(ensure_local_confirmation_surface(0).is_ok());
-        let error = ensure_local_confirmation_surface(1)
-            .expect_err("peer-controlled frontend updates must fail loudly");
-        assert!(error.contains("Peer Device Mode"));
+    #[tokio::test]
+    async fn local_frontend_workbench_requests_ignore_background_peer_subscribers() {
+        struct AttachedController(String);
+        impl Drop for AttachedController {
+            fn drop(&mut self) {
+                crate::api::peer_host_invoke::detach_controller(&self.0);
+            }
+        }
+        let controller = AttachedController(format!("workbench-test-{}", Uuid::new_v4()));
+        crate::api::peer_host_invoke::attach_controller(controller.0.clone());
+        assert!(crate::api::peer_host_invoke::attached_controllers().contains(&controller.0));
+
+        let root = tempfile::tempdir().unwrap();
+        let manager = overlay_manager(root.path(), "installed product");
+        let result = manager
+            .handle_tool_request(FrontendWorkbenchHostRequest {
+                action: "prepare".into(),
+                draft_id: None,
+                command_id: None,
+                arguments: None,
+            })
+            .await
+            .expect("local customization remains available with Peer subscribers");
+        let draft = PathBuf::from(result["draftPath"].as_str().unwrap());
+        assert!(draft.join(overrides::CSS).is_file());
+        assert!(draft.join(overrides::JS).is_file());
     }
 
     #[test]

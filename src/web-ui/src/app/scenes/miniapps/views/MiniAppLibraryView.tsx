@@ -1,11 +1,10 @@
-import { subscribeOverlayInteraction, createOverlayPortal,
+import { captureConfirmationAnchor, subscribeOverlayInteraction, createOverlayPortal,
   Button,
   ConfirmDialog,
   Icon,
   IconButton,
   Menu,
   MenuItem,
-  NumberBadge,
   SearchField,
   Select,
   StatusPill,
@@ -21,10 +20,9 @@ import {
   PackagePlus,
   ShieldCheck,
 } from 'lucide-react';
-import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 
 import {
-  GalleryDetailModal,
   GalleryEmpty,
   GalleryLayout,
   GalleryPageHeader,
@@ -33,13 +31,11 @@ import {
 import { MarketList } from '@/app/components/GalleryLayout/MarketList';
 import { MarketImage } from '@/app/components/GalleryLayout/MarketImage';
 import { getInteractionMotion } from '@/shared/utils/motionPreference';
+import { HARNESS_PRESENTATION } from '@/shared/agents/harnessPresentation';
 import { getActiveSurfaceScope, onSurfaceActivated } from '@/infrastructure/peer-device/deviceSurface';
-import { openMainSession } from '@/flow_chat/services/sessionActivation';
 import { useGallerySceneAutoRefresh } from '@/app/hooks/useGallerySceneAutoRefresh';
 import { useSceneManager } from '@/app/hooks/useSceneManager';
-import { flowChatSessionConfigForCurrentWorkspace } from '@/app/utils/projectSessionWorkspace';
 import { AccountIdentityControls } from '@/features/market-account';
-import { flowChatManager } from '@/flow_chat/services/FlowChatManager';
 import type {
   MiniAppMeta,
   MiniAppPermissions,
@@ -57,27 +53,40 @@ import { systemAPI } from '@/infrastructure/api/service-api/SystemAPI';
 import { getAppearanceOverlayHost } from '@/infrastructure/appearance/runtime/AppearanceOverlayHost';
 import { useCurrentWorkspace } from '@/infrastructure/contexts/WorkspaceContext';
 import { useI18n } from '@/infrastructure/i18n';
+import { isPeerDeviceModeActive } from '@/infrastructure/peer-device/peerModeFlag';
 import { useAccountIdentity } from '@/infrastructure/account-identity';
 import { useNotification } from '@/shared/notification-system';
 import { isRemoteWorkspace } from '@/shared/types';
 import { isImeOwnedKeyboardEvent } from '@/shared/utils/ime';
 import { createLogger } from '@/shared/utils/logger';
 import { useAnchoredPopoverPosition } from '@/shared/utils/useAnchoredPopoverPosition';
-import MiniAppDetailModal from '../components/MiniAppDetailModal';
+import { MiniAppInstalledDetailPage } from '../components/MiniAppDetailModal';
+import { MiniAppDetailBackButton, MiniAppDetailPage } from '../components/MiniAppDetailPage';
+import MiniAppInstalledCard from '../components/MiniAppInstalledCard';
 import MiniAppLibraryRow, {
   type MiniAppLibraryStatus,
 } from '../components/MiniAppLibraryRow';
 import { useMiniAppActivity } from '../hooks/useMiniAppActivity';
 import { getMiniAppSceneId, stopMiniAppActivity } from '../miniAppActivity';
 import { useMiniAppStore } from '../miniAppStore';
+import { useMiniAppCreation } from '../hooks/useMiniAppCreation';
 import { loadInstalledMarketOrigins } from '../utils/loadInstalledMarketOrigins';
-import { getMiniAppShowcaseAsset } from '../utils/miniAppIcons';
+import { getMiniAppShowcaseAsset, renderMiniAppIcon } from '../utils/miniAppIcons';
 import { pickLocalizedString, pickLocalizedTags } from '../utils/pickLocalizedString';
-import { buildMiniAppLibraryItems, type MiniAppLibraryItem } from './miniAppLibraryItems';
+import { buildMiniAppLibraryItems, selectMiniAppLibraryItems, type MiniAppLibraryCatalog, type MiniAppLibraryItem } from './miniAppLibraryItems';
 import { buildReleaseHistory } from './miniAppReleaseHistory';
 import './MiniAppLibraryView.scss';
+import { hasLocalMiniAppPresentation, miniAppPresentationAPI } from '@/infrastructure/api/service-api/MiniAppPresentationAPI';
+import { useMiniAppPresentationStore } from '../miniAppPresentationStore';
+import { useMiniAppLaunch } from '../hooks/useMiniAppLaunch';
+import { MiniAppLaunchActions } from '../components/MiniAppLaunchActions';
+import { MiniAppSystemAppActions } from '../components/MiniAppSystemAppActions';
+import { useMiniAppSystemInstallation } from '../hooks/useMiniAppSystemInstallation';
+import { MiniAppNavigationAction } from '../components/MiniAppNavigationAction';
+import { useMiniAppNavigationStore } from '../miniAppNavigationStore';
 
 const log = createLogger('MiniAppLibraryView');
+const MINIAPP_MARKET_WEBSITE_URL = 'https://market.openbitfun.com/miniapp/';
 const CATEGORIES = [
   'all',
   'developer',
@@ -95,9 +104,17 @@ type Translate = (key: string, params?: Record<string, unknown>) => string;
 
 interface MiniAppLibraryViewProps {
   tabs?: React.ReactNode;
+  catalog: MiniAppLibraryCatalog;
+  children?: React.ReactNode;
+  toolbarActions?: React.ReactNode;
+  initialDetailApp?: MiniAppMeta;
+  onDetailBack?: () => void;
+  detailBackLabel?: string;
 }
 
-const MiniAppLibraryContent: React.FC<MiniAppLibraryViewProps> = ({ tabs }) => {
+const MiniAppLibraryContent: React.FC<MiniAppLibraryViewProps> = ({
+  tabs, catalog, children, toolbarActions, initialDetailApp, onDetailBack, detailBackLabel,
+}) => {
   const [surfaceScope] = useState(getActiveSurfaceScope);
   const apps = useMiniAppStore((state) => state.apps);
   const loading = useMiniAppStore((state) => state.loading);
@@ -112,10 +129,13 @@ const MiniAppLibraryContent: React.FC<MiniAppLibraryViewProps> = ({ tabs }) => {
   const markWorkerStopped = useMiniAppStore((state) => state.markWorkerStopped);
   const { workspace, workspacePath } = useCurrentWorkspace();
   const notification = useNotification();
-  const { openScene, activateScene, closeScene, openTabs } = useSceneManager();
+  const { closeScene, openTabs } = useSceneManager();
   const { t, formatNumber, currentLanguage } = useI18n('scenes/miniapp');
   const miniAppActivities = useMiniAppActivity();
   const { me } = useAccountIdentity();
+  const launch = useMiniAppLaunch();
+  const systemInstallation = useMiniAppSystemInstallation(launch.supported);
+  const presentationSnapshot = useMiniAppPresentationStore(state => state.snapshot);
 
   const [query, setQuery] = useState('');
   const [category, setCategory] = useState<MiniAppCategory>('all');
@@ -123,7 +143,7 @@ const MiniAppLibraryContent: React.FC<MiniAppLibraryViewProps> = ({ tabs }) => {
   const [cachedPage] = useState(() => miniAppMarketAPI.getCachedPage({ query: '', category: 'all', sort: 'downloads', limit: 30 }));
   const [marketItems, setMarketItems] = useState<MarketListingSummary[]>(cachedPage?.items ?? []);
   const [nextCursor, setNextCursor] = useState<string | undefined>(cachedPage?.nextCursor);
-  const [catalogLoading, setCatalogLoading] = useState(true);
+  const [catalogLoading, setCatalogLoading] = useState(!cachedPage);
   const [loadingMore, setLoadingMore] = useState(false);
   const [catalogError, setCatalogError] = useState<string>();
   const [detail, setDetail] = useState<MarketListingDetail>();
@@ -135,19 +155,54 @@ const MiniAppLibraryContent: React.FC<MiniAppLibraryViewProps> = ({ tabs }) => {
   const [busyListingId, setBusyListingId] = useState<string>();
   const [installPrompt, setInstallPrompt] = useState(false);
   const [releasesExpanded, setReleasesExpanded] = useState(false);
+  const [deleteAnchor, setDeleteAnchor] = useState<ReturnType<typeof captureConfirmationAnchor>>(undefined);
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
-  const [selectedApp, setSelectedApp] = useState<MiniAppMeta | null>(null);
+  const [selectedApp, setSelectedApp] = useState<MiniAppMeta | null>(initialDetailApp ?? null);
+  const selectedInstance = presentationSnapshot?.instances.find(instance => instance.appId === selectedApp?.id);
   const [pendingPackage, setPendingPackage] = useState<{
     path: string;
     inspection: MarketPackageInspection;
   } | null>(null);
   const [importMenuOpen, setImportMenuOpen] = useState(false);
-  const [creatingWithCreative, setCreatingWithCreative] = useState(false);
+  const { creating: creatingWithCreative, createMiniApp } = useMiniAppCreation();
   const importTriggerRef = useRef<HTMLButtonElement>(null);
   const importMenuRef = useRef<HTMLDivElement>(null);
   const catalogRequestRef = useRef(0);
+  const loadedCatalogKeyRef = useRef<string | null>(cachedPage ? JSON.stringify(['', 'all', 'downloads']) : null);
   const animateList = useRef(true);
   const detailRequestRef = useRef(0);
+  const catalogContentRef = useRef<HTMLDivElement>(null);
+  const catalogScrollTop = useRef(0);
+  const catalogFocus = useRef<HTMLElement | null>(null);
+  const showingDetail = Boolean(selectedApp) || detailOpen;
+
+  const rememberCatalogPosition = useCallback(() => {
+    if (!catalogContentRef.current || catalogContentRef.current.hidden) return;
+    catalogScrollTop.current = catalogContentRef.current.closest('.gallery-layout__body')?.scrollTop ?? 0;
+    catalogFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  }, []);
+
+  useLayoutEffect(() => {
+    const scrollArea = catalogContentRef.current?.closest('.gallery-layout__body');
+    if (scrollArea) scrollArea.scrollTop = showingDetail ? 0 : catalogScrollTop.current;
+    if (!showingDetail && catalogFocus.current?.isConnected) {
+      catalogFocus.current.focus({ preventScroll: true });
+    }
+  }, [showingDetail]);
+
+  const closeDetail = () => {
+    detailRequestRef.current += 1;
+    setSelectedApp(null);
+    setDetailOpen(false);
+    setDetailLoading(false);
+    onDetailBack?.();
+  };
+
+  const openInstalledDetail = (app: MiniAppMeta) => {
+    rememberCatalogPosition();
+    setDetailOpen(false);
+    setSelectedApp(app);
+  };
 
   const importMenuLayout = useAnchoredPopoverPosition({
     open: importMenuOpen,
@@ -193,26 +248,42 @@ const MiniAppLibraryContent: React.FC<MiniAppLibraryViewProps> = ({ tabs }) => {
     () => new Map(miniAppActivities.map((activity) => [activity.app.id, activity])),
     [miniAppActivities],
   );
-  const activeIdSet = useMemo(() => new Set(activityById.keys()), [activityById]);
+  const activeIdSet = useMemo(() => new Set([
+    ...activityById.keys(),
+    ...(hasLocalMiniAppPresentation() ? presentationSnapshot?.instances.map(instance => instance.appId) ?? [] : []),
+  ]), [activityById, presentationSnapshot]);
   const customizingIdSet = useMemo(() => new Set(customizingAppIds), [customizingAppIds]);
 
-  const handleOpenApp = useCallback((appId: string) => {
-    setSelectedApp(null);
-    setDetailOpen(false);
-    const tabId = getMiniAppSceneId(appId);
-    if (openTabIds.has(tabId)) {
-      activateScene(tabId);
-    } else {
-      openScene(tabId);
-    }
-  }, [activateScene, openScene, openTabIds]);
+  const handleOpenApp = (appId: string, kind: 'tab' | 'window' = 'tab', trigger?: HTMLElement) => {
+    const icon = useMiniAppStore.getState().apps.find(app => app.id === appId)?.icon
+      ?? (selectedApp?.id === appId ? selectedApp.icon : undefined);
+    void launch.openApp(appId, kind, icon, captureConfirmationAnchor(trigger));
+  };
 
-  const fetchCatalog = useCallback(async (cursor?: string, append = false) => {
+  const handleAddToSystem = async (app: MiniAppMeta) => {
+    if (!launch.supported || !surfaceScope.isCurrent()) return;
+    const instance = useMiniAppPresentationStore.getState().snapshot?.instances.find(item => item.appId === app.id);
+    await systemInstallation.install(app, instance ? instance.workspacePath : workspacePath);
+  };
+
+  const renderLaunchActions = (appId: string, disabled = false, presentation: 'buttons' | 'menu' = 'buttons') => (
+    <MiniAppLaunchActions
+      presentation={presentation}
+      disabled={disabled}
+      busy={launch.busyAppIds.includes(appId)}
+      windowSupported={launch.supported}
+      onOpenTab={trigger => handleOpenApp(appId, 'tab', trigger)}
+      onOpenWindow={trigger => handleOpenApp(appId, 'window', trigger)}
+    />
+  );
+
+  const fetchCatalog = useCallback(async (cursor?: string, append = false, background = false) => {
     if (!surfaceScope.isCurrent()) return;
     const requestId = ++catalogRequestRef.current;
+    const catalogKey = JSON.stringify([query, category, sort]);
     if (append) setLoadingMore(true);
     else {
-      setCatalogLoading(true);
+      setCatalogLoading(!(background && loadedCatalogKeyRef.current === catalogKey));
       setLoadingMore(false);
     }
     setCatalogError(undefined);
@@ -228,6 +299,7 @@ const MiniAppLibraryContent: React.FC<MiniAppLibraryViewProps> = ({ tabs }) => {
       if (requestId !== catalogRequestRef.current) return;
       setMarketItems((current) => append ? [...current, ...page.items] : page.items);
       setNextCursor(page.nextCursor);
+      loadedCatalogKeyRef.current = catalogKey;
     } catch (loadError) {
       if (requestId !== catalogRequestRef.current) return;
       log.error('Failed to load MiniApp marketplace catalog', loadError);
@@ -243,7 +315,7 @@ const MiniAppLibraryContent: React.FC<MiniAppLibraryViewProps> = ({ tabs }) => {
 
   useEffect(() => {
     const timeout = window.setTimeout(() => {
-      void fetchCatalog(undefined, false);
+      void fetchCatalog(undefined, false, true);
     }, 250);
     return () => {
       window.clearTimeout(timeout);
@@ -254,7 +326,8 @@ const MiniAppLibraryContent: React.FC<MiniAppLibraryViewProps> = ({ tabs }) => {
 
   const refetchMiniAppLibrary = useCallback(async () => {
     if (!surfaceScope.isCurrent()) return;
-    setLoading(true);
+    // The startup catalog owner manages initial loading. A return refresh must
+    // neither replace a valid empty view nor clear another owner's pending load.
     try {
       const [refreshed, running, origins] = await Promise.all([
         miniAppAPI.listMiniApps(),
@@ -265,14 +338,15 @@ const MiniAppLibraryContent: React.FC<MiniAppLibraryViewProps> = ({ tabs }) => {
       setApps(refreshed);
       setRunningWorkerIds(running);
       setMarketOrigins(origins);
-      await fetchCatalog(undefined, false);
     } catch (error) {
       if (!surfaceScope.isCurrent()) return;
       log.error('Failed to refresh MiniApp library', error);
-    } finally {
-      if (surfaceScope.isCurrent()) setLoading(false);
+      return;
     }
-  }, [fetchCatalog, setApps, setLoading, setMarketOrigins, setRunningWorkerIds, surfaceScope]);
+    // Installed entries are ready independently of the network catalog. Keep
+    // refreshing marketplace metadata without extending the local loading state.
+    await fetchCatalog(undefined, false, true);
+  }, [fetchCatalog, setApps, setMarketOrigins, setRunningWorkerIds, surfaceScope]);
 
   useGallerySceneAutoRefresh({
     sceneId: 'miniapps',
@@ -284,20 +358,23 @@ const MiniAppLibraryContent: React.FC<MiniAppLibraryViewProps> = ({ tabs }) => {
     [apps, marketItems, marketOrigins, sort],
   );
   const libraryItems = useMemo(
-    () => projectedItems.filter((item) => matchesLibraryFilter(
+    () => selectMiniAppLibraryItems(projectedItems, catalog).filter((item) => matchesLibraryFilter(
       item,
       query,
       category,
       currentLanguage,
     )),
-    [category, currentLanguage, projectedItems, query],
+    [catalog, category, currentLanguage, projectedItems, query],
   );
 
   const handleStopRunning = useCallback(async (appId: string) => {
     const activity = activityById.get(appId);
-    if (!activity) return;
+    const instance = hasLocalMiniAppPresentation() ? useMiniAppPresentationStore.getState().snapshot?.instances.find(instance => instance.appId === appId) : undefined;
+    if (!activity && !instance) return;
 
     try {
+      if (instance) { await miniAppPresentationAPI.stop(instance.instanceId); markWorkerStopped(appId); return; }
+      if (!activity) return;
       await stopMiniAppActivity(activity, {
         stopWorker: (id) => miniAppAPI.workerStop(id),
         markWorkerStopped,
@@ -306,7 +383,7 @@ const MiniAppLibraryContent: React.FC<MiniAppLibraryViewProps> = ({ tabs }) => {
     } catch (error) {
       log.warn('Failed to stop MiniApp worker', { appId, error });
       notification.error(t('stopFailed', {
-        name: pickLocalizedString(activity.app, currentLanguage, 'name'),
+        name: activity ? pickLocalizedString(activity.app, currentLanguage, 'name') : appId,
         error: String(error),
       }));
     }
@@ -318,8 +395,10 @@ const MiniAppLibraryContent: React.FC<MiniAppLibraryViewProps> = ({ tabs }) => {
     setPendingDeleteId(null);
     try {
       await miniAppAPI.deleteMiniApp(appId);
-      if (selectedApp?.id === appId) setSelectedApp(null);
-      setApps(apps.filter((app) => app.id !== appId));
+      if (!surfaceScope.isCurrent()) return;
+      useMiniAppNavigationStore.getState().setPinned(surfaceScope.surfaceId, appId, false);
+      if (selectedApp?.id === appId) closeDetail();
+      setApps(useMiniAppStore.getState().apps.filter((app) => app.id !== appId));
       markWorkerStopped(appId);
       const tabId = getMiniAppSceneId(appId);
       if (openTabIds.has(tabId)) closeScene(tabId);
@@ -353,6 +432,12 @@ const MiniAppLibraryContent: React.FC<MiniAppLibraryViewProps> = ({ tabs }) => {
 
   const preparePackageImport = useCallback(async (path: string) => {
     if (!path.toLowerCase().endsWith('.bfminiapp')) return;
+    // The package path belongs to this controller; a rendered peer would
+    // resolve it against its own filesystem.
+    if (isPeerDeviceModeActive()) {
+      notification.warning(t('market.import.peerUnsupported'));
+      return;
+    }
     try {
       const inspection = await miniAppMarketAPI.inspectPackage(path);
       setPendingPackage({ path, inspection });
@@ -363,6 +448,10 @@ const MiniAppLibraryContent: React.FC<MiniAppLibraryViewProps> = ({ tabs }) => {
   }, [notification, t]);
 
   const handleAddPackage = async () => {
+    if (isPeerDeviceModeActive()) {
+      notification.warning(t('market.import.peerUnsupported'));
+      return;
+    }
     const selected = await open({
       directory: false,
       multiple: false,
@@ -412,39 +501,10 @@ const MiniAppLibraryContent: React.FC<MiniAppLibraryViewProps> = ({ tabs }) => {
     }
   };
 
-  const handleCreateWithCreative = useCallback(async () => {
-    if (creatingWithCreative) return;
-    if (!workspace) {
-      notification.error(t('creationMode.noWorkspace'));
-      return;
-    }
-    if (isRemoteWorkspace(workspace)) {
-      notification.error(t('creationMode.remoteUnsupported'));
-      return;
-    }
-
-    setCreatingWithCreative(true);
+  const handleCreateWithCreative = useCallback(() => {
     closeImportMenu();
-    try {
-      const sessionId = await flowChatManager.createChatSession(
-        flowChatSessionConfigForCurrentWorkspace(workspace),
-        'Creative',
-      );
-      await openMainSession(sessionId);
-      notification.success(t('creationMode.started'));
-    } catch (error) {
-      log.error('Failed to start Creative MiniApp session', error);
-      notification.error(t('creationMode.startFailed'));
-    } finally {
-      setCreatingWithCreative(false);
-    }
-  }, [
-    closeImportMenu,
-    creatingWithCreative,
-    notification,
-    t,
-    workspace,
-  ]);
+    return createMiniApp();
+  }, [closeImportMenu, createMiniApp]);
 
   const fetchMarketDetail = useCallback(async (summary: MarketListingSummary) => {
     const [loaded, status] = await Promise.all([
@@ -455,7 +515,9 @@ const MiniAppLibraryContent: React.FC<MiniAppLibraryViewProps> = ({ tabs }) => {
   }, []);
 
   const openMarketDetail = useCallback(async (summary: MarketListingSummary) => {
+    rememberCatalogPosition();
     const requestId = ++detailRequestRef.current;
+    setSelectedApp(null);
     setDetailOpen(true);
     setDetailLoading(true);
     setDetail(undefined);
@@ -473,7 +535,7 @@ const MiniAppLibraryContent: React.FC<MiniAppLibraryViewProps> = ({ tabs }) => {
     } finally {
       if (requestId === detailRequestRef.current) setDetailLoading(false);
     }
-  }, [fetchMarketDetail, notification, t]);
+  }, [fetchMarketDetail, notification, rememberCatalogPosition, t]);
 
   const prepareMarketInstall = useCallback(async (summary: MarketListingSummary) => {
     if (busyListingId) return;
@@ -624,38 +686,64 @@ const MiniAppLibraryContent: React.FC<MiniAppLibraryViewProps> = ({ tabs }) => {
     { value: 'rating', label: t('market.sort.rating') },
   ], [t]);
 
+  const libraryListClassName = catalog === 'installed'
+    ? 'miniapp-gallery__list miniapp-gallery__list--installed'
+    : 'miniapp-gallery__list';
+
   const renderLibrary = () => {
-    const initialLoading = catalogLoading && marketItems.length === 0 && apps.length === 0;
+    const currentCatalogLoading = catalog === 'installed' ? loading : catalogLoading;
+    const initialLoading = currentCatalogLoading && libraryItems.length === 0;
     if (initialLoading) {
       return (
         <GallerySkeleton
-          count={5}
-          cardHeight={126}
-          minCardWidth={640}
-          className="miniapp-gallery__list"
+          count={6}
+          className={libraryListClassName}
         />
       );
     }
 
-    if (libraryItems.length === 0 && !catalogLoading) {
+    if (libraryItems.length === 0 && !currentCatalogLoading) {
       return (
         <GalleryEmpty
           icon={{ glyph: PackageCheck }}
           message={query || category !== 'all'
             ? t('empty.noMatch')
-            : t('market.library.empty')}
+            : t(catalog === 'installed' ? 'market.library.empty' : 'market.empty')}
         />
       );
     }
 
     return (
       <>
-        <MarketList className="miniapp-gallery__list" role="list"
+        <MarketList className={libraryListClassName} role="list"
           revision={JSON.stringify(libraryItems.map(item => item.key))}
           animate={animateList.current}
-          aria-busy={catalogLoading || loadingMore || undefined}
+          aria-busy={currentCatalogLoading || (catalog === 'market' && loadingMore) || undefined}
         >
           {libraryItems.map((item) => {
+            if (catalog === 'installed' && item.app) {
+              const app = item.app;
+              const workspaceUnsupported = Boolean(workspace && isRemoteWorkspace(workspace) && requiresWorkspace(app.permissions));
+              return (
+                <MiniAppInstalledCard
+                  key={item.key}
+                  itemKey={item.key}
+                  app={app}
+                  statuses={libraryStatuses(item, activeIdSet, customizingIdSet, t)}
+                  onOpenDetails={() => {
+                    if (item.listing) void openMarketDetail(item.listing);
+                    else openInstalledDetail(app);
+                  }}
+                  onLaunch={trigger => handleOpenApp(app.id, 'tab', trigger)}
+                  onAddToSystem={() => handleAddToSystem(app)}
+                  onDelete={trigger => { setDeleteAnchor(captureConfirmationAnchor(trigger)); setPendingDeleteId(app.id); }}
+                  systemAppSupported={launch.supported}
+                  busy={launch.busyAppIds.includes(app.id)}
+                  launchDisabled={workspaceUnsupported}
+                  launchDisabledReason={workspaceUnsupported ? t('market.detail.remoteWorkspaceUnsupported') : undefined}
+                />
+              );
+            }
             const source = item.listing ?? item.app;
             if (!source) return null;
             const name = pickLocalizedString(source, currentLanguage, 'name');
@@ -714,6 +802,7 @@ const MiniAppLibraryContent: React.FC<MiniAppLibraryViewProps> = ({ tabs }) => {
                   ? formatNumber(item.downloadCount)
                   : undefined}
                 localMeta={item.listing ? undefined : t('market.library.localMeta')}
+                launchActions={item.app ? renderLaunchActions(item.app.id, workspaceUnsupported) : undefined}
                 metaLabel={metaLabel}
                 name={name}
                 owner={item.listing?.owner.login}
@@ -726,7 +815,7 @@ const MiniAppLibraryContent: React.FC<MiniAppLibraryViewProps> = ({ tabs }) => {
                 version={t('market.library.version', { version: release })}
                 onOpenDetails={() => {
                   if (item.listing) void openMarketDetail(item.listing);
-                  else if (item.app) setSelectedApp(item.app);
+                  else if (item.app) openInstalledDetail(item.app);
                 }}
                 onPrimaryAction={() => {
                   if (item.action === 'open' && item.app) {
@@ -739,15 +828,13 @@ const MiniAppLibraryContent: React.FC<MiniAppLibraryViewProps> = ({ tabs }) => {
             );
           })}
         </MarketList>
-        {catalogLoading && marketItems.length === 0 ? (
+        {catalog === 'market' && catalogLoading && marketItems.length === 0 ? (
           <GallerySkeleton
             count={2}
-            cardHeight={126}
-            minCardWidth={640}
             className="miniapp-gallery__list miniapp-gallery__list--continuation"
           />
         ) : null}
-        {nextCursor ? (
+        {catalog === 'market' && nextCursor ? (
           <div className="miniapp-gallery__load-more">
             <Button
               size="sm"
@@ -763,22 +850,47 @@ const MiniAppLibraryContent: React.FC<MiniAppLibraryViewProps> = ({ tabs }) => {
     );
   };
 
+  const catalogToolbarActions = catalog === 'market' ? (
+    <Button size="sm" variant="quiet" onClick={() => {
+      void systemAPI.openExternal(MINIAPP_MARKET_WEBSITE_URL).catch(error => {
+        notification.error(t('market.messages.actionFailed', { error: String(error) }));
+      });
+    }}>
+      {t('market.openInBrowser')}
+    </Button>
+  ) : toolbarActions;
+
+  const accountControls = (
+    <AccountIdentityControls
+      showSignIn={false}
+      loginOpen={loginOpen}
+      onLoginOpenChange={setLoginOpen}
+      onIdentityChanged={refreshPersonalizedDetail}
+    />
+  );
+
   return (
     <GalleryLayout
       data-openbitfun-component="miniapp-gallery-view"
       data-openbitfun-part="root"
       className="miniapp-gallery-pane miniapp-gallery"
+      header={showingDetail ? (
+        <nav className="miniapp-gallery-pane__detail-toolbar" aria-label={t('detail.navigation')}>
+          <MiniAppDetailBackButton onBack={closeDetail} label={detailBackLabel} />
+          {accountControls}
+        </nav>
+      ) : undefined}
     >
-      <GalleryPageHeader
-        title={t('title')}
-        subtitle={t('subtitle')}
-        actions={(
-          <div className="miniapp-gallery__header-actions">
-            <AccountIdentityControls
-              loginOpen={loginOpen}
-              onLoginOpenChange={setLoginOpen}
-              onIdentityChanged={refreshPersonalizedDetail}
-            />
+      {!showingDetail && <div className="miniapp-gallery-pane__account-actions">{accountControls}</div>}
+      <div ref={catalogContentRef} hidden={showingDetail}>
+        <GalleryPageHeader
+          title={t('title')}
+          subtitle={t('subtitle')}
+        />
+
+        <div className="miniapp-gallery-tabs">
+          {tabs}
+          <div className="miniapp-gallery__catalog-actions">
             <span className="miniapp-gallery__import-anchor">
               <IconButton
                 ref={importTriggerRef}
@@ -790,7 +902,7 @@ const MiniAppLibraryContent: React.FC<MiniAppLibraryViewProps> = ({ tabs }) => {
                 aria-haspopup="menu"
                 aria-expanded={importMenuOpen}
                 data-testid="miniapp-import-action"
-                icon={<Icon name="plus" size="sm" />}
+                icon={<Icon glyph={PackagePlus} size="sm" />}
               />
               {importMenuOpen ? createOverlayPortal(
                 <Menu
@@ -835,103 +947,107 @@ const MiniAppLibraryContent: React.FC<MiniAppLibraryViewProps> = ({ tabs }) => {
               title={t('creationMode.action')}
               aria-label={t('creationMode.action')}
               data-testid="miniapp-create-action"
-              icon={<Icon name="edit" size="sm" />}
+              icon={<Icon name={HARNESS_PRESENTATION.Creative.icon} size="sm" />}
             />
+            {catalogToolbarActions ? (
+              <>
+                <span className="miniapp-gallery__action-divider" aria-hidden="true" />
+                {catalogToolbarActions}
+              </>
+            ) : null}
+          </div>
+        </div>
+
+        {children ?? (
+          <div
+            data-openbitfun-component="miniapp-gallery-view"
+            data-openbitfun-part="content"
+            className="gallery-zones"
+          >
+            <section className="gallery-zone" aria-label={t('allApps')}>
+              <div className="miniapp-gallery__filters" data-openbitfun-component="miniapp-gallery-view" data-openbitfun-part="tools">
+                <SearchField
+                  className="miniapp-gallery__search"
+                  leadingIcon={<Icon name="search" size="sm" aria-hidden />}
+                  onValueChange={value => {
+                    animateList.current = getInteractionMotion() === 'pointer';
+                    setQuery(value);
+                  }}
+                  placeholder={t('searchPlaceholder')}
+                  aria-label={t('searchPlaceholder')}
+                  size="sm"
+                  value={query}
+                />
+                <div data-openbitfun-component="miniapp-gallery-view" data-openbitfun-part="categoryFilters">
+                  <Select
+                    className="miniapp-gallery__categories"
+                    options={CATEGORIES.map((value) => ({ label: categoryLabel(value, t), value }))}
+                    value={category}
+                    onValueChange={(value) => {
+                      animateList.current = getInteractionMotion() === 'pointer';
+                      setCategory(value as MiniAppCategory);
+                    }}
+                    aria-label={t('market.catalog')}
+                    size="sm"
+                  />
+                </div>
+                <Select
+                  className="miniapp-gallery__sort"
+                  size="sm"
+                  options={sortOptions}
+                  value={sort}
+                  onValueChange={(value) => {
+                    animateList.current = getInteractionMotion() === 'pointer';
+                    setSort(value as MarketSort);
+                  }}
+                  aria-label={t('market.sortLabel')}
+                />
+              </div>
+
+              {catalog === 'market' && catalogError ? (
+                <div
+                  className="miniapp-gallery__market-error"
+                  role="alert"
+                  data-openbitfun-component="miniapp-gallery-view"
+                  data-openbitfun-part="error"
+                >
+                  <AlertTriangle size={16} aria-hidden="true" />
+                  <span>{t('market.library.marketUnavailable')}</span>
+                  <Button
+                    size="xs"
+                    variant="text"
+                    onClick={() => void fetchCatalog(undefined, false)}
+                  >
+                    {t('scene.retry')}
+                  </Button>
+                </div>
+              ) : null}
+
+              {renderLibrary()}
+            </section>
           </div>
         )}
-      />
-
-      {tabs}
-
-      <div
-        data-openbitfun-component="miniapp-gallery-view"
-        data-openbitfun-part="content"
-        className="gallery-zones"
-      >
-        <section className="gallery-zone" aria-label={t('allApps')}>
-          <div className="miniapp-gallery__filters" data-openbitfun-component="miniapp-gallery-view" data-openbitfun-part="tools">
-            <SearchField
-              className="miniapp-gallery__search"
-              leadingIcon={<Icon name="search" size="sm" aria-hidden />}
-              onValueChange={value => {
-                animateList.current = getInteractionMotion() === 'pointer';
-                setQuery(value);
-              }}
-              placeholder={t('searchPlaceholder')}
-              aria-label={t('searchPlaceholder')}
-              size="sm"
-              value={query}
-            />
-            <div data-openbitfun-component="miniapp-gallery-view" data-openbitfun-part="categoryFilters">
-              <Select
-                className="miniapp-gallery__categories"
-                options={CATEGORIES.map((value) => ({ label: categoryLabel(value, t), value }))}
-                value={category}
-                onValueChange={(value) => {
-                  animateList.current = getInteractionMotion() === 'pointer';
-                  setCategory(value as MiniAppCategory);
-                }}
-                aria-label={t('market.catalog')}
-                size="sm"
-              />
-            </div>
-            <Select
-              className="miniapp-gallery__sort"
-              size="sm"
-              options={sortOptions}
-              value={sort}
-              onValueChange={(value) => {
-                animateList.current = getInteractionMotion() === 'pointer';
-                setSort(value as MarketSort);
-              }}
-              aria-label={t('market.sortLabel')}
-            />
-            <span className="miniapp-gallery__result-count" aria-label={t('allApps')}>
-              <NumberBadge value={libraryItems.length} />
-            </span>
-          </div>
-
-          {catalogError ? (
-            <div
-              className="miniapp-gallery__market-error"
-              role="alert"
-              data-openbitfun-component="miniapp-gallery-view"
-              data-openbitfun-part="error"
-            >
-              <AlertTriangle size={16} aria-hidden="true" />
-              <span>{t('market.library.marketUnavailable')}</span>
-              <Button
-                size="xs"
-                variant="text"
-                onClick={() => void fetchCatalog(undefined, false)}
-              >
-                {t('scene.retry')}
-              </Button>
-            </div>
-          ) : null}
-
-          {renderLibrary()}
-        </section>
       </div>
 
-      <MiniAppDetailModal
+      <MiniAppInstalledDetailPage
         app={selectedApp}
         marketReleaseNumber={selectedApp ? marketOrigins[selectedApp.id]?.releaseNumber : undefined}
         isActive={selectedApp ? activeIdSet.has(selectedApp.id) : false}
         isCustomizing={selectedApp ? customizingIdSet.has(selectedApp.id) : false}
-        onClose={() => setSelectedApp(null)}
-        onOpen={handleOpenApp}
-        onDelete={setPendingDeleteId}
+        onClose={closeDetail}
+        onOpen={(id, trigger) => handleOpenApp(id, 'tab', trigger)}
+        launchActions={selectedApp ? renderLaunchActions(selectedApp.id, Boolean(workspace && isRemoteWorkspace(workspace) && requiresWorkspace(selectedApp.permissions)), 'menu') : undefined}
+        systemAppActions={selectedApp ? <MiniAppSystemAppActions key={selectedApp.id} app={selectedApp}
+          workspacePath={selectedInstance ? selectedInstance.workspacePath : workspacePath}
+          supported={launch.supported} /> : undefined}
+        onDelete={(id, trigger) => { setDeleteAnchor(captureConfirmationAnchor(trigger)); setPendingDeleteId(id); }}
         onStop={handleStopRunning}
       />
 
-      <GalleryDetailModal
-        isOpen={detailOpen}
-        onClose={() => setDetailOpen(false)}
+      {detailOpen && <MiniAppDetailPage
         title={detailName || t('market.detail.loading')}
-        titlePlacement="hero"
-        size="lg"
-        stableHeight
+        icon={renderMiniAppIcon(detail?.icon || 'box', 40)}
+        loading={detailLoading}
         badges={detail ? (
           <>
             <StatusPill tone="info">{categoryLabel(detail.category, t)}</StatusPill>
@@ -942,6 +1058,15 @@ const MiniAppLibraryContent: React.FC<MiniAppLibraryViewProps> = ({ tabs }) => {
         ) : null}
         description={detailDescription}
         meta={detail ? <span>{t('market.detail.by', { owner: detail.owner.login })}</span> : null}
+        preview={detail?.screenshotUrls.length ? (
+          <div className="miniapp-market-detail__screenshots" tabIndex={0} role="region" aria-label={t('detail.preview')}>
+            {detail.screenshotUrls.map((url, index) => (
+              <MarketImage key={url} source={url} responsive sizes="(min-width: 720px) 680px, 100vw"
+                width={1280} height={720} alt={t('market.library.showcaseAlt', { name: detailName })}
+                loading={index === 0 ? 'eager' : 'lazy'} decoding="async" />
+            ))}
+          </div>
+        ) : null}
         actions={detail ? (
           <>
             <Button
@@ -961,16 +1086,8 @@ const MiniAppLibraryContent: React.FC<MiniAppLibraryViewProps> = ({ tabs }) => {
                 {t('market.detail.installed')}
               </span>
             ) : null}
-            {installed ? (
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={busyListingId === detail.listingId || detailWorkspaceUnsupported}
-                onClick={() => handleOpenApp(installed.appId)}
-              >
-                {t('market.library.open')}
-              </Button>
-            ) : null}
+            {installed ? renderLaunchActions(installed.appId, busyListingId === detail.listingId || detailWorkspaceUnsupported, 'menu') : null}
+            {installed ? <MiniAppNavigationAction appId={installed.appId} /> : null}
             {!installed || canUpdate ? (
               <Button
                 size="sm"
@@ -983,8 +1100,14 @@ const MiniAppLibraryContent: React.FC<MiniAppLibraryViewProps> = ({ tabs }) => {
               </Button>
             ) : null}
             {installed ? (
-              <Button size="sm" variant="text" onClick={manageInstalledApp}>
+              <Button size="sm" variant="outline" onClick={manageInstalledApp}>
                 {t('market.library.manage')}
+              </Button>
+            ) : null}
+            {detail.repositoryUrl ? (
+              <Button size="sm" variant="outline" onClick={() => void systemAPI.openExternal(detail.repositoryUrl!)}
+                leadingIcon={<Icon name="arrow-up-right" size="sm" />}>
+                {t('market.detail.repository')}
               </Button>
             ) : null}
           </>
@@ -1002,23 +1125,6 @@ const MiniAppLibraryContent: React.FC<MiniAppLibraryViewProps> = ({ tabs }) => {
             data-openbitfun-component="miniapp-gallery-view"
             data-openbitfun-part="detail"
           >
-            {detail.screenshotUrls.length ? (
-              <div className="miniapp-market-detail__screenshots">
-                {detail.screenshotUrls.map((url, index) => (
-                  <MarketImage
-                    key={url}
-                    source={url}
-                    responsive
-                    sizes="(min-width: 48rem) 360px, 80vw"
-                    width={640}
-                    height={360}
-                    alt={t('market.library.showcaseAlt', { name: detailName })}
-                    loading={index === 0 ? 'eager' : 'lazy'}
-                    decoding="async"
-                  />
-                ))}
-              </div>
-            ) : null}
             {detailWorkspaceUnsupported ? (
               <div className="miniapp-market-detail__warning">
                 <AlertTriangle size={16} aria-hidden="true" />
@@ -1037,16 +1143,24 @@ const MiniAppLibraryContent: React.FC<MiniAppLibraryViewProps> = ({ tabs }) => {
                 {t('market.detail.installedYanked')}
               </div>
             ) : null}
-            <section>
-              <h4>{t('market.detail.permissions')}</h4>
+            <section className="miniapp-detail-page__section">
+              <h2 className="miniapp-detail-page__section-title">{t('detail.information')}</h2>
+              <dl className="miniapp-detail-page__information">
+                <div className="miniapp-detail-page__information-row"><dt>{t('detail.versionLabel')}</dt><dd>v{detail.latestRelease}</dd></div>
+                <div className="miniapp-detail-page__information-row"><dt>{t('detail.authorLabel')}</dt><dd>{detail.owner.login}</dd></div>
+                <div className="miniapp-detail-page__information-row"><dt>{t('detail.categoryLabel')}</dt><dd>{categoryLabel(detail.category, t)}</dd></div>
+              </dl>
+            </section>
+            <section className="miniapp-detail-page__section">
+              <h2 className="miniapp-detail-page__section-title">{t('market.detail.permissions')}</h2>
               {permissionLines.length ? (
                 <ul>{permissionLines.map((line) => <li key={line}>{line}</li>)}</ul>
               ) : (
                 <p>{t('market.detail.noPermissions')}</p>
               )}
             </section>
-            <section>
-              <h4>{t('market.detail.rating')}</h4>
+            <section className="miniapp-detail-page__section">
+              <h2 className="miniapp-detail-page__section-title">{t('market.detail.rating')}</h2>
               <div className="miniapp-market-detail__rating">
                 {[1, 2, 3, 4, 5].map((value) => (
                   <IconButton
@@ -1065,12 +1179,12 @@ const MiniAppLibraryContent: React.FC<MiniAppLibraryViewProps> = ({ tabs }) => {
                 </span>
               </div>
             </section>
-            <section>
-              <h4>{t('market.detail.changelog')}</h4>
+            <section className="miniapp-detail-page__section">
+              <h2 className="miniapp-detail-page__section-title">{t('market.detail.changelog')}</h2>
               <p>{detail.changelog}</p>
             </section>
-            <section>
-              <h4>{t('market.detail.releases')}</h4>
+            <section className="miniapp-detail-page__section">
+              <h2 className="miniapp-detail-page__section-title">{t('market.detail.releases')}</h2>
               <div className="miniapp-market-detail__releases">
                 {releaseHistory.visible.map((release) => (
                   <div key={release.releaseId}>
@@ -1099,32 +1213,35 @@ const MiniAppLibraryContent: React.FC<MiniAppLibraryViewProps> = ({ tabs }) => {
                 </Button>
               ) : null}
             </section>
-            {detail.repositoryUrl ? (
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => void systemAPI.openExternal(detail.repositoryUrl!)}
-                leadingIcon={<Icon name="arrow-up-right" size="sm" />}
-              >
-                {t('market.detail.repository')}
-              </Button>
-            ) : null}
           </div>
         ) : null}
-      </GalleryDetailModal>
+      </MiniAppDetailPage>}
 
       <ConfirmDialog
+        anchor={deleteAnchor}
         open={pendingDeleteId !== null}
         onOpenChange={() => setPendingDeleteId(null)}
         onConfirm={handleDeleteConfirm}
         title={t('confirmDelete.title', {
-          name: apps.find((app) => app.id === pendingDeleteId)?.name ?? '',
+          name: apps.find((app) => app.id === pendingDeleteId)?.name
+            ?? (selectedApp?.id === pendingDeleteId ? selectedApp.name : ''),
         })}
         message={t('confirmDelete.message')}
         type="warning"
         confirmDanger
         confirmText={t('confirmDelete.confirm')}
         cancelText={t('confirmDelete.cancel')}
+      />
+
+      <ConfirmDialog
+        anchor={launch.transfer?.anchor}
+        open={Boolean(launch.transfer)}
+        onOpenChange={open => { if (!open) launch.cancelTransfer(); }}
+        title={launch.transfer?.kind === 'window' ? t('presentation.openWindow') : t('presentation.openTab')}
+        message={t('presentation.transferWarning')}
+        confirmText={launch.transfer?.kind === 'window' ? t('presentation.openWindow') : t('presentation.openTab')}
+        cancelText={t('confirmDelete.cancel')}
+        onConfirm={() => void launch.confirmTransfer()}
       />
 
       <ConfirmDialog

@@ -61,6 +61,7 @@ export function queuedItemDuplicatesLiveTurn(
 
 export interface EnqueueInput {
   sessionId: string;
+  turnId?: string;
   content: string;
   displayMessage?: string;
   agentType?: string;
@@ -219,6 +220,7 @@ class PendingQueueManager {
     const item: QueuedMessage = {
       id: `pending_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
       sessionId: input.sessionId,
+      turnId: input.turnId,
       content: input.content,
       displayMessage: input.displayMessage,
       timestamp: Date.now(),
@@ -285,6 +287,21 @@ class PendingQueueManager {
     } else {
       this.queues.set(key, next);
     }
+    this.persist(sessionId);
+    this.notify(sessionId);
+    return true;
+  }
+
+  /** Reorder saved work without changing payloads, retry state, or active sends. */
+  reorder(sessionId: string, id: string, beforeId: string | null): boolean {
+    const items = this.queues.get(this.queueKey(sessionId));
+    if (!items || items.some(item => item.status === 'sending' || item.status === 'sending_now')) return false;
+    const from = items.findIndex(item => item.id === id);
+    if (from < 0 || beforeId === id || (beforeId !== null && !items.some(item => item.id === beforeId))) return false;
+    const next = [...items];
+    const [item] = next.splice(from, 1);
+    next.splice(beforeId === null ? next.length : next.findIndex(value => value.id === beforeId), 0, item);
+    this.queues.set(this.queueKey(sessionId), next);
     this.persist(sessionId);
     this.notify(sessionId);
     return true;

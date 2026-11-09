@@ -9,15 +9,39 @@ The selected Desktop or CLI owns execution, persisted records, workspaces, PTYs,
 and blocking interactions. A controller owns presentation and drafts. Its lifetime
 never determines whether an accepted turn continues running.
 
+An unmaterialized draft (`editing`/`creating`) has only a reserved ID the host has
+never seen, so it opens no subscription and reads no history; a host rejection
+there would falsely lock an empty session as a failed restore. The subscription
+starts when the host accepts the draft.
+
 `RelaySessionHistory` owns one subscription per visible surface/session.
 `SessionRecordReplica` applies both replayed pages and live canonical records
 using stable IDs, revisions and tombstones; every page comes from the online
 host, and a stream-epoch change (host restart) drops the replica before replay.
-The latest page paints first; older pages share one in-flight reader. A visible
-open or explicit reader request can warm one adjacent page while the document is
-visible and the shared resource budget permits it. This never recursively drains
+With negotiated Turn snapshots, only the last complete Turn paints first; older
+hosts retain the complete-record-page fallback. Older reads share one in-flight
+reader. The viewport must acknowledge visible presentation before a visible open
+can warm one adjacent Turn, while the document is visible and the shared resource
+budget permits it. Reader requests can renew that prefetch credit. Switching back
+to a partial session preserves its loaded content. This never recursively drains
 the transcript. Hiding a view pauses optional prefetch only; live records,
 reconnect and interaction-mailbox delivery keep their subscriptions.
+
+The Rust subscriber emits each record as its own event. Controller-local
+`historyReplay` records stage outside the replica until ready; `historyBatches`
+on ready identifies that annotation contract. Older controller bridges retain
+the sequential replay fallback. Live records reduce as they arrive, including
+during an older snapshot read; rendering is coalesced to one store update per
+frame. Rendering per record is quadratic in the items of a long turn and freezes the UI thread. Live
+pages have no ready event, so the frame timer publishes them; it is a timer
+rather than an animation frame so hidden windows keep applying records. A running
+turn reaching a terminal status, a visibility change, and any direct turn, round
+or tool event flush first, so those facts never apply over a stale render. Any
+new path that presents a page as ready, including a synthetic one, must flush
+first and must not report `hasMore: false` without proof.
+
+A turn stays pending until it was converted: the replica will not report a held
+revision again.
 Receive cursors advance only after applying
 records, never from a send acknowledgement. Transport reconnect resumes that same
 subscription. Local Runtime projection machinery is not a second Relay content
@@ -27,6 +51,21 @@ The independent Runtime interaction mailbox restores unanswered questions and
 permissions without fetching the transcript. Keep its revisions and surface fence
 separate from history pagination. Neither a WebSocket connection nor an event
 listener alone recovers an interaction emitted before attachment.
+
+Explicit `session:`, `assistant:` and `new:` device actions own the session
+selection during activation. Workspace initialization defers automatic selection
+to that action, and activation promotes the selected catalog row on demand.
+Device-only switches retain automatic workspace/session restoration. Background
+catalogs catch up for the departed device and from their own host hints.
+
+Submission prepares the host queue snapshot alongside model synchronization.
+The durable outbox and host admission still enforce the observed queue epoch,
+Turn identity and deduplication. A fresh model target that includes
+`reasoningPreset` lets the client omit an identical model write. Legacy targets
+take the existing model update path. Registry-level command refusals are cached
+within the connection's capability generation and cleared by renegotiation.
+Peer turn checkpoints use explicit field updates for UI-owned title and
+notification metadata.
 
 ## Invariants (do not regress)
 
@@ -91,7 +130,11 @@ listener alone recovers an interaction emitted before attachment.
 
 2. **Peer history has one owner.** `loadSessionHistory` uses
    `RelaySessionHistory`; it must not fall back to `restore_session_view`, cloud
-   imports, or a local transcript after a Relay failure.
+   imports, or a local transcript after a Relay failure. A prewarmed stream
+   buffers only its target device and session via the source-aware observer,
+   before active-surface filtering. Keep its native feeds alive until the
+   adopting owner has registered, and await event registration before requesting
+   replay; neither an early host reply nor handover may drop the first page.
 
 3. **Failures stay explicit and recoverable.** Failed reads leave loading state,
    retain previously rendered records, and expose retry. An empty success is not
@@ -159,6 +202,9 @@ listener alone recovers an interaction emitted before attachment.
     commands are high priority within each submission burst and use the shared
     transport admission policy. Both local and SSH-backed PTY cursors on B must
     notify A without placing raw output into an unbounded event queue.
+    A host that announces cursors instead of fanning out `terminal_event`
+    advertises `terminal_cursor_replay_v1`; a CLI host that predates the key is
+    treated as advertising it, and the choice is re-made once capabilities resolve.
     Remote `SIGINT` / `SIGTSTP` map to PTY control bytes instead of silently
     succeeding without affecting the process.
 
@@ -204,6 +250,16 @@ listener alone recovers an interaction emitted before attachment.
     Rollback remains an explicit runtime operation; it never falls back to a
     controller-local mutation. Never log catalog preview text.
 
+    A successful targeted rollback confirms the pre-request suffix even when
+    an older host omits `retiredTurnIds` or supplies only active/queued IDs.
+    Capture that suffix's stable identities from materialized Turns and the
+    catalog before invoking; after completion remove them and their send
+    previews before reporting success or submitting the edited prompt. Do not
+    delete by storage index after the response: a new Turn may reuse that slot.
+    Fence delayed records in the surface's replica until the host supplies its
+    real tombstone revision or starts a new authoritative replay. This must not
+    blacklist another device's equal IDs or prevent host-authoritative redo.
+
 15. **Git ownership trust is read on the peer, granted at the machine.**
     `git_get_repository_trust` is a read-only probe and routes to the peer
     host. `git_trust_repository` writes the peer user's global Git
@@ -221,7 +277,12 @@ listener alone recovers an interaction emitted before attachment.
     to the controller. Definitions that need a native provider or a live UI
     additionally declare `product_control_native_v1` or
     `product_control_presentation_v1`; the CLI host advertises neither and
-    returns a typed unsupported result. `mark_openbitfun_control_surface_ready`,
+    returns a typed unsupported result. Remote Connect management instead uses the
+    narrow `remote_connect_control_v1` capability, advertised by both Desktop and
+    CLI; its operations execute on the selected host and fail before RPC on older
+    peers. Direct Peer RPC refuses Relay start/stop because it holds that route's
+    response lease; submit these operations through a Claw turn instead.
+    `mark_openbitfun_control_surface_ready`,
     `mark_openbitfun_control_surface_unready`, and `report_openbitfun_control_result`
     describe or acknowledge the controller window's live Web UI and therefore
     remain `LOCAL_ONLY` in the frontend, Desktop host, and CLI host lists. A
@@ -237,8 +298,93 @@ listener alone recovers an interaction emitted before attachment.
     controller fails before RPC. Never omit the files, fall back to a local
     Agent, or run the prompt without its declared context.
 
+    Image messages additionally require `miniapp_agent_images_v1`. Check before
+    delivering Hi input to a peer-supplied MiniApp SDK, since an older SDK could
+    discard images before calling the Agent. The transport also gates non-empty
+    `imageContexts` on `miniapp_agent_run`. Resolve user-selected images to inline
+    pixels on their owning host; MiniApps cannot provide arbitrary image paths.
+    The receiving Runtime owns attachment persistence and transcript replay.
+
 18. **WSL belongs to the selected Windows host.** `wsl_workspaces_v1` gates
     `ssh_list_wsl_distributions` and SSH profile requests with a `wsl` target
     before RPC. Missing capability means unsupported, including older Desktop
     and CLI peers. Discovery reports the host's OS availability; it must never
     inspect or execute the controller's WSL installation as a fallback.
+    `ssh_none_auth_v1` gates SSH profile requests with `auth.type === 'None'`
+    the same way; an older host cannot parse that method, so controllers reject
+    the request before RPC and keep the record unchanged.
+
+19. **Session copying needs an explicitly negotiated request contract.**
+    `whole_session_copy_v1` enables the dedicated `copy_session` command.
+    Older Desktop hosts and CLI peer hosts do not implement that command.
+    Missing capability disables the copy action and rejects the request before
+    RPC; there is no fallback to `fork_session`. Explicit-turn forks retain
+    their existing payload with a required `source_turn_id`. Reconnect
+    replaces the capability, including when a host restarts on an older build.
+    Once a copy is acknowledged, a metadata-read failure reports the created
+    copy and asks for a list refresh; it must not replay the copy mutation.
+
+20. **Chat PR/MR links require a supported peer review platform.**
+    `review_platform_v1` advertises the workspace-backed PR viewer. Older
+    Desktop hosts already implement it; CLI and unknown/unprobed hosts use
+    the controller's system URL opener. Consume that click so the ordinary
+    Markdown path cannot create an integrated browser or an unsupported PR
+    panel. This only opens the clicked URL: it never queries controller-local
+    repositories or credentials on behalf of a peer. Preserve URL fragments
+    and queries, and re-evaluate support after capability or surface changes.
+    The session overview and tool-card panel action use the same gate; a
+    restored unsupported panel keeps its URL available in the system browser
+    without querying the host. Overview requests and panel state belong to
+    the surface activation even when two devices share a workspace ID/path.
+
+21. **Appearance belongs to the controller window.** Theme selection reads,
+    saves, rollback and focus/visibility reconciliation use
+    `appearance-selection-adapter`, including while a peer is rendered. Desktop
+    keeps the existing local `appearance.selection` config shape; packages and
+    cross-window appearance events also remain local. The generic ConfigAPI
+    still targets the selected product host. Do not route all config commands
+    locally to implement a presentation preference.
+
+    Sidebar device visibility is also a controller preference. The preview
+    card and account device list share `deviceVisibilityPreferences`; an absent
+    choice means visible. Hiding a device removes its sidebar section without
+    switching, disconnecting, deleting its data or stopping its work. Activating
+    a hidden device does not override that choice.
+
+22. **Composer attachments from the controller never travel as controller
+    paths.** A file dropped or pasted into a peer session is read on the
+    controller through its own Tauri host (`controllerFileTransfer.ts`, local
+    provider marker), never through the rendered transport, and so is the
+    clipboard. Supported images become inline image contexts. Other files are
+    staged with `workspace_file_upload` under
+    `openbitfun://runtime/<workspaceId>/attachments/<id>/`, which the host's
+    agent tools resolve, only when the peer negotiated
+    `runtime_attachment_upload_v1`. Older peers, folders and oversize files get
+    an explicit reply; there is no path-reference fallback. The same intake
+    covers remote workspaces (local build uploads) and detached dispatch
+    (images only).
+
+    The Files panel follows the same rule for drops and OS-clipboard paste:
+    `uploadLocalPathsToWorkspaceDirectory` publishes controller bytes with
+    `workspace_file_upload` into the peer workspace (local-paste `name (1)`
+    naming, never replacing a file) instead of `paste_files` or SSH upload,
+    which would resolve the controller path on the peer. Folders are refused
+    because the controller explorer listing filters entries, and a cut
+    clipboard behaves as a copy. Controller-path imports without a byte
+    transport, such as `.bfminiapp` packages, are refused while a peer is
+    rendered.
+
+### Workspace HTML resources
+
+The controller keeps HTML preview HTTP listeners and native browser views local.
+The selected peer supplies workspace resources over the existing encrypted
+HostInvoke channel, negotiated with `workspace_html_preview_v1` on Desktop and
+CLI. Requests carry the peer's workspace ID, entry path, source binding, revision
+and chunk offset; controller paths are never reused on the peer. Releasing a
+preview cancels in-flight HTTP reads. Device activation changes release old
+listeners and ignore late creates. Older peers must be upgraded to supply these
+resources; there is no local filesystem fallback.
+
+CLI file browsing handles both current `explorer_get_*` commands and the legacy
+`get_directory_children*` / `get_file_tree` names through the same workspace-aware
+filesystem service. Registry closure tests keep the advertised handlers in sync.

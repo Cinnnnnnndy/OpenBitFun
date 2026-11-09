@@ -8,11 +8,13 @@ import { ChatMessageStructurePolicy, StructuredRenderGroup } from '../policy/Cha
 import { AssistantProcessLayoutPolicy } from '../policy/AssistantProcessLayoutPolicy';
 import { ConversationMessageRenderPolicy } from '../policy/ConversationMessageRenderPolicy';
 import { ThinkingPresentationPolicy } from '../policy/ThinkingPresentationPolicy';
+import { SubagentBranchExpansionState } from '../state/SubagentBranchExpansionState';
 import { ACCENT, INK, LINE, STATUS_DANGER } from './Theme';
 import { MessageBodyMarkdown, MessageFileCards, MessageImageGallery, MessageMarkdown } from './ChatMessageContent';
 import {
   AssistantMessageCopyAction,
   ChatMessageRetryAction,
+  ChatMessageTimestamp,
   ChatTypingDots,
   ChatUserMessageBubble
 } from './ChatMessageChrome';
@@ -39,17 +41,24 @@ export struct ChatUserMessageRow {
     detail: ''
   };
   @Param showRetryAction: boolean = false;
+  /** Whether the staged rollback's preview covers this row. See ChatTimeline. */
+  @Param ghost: boolean = false;
   @Event onCopyMessage: (text: string) => void = (_text: string) => {};
-  @Event onOpenFullText: (text: string) => void = (_text: string) => {};
+  @Event onOpenFullText: (text: string, turnId: string) => void =
+    (_text: string, _turnId: string) => {};
   @Event onRetryMessage: (text: string) => void = (_text: string) => {};
+  @Event onRollbackMessage: (turnId: string, text: string) => void =
+    (_turnId: string, _text: string) => {};
 
   build() {
     ChatUserMessageBubble({
       item: this.item,
       showRetryAction: this.showRetryAction,
+      ghost: this.ghost,
       onCopyMessage: this.onCopyMessage,
       onOpenFullText: this.onOpenFullText,
-      onRetryMessage: this.onRetryMessage
+      onRetryMessage: this.onRetryMessage,
+      onRollbackMessage: this.onRollbackMessage
     })
   }
 }
@@ -84,11 +93,30 @@ export struct ChatMessageBubble {
   @Event onCopyMessage: (text: string) => void = (_text: string) => {};
   @Event onCopyMessageScoped: (text: string, scope: MessageCopyScope) => void =
     (_text: string, _scope: MessageCopyScope) => {};
-  @Event onOpenFullText: (text: string) => void = (_text: string) => {};
+  @Event onOpenFullText: (text: string, turnId: string) => void =
+    (_text: string, _turnId: string) => {};
+  /**
+   * The rollback entry, forwarded for the user-authored bubbles this row draws.
+   *
+   * A steering message is drawn with the user bubble, so it carries the entry
+   * too. It has no turn of its own, which is why the entry is wired rather than
+   * hidden: the tap reaches the pane and is answered out loud, instead of a menu
+   * item that silently does nothing.
+   */
+  @Event onRollbackMessage: (turnId: string, text: string) => void =
+    (_turnId: string, _text: string) => {};
   @Event onRetryMessage: (text: string) => void = (_text: string) => {};
   @Event onOpenFilePreview: (path: string, label: string) => void = (_path: string, _label: string) => {};
   @Event onBuildPlan: (path: string, name: string) => void = (_path: string, _name: string) => {};
   @Event onDownloadFile: (path: string) => void = (_path: string) => {};
+  /**
+   * Disclosure of the delegation cards in this message, owned by the
+   * conversation: the row and the structured subtree under it are rebuilt
+   * whenever the turn is republished, and disclosure has to outlive that.
+   */
+  @Param subagentBranches: SubagentBranchExpansionState = new SubagentBranchExpansionState();
+  /** Raised when the reader opens a delegation card, so its worker is followed. */
+  @Event onBranchExpanded: (branchId: string) => void = (_branchId: string) => {};
   private readonly fileReferenceCache: MessageFileReferenceProjectionCache =
     new MessageFileReferenceProjectionCache();
 
@@ -138,6 +166,7 @@ export struct ChatMessageBubble {
             this.showRetryAction ? (this.item.detail || '') : ''
           )
         }
+        ChatMessageTimestamp({ timestamp: this.item.timestamp || '' })
         this.ActionRow()
       }
       .layoutWeight(1)
@@ -157,11 +186,12 @@ export struct ChatMessageBubble {
    * Retry keeps the exact condition the previous `else if` used — including its
    * exclusion by the errored branch above, which draws its own retry action —
    * so moving it into this row changes no failed-state behavior. Copy is drawn
-   * whenever there is a body to write.
+   * only after the assistant turn has settled; streamed text is not an export
+   * target while it is still changing.
    */
   @Builder
   ActionRow() {
-    if (this.showsRetryAction() || this.copySourceText().length > 0) {
+    if (this.showsRetryAction() || this.canCopyAssistantText()) {
       Row({ space: 10 }) {
         if (this.showsRetryAction()) {
           ChatMessageRetryAction({
@@ -170,7 +200,7 @@ export struct ChatMessageBubble {
             onRetry: this.onRetryMessage
           })
         }
-        if (this.copySourceText().length > 0) {
+        if (this.canCopyAssistantText()) {
           AssistantMessageCopyAction({
             source: this.copySourceText(),
             onCopyScoped: this.onCopyMessageScoped
@@ -381,7 +411,8 @@ export struct ChatMessageBubble {
           item: this.steeringMessage(entry, path),
           showRetryAction: false,
           onCopyMessage: this.onCopyMessage,
-          onOpenFullText: this.onOpenFullText
+          onOpenFullText: this.onOpenFullText,
+          onRollbackMessage: this.onRollbackMessage
         })
       } else if (this.isThinkingEntry(entry)) {
         this.Thinking(
@@ -415,10 +446,13 @@ export struct ChatMessageBubble {
       interactionMailbox: this.interactionMailbox,
       title: this.subagentTitle(this.currentSubagentBranch(entry, path)),
       path: path,
+      branchId: entry.tool?.id || '',
       status: this.currentSubagentBranch(entry, path).tool?.status ||
         (activeScope ? 'running' : 'completed'),
       items: this.currentSubagentBranch(entry, path).subItems || [],
+      expansion: this.subagentBranches,
       renderRevision: this.renderRevision,
+      onBranchExpanded: this.onBranchExpanded,
       onApproveTool: this.onApproveTool,
       onRejectTool: this.onRejectTool,
       onCancelTool: this.onCancelTool,
@@ -666,6 +700,15 @@ export struct ChatMessageBubble {
    */
   private copySourceText(): string {
     return this.finalMessageText(this.item);
+  }
+
+  private canCopyAssistantText(): boolean {
+    return ConversationMessageRenderPolicy.canCopyAssistant(
+      this.item,
+      this.isStreamingAssistant(),
+      this.isFinalizing,
+      this.copySourceText().length
+    );
   }
 
   private finalMessageText(item: ConversationUiMessage): string {

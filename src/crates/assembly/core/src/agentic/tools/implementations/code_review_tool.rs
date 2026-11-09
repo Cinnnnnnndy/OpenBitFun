@@ -424,11 +424,6 @@ impl CodeReviewTool {
     }
 
     #[cfg(test)]
-    fn reliability_contract_limit(agent_type: Option<&str>, model_id: Option<&str>) -> usize {
-        deep_review_report::reliability_contract_limit(agent_type, model_id)
-    }
-
-    #[cfg(test)]
     fn should_report_compression_preserved(
         compression_count: usize,
         compression_contract: Option<&CompressionContract>,
@@ -612,6 +607,16 @@ impl Tool for CodeReviewTool {
         Self::input_schema_value()
     }
 
+    fn output_schema(&self) -> Value {
+        // The normalized review packet is an internal/UI payload and the
+        // assistant-facing result is a fixed acknowledgement, so no
+        // canonical fields are projected into the PTC SDK here.
+        json!({
+            "type": "object",
+            "additionalProperties": true
+        })
+    }
+
     async fn input_schema_for_model(&self) -> Value {
         let lang = get_app_language_code().await;
         Self::input_schema_value_for_language(lang.as_str())
@@ -759,6 +764,7 @@ mod tests {
             dialog_turn_id: None,
             workspace: None,
             loaded_deferred_tool_specs: Vec::new(),
+            model_client: None,
             primary_model_facts: tool_runtime::context::PrimaryModelFacts::default(),
             custom_data: HashMap::new(),
             computer_use_host: None,
@@ -1366,18 +1372,6 @@ mod tests {
                     "source": "runtime"
                 }
             ])
-        );
-    }
-
-    #[test]
-    fn deep_review_reliability_contract_limit_uses_context_profile_policy() {
-        assert_eq!(
-            CodeReviewTool::reliability_contract_limit(Some("DeepReview"), Some("gpt-5")),
-            8
-        );
-        assert_eq!(
-            CodeReviewTool::reliability_contract_limit(Some("DeepReview"), Some("gpt-5-mini")),
-            4
         );
     }
 

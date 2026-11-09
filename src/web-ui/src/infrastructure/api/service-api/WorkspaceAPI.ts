@@ -3,6 +3,7 @@ import { workspaceScopedRequest } from './legacyWorkspaceCompatibility';
  
 
 import { api } from './ApiClient';
+import type { ApiRequestConfig } from './types';
 import { workspaceIdRequest, workspaceSearchRequest, workspaceWatchRequest } from './legacyWorkspaceCompatibility';
 import { globalEventBus } from '@/infrastructure/event-bus';
 import { getActiveSurfaceId, getActiveSurfaceScope, SurfaceChangedError } from '@/infrastructure/peer-device/deviceSurface';
@@ -19,6 +20,7 @@ import type {
   FileSearchResultGroup,
   FileSearchStreamKind,
   FileSearchStreamStartResponse,
+  FileWatchStatus,
   WorkspaceSearchIndexStatus,
   WorkspaceSearchIndexTaskHandle,
 } from './tauri-commands';
@@ -244,11 +246,12 @@ export class WorkspaceAPI {
     command: string,
     workspaceId: string,
     request: Record<string, unknown>,
+    config?: ApiRequestConfig,
   ): Promise<T> {
     try {
       return await invokePrepared<T>(command, async () => ({
         request: { ...await workspaceIdRequest(workspaceId, 'workspacePath'), ...request },
-      }));
+      }), config);
     } catch (error) {
       throw createTauriCommandError(command, error, { workspaceId, ...request });
     }
@@ -267,7 +270,14 @@ export class WorkspaceAPI {
   }
 
   async deleteWorkspaceDirectory(workspaceId: string, path: string, recursive: boolean = true): Promise<void> {
-    await this.invokeWorkspaceFileCommand<void>('delete_directory', workspaceId, { path, recursive });
+    // Disk work may outlive the generic 30s UI deadline. Wait for its outcome;
+    // the selected transport still owns connection and peer RPC deadlines.
+    await this.invokeWorkspaceFileCommand<void>(
+      'delete_directory',
+      workspaceId,
+      { path, recursive },
+      recursive ? { timeout: 0 } : undefined,
+    );
   }
 
   async renameWorkspaceFile(workspaceId: string, oldPath: string, newPath: string): Promise<void> {
@@ -359,7 +369,7 @@ export class WorkspaceAPI {
     try {
       await api.invoke('delete_directory', {
         request: { path, recursive, remoteConnectionId }
-      });
+      }, recursive ? { timeout: 0 } : undefined);
     } catch (error) {
       throw createTauriCommandError('delete_directory', error, { path, recursive });
     }
@@ -1077,10 +1087,10 @@ export class WorkspaceAPI {
   }
 
    
-  async revealInExplorer(path: string): Promise<void> {
+  async revealInExplorer(path: string, workspaceId?: string): Promise<void> {
     try {
       await api.invoke('reveal_in_explorer', { 
-        request: { path } 
+        request: { path, ...(workspaceId === undefined ? {} : { workspaceId }) }
       });
     } catch (error) {
       throw createTauriCommandError('reveal_in_explorer', error, { path });
@@ -1102,6 +1112,20 @@ export class WorkspaceAPI {
     } catch (error) {
       throw createTauriCommandError('get_watched_paths', error);
     }
+  }
+
+  /** Whether filesystem changes still reach product surfaces, and why not. */
+  async getFileWatchStatus(): Promise<FileWatchStatus> {
+    try {
+      return await api.invoke('get_file_watch_status', {});
+    } catch (error) {
+      throw createTauriCommandError('get_file_watch_status', error);
+    }
+  }
+
+  /** Re-register every watched root after the user fixes a backend failure. */
+  async retryFileWatch(): Promise<void> {
+    await invokePrepared('retry_file_watch', async () => ({}));
   }
 
    

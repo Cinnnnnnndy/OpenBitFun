@@ -15,6 +15,16 @@ export interface ShortcutRegistration {
   callback: ShortcutCallback;
   description?: string;
   priority: number;
+  /** Restrict a registration to its owning surface before choosing a winner. */
+  when?: (event: KeyboardEvent) => boolean;
+}
+
+export interface ShortcutRegistrationOptions {
+  description?: string;
+  priority?: number;
+  /** Distinguish mounted instances of the same command without changing its settings ID. */
+  owner?: symbol;
+  when?: (event: KeyboardEvent) => boolean;
 }
 
 /**
@@ -93,6 +103,28 @@ function isMacPlatform(): boolean {
   return typeof navigator !== 'undefined' && navigator.platform.toUpperCase().includes('MAC');
 }
 
+/** OS interception happens before a WebView receives keydown. Keep stored overrides,
+ * but warn at the editing boundary instead of claiming these keys are available.
+ */
+export function getReservedShortcutReason(
+  config: ShortcutConfig,
+  platform = typeof navigator === 'undefined' ? '' : navigator.platform,
+): 'appSwitch' | 'systemSearch' | 'secureAttention' | 'systemKey' | undefined {
+  const key = config.key.toLowerCase();
+  if (platform.toUpperCase().includes('MAC')) {
+    const command = config.ctrl || config.meta;
+    if (command && key === 'tab') return 'appSwitch';
+    if (command && (key === ' ' || key === 'space')) return 'systemSearch';
+    return undefined;
+  }
+  if (config.alt && (key === 'tab' || key === 'escape')) return 'appSwitch';
+  if (platform.toUpperCase().includes('WIN')) {
+    if (config.ctrl && config.alt && key === 'delete') return 'secureAttention';
+    if (config.meta) return 'systemKey';
+  }
+  return undefined;
+}
+
 function normalizeShortcutConfig(config: ShortcutConfig): { primary: boolean; meta: boolean } {
   if (isMacPlatform()) {
     return {
@@ -129,7 +161,9 @@ function makeEventKey(scope: ShortcutScope, event: KeyboardEvent): string {
   const c = ctrl ? '1' : '0';
   const s = event.shiftKey ? '1' : '0';
   const a = event.altKey ? '1' : '0';
-  const m = !isMacPlatform() && event.metaKey ? '1' : '0';
+  // Physical Control on macOS is an additional modifier, not logical Ctrl/Cmd.
+  // Keep it distinct so Ctrl+Cmd+W cannot match Cmd+W (or Ctrl+W a plain W).
+  const m = (isMacPlatform() ? event.ctrlKey : event.metaKey) ? '1' : '0';
   return `${scope}:${eventKeyForLookup(event)}:${c}${s}${a}${m}`;
 }
 
@@ -137,9 +171,9 @@ export class ShortcutManager {
   private static instance: ShortcutManager;
 
   /**
-   * All registrations, keyed by shortcut id.
+   * Registrations keyed by scope/command, or by an explicitly mounted owner.
    */
-  private registrations: Map<string, ShortcutRegistration & { defaultConfig: ShortcutConfig }> = new Map();
+  private registrations: Map<string | symbol, ShortcutRegistration & { defaultConfig: ShortcutConfig }> = new Map();
 
   /**
    * O(1) lookup index: mapKey → sorted registrations (descending priority).
@@ -149,6 +183,7 @@ export class ShortcutManager {
 
   private keyDownHandler: ((e: KeyboardEvent) => void) | null = null;
   private isEnabled: boolean = true;
+  private captures = new Map<symbol, Pick<ShortcutRegistration, 'callback' | 'when'>>();
 
   /**
    * User overrides from configManager (id → key+modifiers).
@@ -190,12 +225,13 @@ export class ShortcutManager {
     id: string,
     config: ShortcutConfig,
     callback: ShortcutCallback,
-    options?: { description?: string; priority?: number }
+    options?: ShortcutRegistrationOptions
   ): () => void {
     // Apply user override if present
     const effectiveConfig = this.applyOverride(id, config);
 
-    const existing = this.registrations.get(id);
+    const registrationKey = options?.owner ?? `${config.scope ?? 'app'}:${id}`;
+    const existing = this.registrations.get(registrationKey);
     if (existing) {
       this.removeFromLookupMap(existing);
     }
@@ -207,22 +243,31 @@ export class ShortcutManager {
       callback,
       description: options?.description,
       priority: options?.priority ?? 0,
+      when: options?.when,
     };
 
-    this.registrations.set(id, registration);
+    this.registrations.set(registrationKey, registration);
     this.addToLookupMap(registration);
     this.notifyRegistrationListeners();
 
-    return () => this.unregister(id);
+    return () => {
+      if (this.registrations.get(registrationKey) !== registration) return;
+      this.removeFromLookupMap(registration);
+      this.registrations.delete(registrationKey);
+      this.notifyRegistrationListeners();
+    };
   }
 
   public unregister(id: string): boolean {
-    const registration = this.registrations.get(id);
-    if (!registration) return false;
-    this.removeFromLookupMap(registration);
-    this.registrations.delete(id);
-    this.notifyRegistrationListeners();
-    return true;
+    let removed = false;
+    for (const [key, registration] of this.registrations) {
+      if (registration.id !== id) continue;
+      this.removeFromLookupMap(registration);
+      this.registrations.delete(key);
+      removed = true;
+    }
+    if (removed) this.notifyRegistrationListeners();
+    return removed;
   }
 
   // ─── Lookup map maintenance ────────────────────────────────────────────────
@@ -250,9 +295,27 @@ export class ShortcutManager {
 
   // ─── Event handling ────────────────────────────────────────────────────────
 
+  /** A keybinding recorder owns matching events before commands and native fallbacks. */
+  public capture(callback: ShortcutCallback, when: (event: KeyboardEvent) => boolean): () => void {
+    const owner = Symbol('shortcut-capture');
+    this.captures.set(owner, { callback, when });
+    return () => { this.captures.delete(owner); };
+  }
+
   private handleKeyDown(event: KeyboardEvent): void {
-    if (!this.isEnabled) return;
     if (event.defaultPrevented) return;
+    const capture = [...this.captures.values()].reverse().find(owner => owner.when?.(event));
+    if (capture) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      try {
+        capture.callback(event);
+      } catch (error) {
+        log.error('Shortcut capture failed', { error });
+      }
+      return;
+    }
+    if (!this.isEnabled) return;
     if (this.isImeOwnedKey(event)) return;
     // The latest overlay owns Escape even if focus is still in its trigger.
     if (event.key === 'Escape' && hasOverlayLayers()) return;
@@ -288,6 +351,7 @@ export class ShortcutManager {
     const appList = this.lookupMap.get(appKey) ?? [];
     for (const reg of appList) {
       if (inInput && !reg.config.allowInInput) continue;
+      if (reg.when && !reg.when(event)) continue;
       results.push(reg);
     }
 
@@ -295,14 +359,30 @@ export class ShortcutManager {
     if (activeScope !== 'app') {
       // When the innermost scope is the Monaco editor surface, inherit canvas-registered
       // shortcuts (tab switch, close tab, etc.) in addition to editor-scoped ones.
+      const editorOwner = event.target instanceof Element
+        && event.target.closest('[data-shortcut-scope="workbench-content"]')
+        ? 'workbench-content' : 'canvas';
       const panelScopes: ShortcutScope[] =
-        activeScope === 'editor' ? (['editor', 'canvas'] as const) : [activeScope];
+        activeScope === 'editor' ? ['editor', editorOwner] : [activeScope];
+      // Only opted-in commands cross a nested panel boundary. In particular,
+      // closing a terminal tab belongs to its canvas, while terminal Escape
+      // and other terminal commands retain their own scope.
+      const ancestorScopes = new Set<ShortcutScope>(panelScopes);
+      let ancestor = event.target instanceof Element
+        ? event.target.closest('[data-shortcut-scope]') : null;
+      while (ancestor) {
+        const scope = this.detectScope(ancestor);
+        if (scope !== 'app') ancestorScopes.add(scope);
+        ancestor = ancestor.parentElement?.closest('[data-shortcut-scope]') ?? null;
+      }
       const panelRegs: ShortcutRegistration[] = [];
-      for (const scope of panelScopes) {
+      for (const scope of ancestorScopes) {
         for (const reg of this.lookupMap.get(makeEventKey(scope, event)) ?? []) {
+          if (!panelScopes.includes(scope) && !reg.config.inheritInChildScopes) continue;
           if (inInput && !reg.config.allowInInput) {
             continue;
           }
+          if (reg.when && !reg.when(event)) continue;
           panelRegs.push(reg);
         }
       }
@@ -339,7 +419,7 @@ export class ShortcutManager {
     const scope = el?.getAttribute('data-shortcut-scope') as ShortcutScope | null;
     // Only accept known panel scopes; canvas is included so canvas-scoped shortcuts
     // fire only when focus is inside the editor canvas area.
-    if (scope === 'canvas' || scope === 'editor' || scope === 'chat' || scope === 'terminal' || scope === 'filetree' || scope === 'git') {
+    if (scope === 'canvas' || scope === 'workbench-content' || scope === 'editor' || scope === 'chat' || scope === 'terminal' || scope === 'filetree' || scope === 'git') {
       return scope;
     }
     return 'app';
@@ -398,8 +478,8 @@ export class ShortcutManager {
     this.userOverrides = overrides ?? {};
 
     // Re-apply overrides to all existing registrations
-    for (const [id, registration] of this.registrations.entries()) {
-      const newConfig = this.applyOverride(id, registration.defaultConfig);
+    for (const registration of this.registrations.values()) {
+      const newConfig = this.applyOverride(registration.id, registration.defaultConfig);
       this.removeFromLookupMap(registration);
       registration.config = newConfig;
       this.addToLookupMap(registration);
@@ -475,7 +555,7 @@ export class ShortcutManager {
   public checkConflicts(config: ShortcutConfig, excludeId?: string, excludeIds?: string[]): ShortcutRegistration[] {
     const scope = config.scope ?? 'app';
     const scopesToCheck: ShortcutScope[] = scope === 'app'
-      ? ['app', 'chat', 'editor', 'terminal', 'canvas', 'filetree', 'git']
+      ? ['app', 'chat', 'editor', 'terminal', 'canvas', 'workbench-content', 'filetree', 'git']
       : [scope, 'app'];
     const seen = new Set<string>();
     const list: ShortcutRegistration[] = [];
@@ -528,6 +608,7 @@ export class ShortcutManager {
   }
 
   public clear(): void {
+    this.captures.clear();
     this.registrations.clear();
     this.lookupMap.clear();
     this.notifyRegistrationListeners();

@@ -94,6 +94,7 @@ pub fn standard_harness_tools() -> Vec<String> {
         "Read".to_string(),
         "view_image".to_string(),
         "analyze_image".to_string(),
+        "generate_image".to_string(),
         "Write".to_string(),
         "Edit".to_string(),
         "Delete".to_string(),
@@ -118,13 +119,17 @@ pub fn standard_harness_tools() -> Vec<String> {
         "ReviewPlatform".to_string(),
         "OpenBitFunControl".to_string(),
         "ControlHub".to_string(),
+        // A MiniApp is a Web page this product hosts, so operating one belongs
+        // to the same surface family as ControlHub: the Agent opens the app in
+        // the window the user is watching instead of driving a copy elsewhere.
+        // The tool stays deferred and degrades honestly when no surface exists.
+        "MiniAppBrowser".to_string(),
         // Pairs with ControlHub: its `wait` sends anything repeating, or
         // further out than an hour, to Cron rather than holding the turn open
         // for the interval.
         "Cron".to_string(),
         "PublishAppearance".to_string(),
-        "PageDeploy".to_string(),
-        "PagePublish".to_string(),
+        "PageManage".to_string(),
     ]
 }
 
@@ -308,21 +313,13 @@ mod tests {
     }
 
     #[test]
-    fn standard_harness_tools_keep_canvas_provider_tools_opt_in() {
-        let tools = standard_harness_tools();
-
-        assert!(!tools.contains(&"CreateCanvas".to_string()));
-        assert!(!tools.contains(&"ReadCanvas".to_string()));
-        assert!(!tools.contains(&"UpdateCanvas".to_string()));
-        assert!(!tools.contains(&"PatchCanvas".to_string()));
-    }
-
-    #[test]
     fn standard_mode_uses_shared_coding_tools() {
         let shared_tools = standard_harness_tools();
 
         let mut expected = shared_tools;
         expected.push("ComputerUse".to_string());
+        expected.push("DesktopCard".to_string());
+        expected.push("GenOfficeFile".to_string());
         assert_eq!(StandardHarness::new().default_tools(), expected);
     }
 
@@ -337,6 +334,25 @@ mod tests {
 #[cfg(test)]
 mod desktop_tool_tests {
     use super::*;
+    #[test]
+    fn document_producing_modes_include_office_file_generation() {
+        let modes: Vec<Box<dyn Agent>> = vec![
+            Box::new(StandardHarness::new()),
+            Box::new(UltimateHarness::new()),
+            Box::new(CreativeHarness::new()),
+            Box::new(ClawMode::new()),
+        ];
+        for mode in modes {
+            assert!(
+                mode.default_tools()
+                    .iter()
+                    .any(|name| name == "GenOfficeFile"),
+                "{} should expose GenOfficeFile by default",
+                mode.id()
+            );
+        }
+    }
+
     #[test]
     fn main_desktop_modes_include_computer_use() {
         let modes: Vec<Box<dyn Agent>> = vec![

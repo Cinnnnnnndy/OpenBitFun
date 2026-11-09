@@ -22,7 +22,7 @@ function run(command, args) {
 try {
   const binary = join(directory, 'window-capture-fixture');
   await run('xcrun', ['clang', '-fobjc-arc', '-fblocks', '-Wall', '-Werror', '-Wno-unguarded-availability-new',
-    'src/apps/desktop/src/computer_use/macos_capture.m', 'scripts/fixtures/computer-use-capture.m',
+    'src/crates/services/computer-use/src/computer_use/macos_capture.m', 'scripts/fixtures/computer-use-capture.m',
     '-framework', 'AppKit', '-framework', 'ScreenCaptureKit', '-framework', 'CoreMedia',
     '-framework', 'CoreVideo', '-framework', 'CoreImage', '-o', binary]);
   if (args.length) {
@@ -31,6 +31,7 @@ try {
   } else {
     await run(binary, []);
     await run(binary, ['--minimized']);
+    await run(binary, ['--resize-error']);
   }
 } finally {
   await rm(directory, { recursive: true, force: true });

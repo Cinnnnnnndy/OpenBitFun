@@ -75,14 +75,6 @@ const DISABLE_CREATION: SkillPolicyRule = SkillPolicyRule {
     effect: PolicyEffect::Disable,
 };
 
-// Canvas is an optional artifact workflow. Keep its built-in skills available
-// for explicit user selection without making every conversation eligible for
-// implicit Canvas generation.
-const DISABLE_CANVAS: SkillPolicyRule = SkillPolicyRule {
-    selector: SkillSelector::Group(BuiltinSkillGroup::Canvas),
-    effect: PolicyEffect::Disable,
-};
-
 const DISABLE_DEBUGGING: SkillPolicyRule = SkillPolicyRule {
     selector: SkillSelector::Group(BuiltinSkillGroup::Debugging),
     effect: PolicyEffect::Disable,
@@ -126,6 +118,11 @@ const ENABLE_PLAN: SkillPolicyRule = SkillPolicyRule {
     effect: PolicyEffect::Enable,
 };
 
+const ENABLE_GENERATE_IMAGE: SkillPolicyRule = SkillPolicyRule {
+    selector: SkillSelector::DirName("generate-image"),
+    effect: PolicyEffect::Enable,
+};
+
 const OPEN_META_ONLY_POLICY: ModeSkillPolicy = ModeSkillPolicy {
     builtin_default: PolicyEffect::Disable,
     rules: &[ENABLE_META],
@@ -138,7 +135,7 @@ const AGENTIC_POLICY: ModeSkillPolicy = ModeSkillPolicy {
         DISABLE_COMPUTER_USE,
         DISABLE_MINIAPP,
         DISABLE_CREATION,
-        DISABLE_CANVAS,
+        ENABLE_GENERATE_IMAGE,
     ],
 };
 
@@ -150,18 +147,13 @@ const CLAW_POLICY: ModeSkillPolicy = ModeSkillPolicy {
         DISABLE_MINIAPP,
         DISABLE_CREATION,
         DISABLE_DEBUGGING,
-        DISABLE_CANVAS,
+        ENABLE_GENERATE_IMAGE,
     ],
 };
 
 const CREATIVE_POLICY: ModeSkillPolicy = ModeSkillPolicy {
     builtin_default: PolicyEffect::Enable,
-    rules: &[
-        DISABLE_OFFICE,
-        DISABLE_COMPUTER_USE,
-        DISABLE_DEBUGGING,
-        DISABLE_CANVAS,
-    ],
+    rules: &[DISABLE_OFFICE, DISABLE_COMPUTER_USE, DISABLE_DEBUGGING],
 };
 
 const COWORK_POLICY: ModeSkillPolicy = ModeSkillPolicy {
@@ -171,12 +163,13 @@ const COWORK_POLICY: ModeSkillPolicy = ModeSkillPolicy {
         ENABLE_META,
         ENABLE_COORDINATION,
         ENABLE_PLANNING,
+        ENABLE_GENERATE_IMAGE,
     ],
 };
 
 const DEEP_RESEARCH_POLICY: ModeSkillPolicy = ModeSkillPolicy {
     builtin_default: PolicyEffect::Disable,
-    rules: &[ENABLE_META, ENABLE_COORDINATION],
+    rules: &[ENABLE_META, ENABLE_COORDINATION, ENABLE_GENERATE_IMAGE],
 };
 
 const ULTRA_POLICY: ModeSkillPolicy = ModeSkillPolicy {
@@ -235,6 +228,22 @@ mod tests {
     use crate::skills::catalog::BUILTIN_SKILL_SPECS;
 
     #[test]
+    fn image_generation_defaults_on_in_main_workflows_and_remains_opt_in_for_specialist_agents() {
+        for mode in ["Standard", "Claw", "Creative", "Cowork", "DeepResearch"] {
+            assert_eq!(
+                resolve_builtin_default_enabled("generate-image", mode),
+                Some(true)
+            );
+        }
+        for mode in ["Ultimate", "SwarmWorker", "ComputerUse", "SomeUnknownMode"] {
+            assert_eq!(
+                resolve_builtin_default_enabled("generate-image", mode),
+                Some(false)
+            );
+        }
+    }
+
+    #[test]
     fn agent_browser_defaults_on_only_for_ultra_and_swarm_worker() {
         for mode_id in [
             "Standard",
@@ -280,35 +289,6 @@ mod tests {
                 "SwarmWorker has unexpected default exposure for {}",
                 spec.dir_name
             );
-        }
-    }
-
-    #[test]
-    fn canvas_skills_default_off_in_every_mode() {
-        for skill in [
-            "agent-eval-canvas",
-            "docs-canvas",
-            "openbitfun-canvas",
-            "pr-review-canvas",
-        ] {
-            for mode_id in [
-                "Standard",
-                "Standard",
-                "Claw",
-                "Creative",
-                "Cowork",
-                "ComputerUse",
-                "DeepResearch",
-                "Ultimate",
-                "SwarmWorker",
-                "SomeUnknownMode",
-            ] {
-                assert_eq!(
-                    resolve_builtin_default_enabled(skill, mode_id),
-                    Some(false),
-                    "Canvas skill {skill} must stay opt-in for mode {mode_id}"
-                );
-            }
         }
     }
 

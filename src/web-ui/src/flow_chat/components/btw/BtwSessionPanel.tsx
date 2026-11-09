@@ -19,7 +19,7 @@ import {ChatInputApprovalBand} from '../ChatInputApprovalBand';
 import {ScrollToBottomButton} from '@/flow_chat';
 import {flowChatStore} from '../../store/FlowChatStore';
 import type {DialogTurn, Session} from '../../types/flow-chat';
-import {sessionToVirtualItems} from '../../store/modernFlowChatStore';
+import {createSessionVirtualItemProjector} from '../../store/modernFlowChatStore';
 import {FLOWCHAT_FOCUS_ITEM_EVENT, type FlowChatFocusItemRequest} from '../../events/flowchatNavigation';
 import {fileTabManager} from '@/shared/services/FileTabManager';
 import {createTab} from '@/shared/utils/tabUtils';
@@ -103,6 +103,8 @@ export interface BtwSessionPanelProps {
   workspacePath?: string;
   viewKind?: BtwSessionViewKind;
   displayTitle?: string;
+  /** The hosting pane is being resized; width-derived measurement waits for it to settle. */
+  resizeSuspended?: boolean;
 }
 
 const resolveSessionTitle = (session?: Pick<Session, 'title'> | null, fallback = 'Side thread') =>
@@ -154,6 +156,7 @@ const BtwSessionPanelContent: React.FC<BtwSessionPanelProps & { viewState: BtwPa
   workspacePath,
   viewKind,
   displayTitle,
+  resizeSuspended = false,
   viewState,
 }) => {
   const { t } = useTranslation('flow-chat');
@@ -226,9 +229,10 @@ const BtwSessionPanelContent: React.FC<BtwSessionPanelProps & { viewState: BtwPa
       ? t(resolveSubagentNameKey(childSessionId ?? ''))
       : displayTitle?.trim() || resolveSessionTitle(childSession, childTitleFallback);
   const headerModelName = childKind === 'subagent' ? childSession?.config?.modelName?.trim() : undefined;
+  const [projectSession] = useState(createSessionVirtualItemProjector);
   const sessionVirtualItems = useMemo(
-    () => sessionToVirtualItems(childSession ?? null),
-    [childSession],
+    () => projectSession(childSession ?? null),
+    [childSession, projectSession],
   );
   const virtualItems = useMemo(
     () => viewKind === 'review-check'
@@ -1205,6 +1209,7 @@ const BtwSessionPanelContent: React.FC<BtwSessionPanelProps & { viewState: BtwPa
               onExpandGroup={onExpandGroup}
               isHistorical={childSession.isHistorical === true}
               viewState={viewState}
+              measurementSuspended={resizeSuspended}
             />
           )}
           {childSession.sessionKind === 'btw' && <FlowChatSelectionBar rootRef={scrollContainerRef}

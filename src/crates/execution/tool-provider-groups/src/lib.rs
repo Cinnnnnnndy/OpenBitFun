@@ -15,10 +15,11 @@ pub enum ToolPackFeatureGroup {
     BrowserWeb,
     ComputerUse,
     ImageAnalysis,
+    ImageGeneration,
+    OfficeDocuments,
     MiniApp,
     Pages,
     Creation,
-    Canvas,
     AgentControl,
 }
 
@@ -31,10 +32,11 @@ impl ToolPackFeatureGroup {
             Self::BrowserWeb => "browser-web",
             Self::ComputerUse => "computer-use",
             Self::ImageAnalysis => "image-analysis",
+            Self::ImageGeneration => "image-generation",
+            Self::OfficeDocuments => "office-documents",
             Self::MiniApp => "miniapp",
             Self::Pages => "pages",
             Self::Creation => "creation",
-            Self::Canvas => "canvas",
             Self::AgentControl => "agent-control",
         }
     }
@@ -47,10 +49,11 @@ pub const ALL_FEATURE_GROUPS: &[ToolPackFeatureGroup] = &[
     ToolPackFeatureGroup::BrowserWeb,
     ToolPackFeatureGroup::ComputerUse,
     ToolPackFeatureGroup::ImageAnalysis,
+    ToolPackFeatureGroup::ImageGeneration,
+    ToolPackFeatureGroup::OfficeDocuments,
     ToolPackFeatureGroup::MiniApp,
     ToolPackFeatureGroup::Pages,
     ToolPackFeatureGroup::Creation,
-    ToolPackFeatureGroup::Canvas,
     ToolPackFeatureGroup::AgentControl,
 ];
 
@@ -75,10 +78,17 @@ pub fn enabled_feature_groups() -> Vec<ToolPackFeatureGroup> {
             cfg!(feature = "image-analysis"),
             ToolPackFeatureGroup::ImageAnalysis,
         ),
+        (
+            cfg!(feature = "image-generation"),
+            ToolPackFeatureGroup::ImageGeneration,
+        ),
+        (
+            cfg!(feature = "office-documents"),
+            ToolPackFeatureGroup::OfficeDocuments,
+        ),
         (cfg!(feature = "miniapp"), ToolPackFeatureGroup::MiniApp),
         (cfg!(feature = "pages"), ToolPackFeatureGroup::Pages),
         (cfg!(feature = "creation"), ToolPackFeatureGroup::Creation),
-        (cfg!(feature = "canvas"), ToolPackFeatureGroup::Canvas),
         (
             cfg!(feature = "agent-control"),
             ToolPackFeatureGroup::AgentControl,
@@ -102,18 +112,19 @@ pub fn tool_feature_group(tool_name: &str) -> Option<ToolPackFeatureGroup> {
         "WebSearch" | "WebFetch" | "ControlHub" => Some(ToolPackFeatureGroup::BrowserWeb),
         "ComputerUse" => Some(ToolPackFeatureGroup::ComputerUse),
         "view_image" | "analyze_image" => Some(ToolPackFeatureGroup::ImageAnalysis),
+        "generate_image" => Some(ToolPackFeatureGroup::ImageGeneration),
+        "GenOfficeFile" => Some(ToolPackFeatureGroup::OfficeDocuments),
         "GenerativeUI" | "InitMiniApp" | "FinalizeMiniApp" | "PublishMiniApp"
-        | "PublishAppearance" | "Playbook" => Some(ToolPackFeatureGroup::MiniApp),
-        "PageDeploy" | "PagePublish" => Some(ToolPackFeatureGroup::Pages),
-        "FrontendWorkbench" => Some(ToolPackFeatureGroup::Creation),
-        "CreateCanvas" | "ReadCanvas" | "UpdateCanvas" | "PatchCanvas" => {
-            Some(ToolPackFeatureGroup::Canvas)
+        | "MiniAppBrowser" | "PublishAppearance" | "Playbook" => {
+            Some(ToolPackFeatureGroup::MiniApp)
         }
+        "PageManage" | "PageDeploy" | "PagePublish" => Some(ToolPackFeatureGroup::Pages),
+        "FrontendWorkbench" => Some(ToolPackFeatureGroup::Creation),
         "Task" | "AgentSpawn" | "AgentSendInput" | "AgentControl" | "AgentList" | "AgentWait"
         | "LaunchReviewAgent" | "Skill" | "AskUserQuestion" | "TodoWrite" | "get_goal"
         | "create_goal" | "update_goal" | "submit_code_review" | "GetToolSpec"
         | "CallDeferredTool" | "ListWorkspaces" | "SessionControl" | "SessionMessage"
-        | "SessionHistory" | "Cron" | "PortForward" | "OpenBitFunControl" => {
+        | "SessionHistory" | "Cron" | "PortForward" | "DesktopCard" | "OpenBitFunControl" => {
             Some(ToolPackFeatureGroup::AgentControl)
         }
         _ => None,
@@ -155,10 +166,11 @@ impl ToolProviderGroupPlan {
 const CORE_BASIC_FEATURE_GROUPS: &[ToolPackFeatureGroup] = &[
     ToolPackFeatureGroup::Basic,
     ToolPackFeatureGroup::ImageAnalysis,
+    ToolPackFeatureGroup::ImageGeneration,
+    ToolPackFeatureGroup::OfficeDocuments,
 ];
 const CORE_AGENT_FEATURE_GROUPS: &[ToolPackFeatureGroup] = &[ToolPackFeatureGroup::AgentControl];
 const CORE_REVIEW_FEATURE_GROUPS: &[ToolPackFeatureGroup] = &[ToolPackFeatureGroup::AgentControl];
-const CORE_CANVAS_FEATURE_GROUPS: &[ToolPackFeatureGroup] = &[ToolPackFeatureGroup::Canvas];
 const CORE_SESSION_FEATURE_GROUPS: &[ToolPackFeatureGroup] = &[ToolPackFeatureGroup::AgentControl];
 const CORE_GIT_FEATURE_GROUPS: &[ToolPackFeatureGroup] = &[ToolPackFeatureGroup::Git];
 const CORE_WEB_FEATURE_GROUPS: &[ToolPackFeatureGroup] = &[ToolPackFeatureGroup::BrowserWeb];
@@ -177,11 +189,13 @@ const PRODUCT_TOOL_PROVIDER_GROUP_PLAN: &[ToolProviderGroupPlan] = &[
             "Read",
             "view_image",
             "analyze_image",
+            "generate_image",
             "Glob",
             "Grep",
             "Write",
             "Edit",
             "Delete",
+            "GenOfficeFile",
             "ExecCommand",
             "WriteStdin",
             "ExecControl",
@@ -220,6 +234,7 @@ const PRODUCT_TOOL_PROVIDER_GROUP_PLAN: &[ToolProviderGroupPlan] = &[
             "SessionHistory",
             "Cron",
             "PortForward",
+            "DesktopCard",
         ],
     },
     ToolProviderGroupPlan {
@@ -260,6 +275,7 @@ const PRODUCT_TOOL_PROVIDER_GROUP_PLAN: &[ToolProviderGroupPlan] = &[
             "InitMiniApp",
             "FinalizeMiniApp",
             "PublishMiniApp",
+            "MiniAppBrowser",
             "PublishAppearance",
             "Playbook",
         ],
@@ -267,17 +283,14 @@ const PRODUCT_TOOL_PROVIDER_GROUP_PLAN: &[ToolProviderGroupPlan] = &[
     ToolProviderGroupPlan {
         provider_id: "core.pages",
         feature_groups: &[ToolPackFeatureGroup::Pages],
-        tool_names: &["PageDeploy", "PagePublish"],
+        // Legacy names remain available for persisted Agent allowlists and old calls.
+        // New Agent defaults expose only PageManage.
+        tool_names: &["PageManage", "PageDeploy", "PagePublish"],
     },
     ToolProviderGroupPlan {
         provider_id: "core.creation",
         feature_groups: CORE_CREATION_FEATURE_GROUPS,
         tool_names: &["FrontendWorkbench"],
-    },
-    ToolProviderGroupPlan {
-        provider_id: "core.canvas",
-        feature_groups: CORE_CANVAS_FEATURE_GROUPS,
-        tool_names: &["CreateCanvas", "ReadCanvas", "UpdateCanvas", "PatchCanvas"],
     },
 ];
 
@@ -353,10 +366,11 @@ mod tests {
                 "browser-web",
                 "computer-use",
                 "image-analysis",
+                "image-generation",
+                "office-documents",
                 "miniapp",
                 "pages",
                 "creation",
-                "canvas",
                 "agent-control"
             ]
         );
@@ -391,16 +405,20 @@ mod tests {
             cfg!(feature = "image-analysis")
         );
         assert_eq!(
+            groups.contains(&ToolPackFeatureGroup::ImageGeneration),
+            cfg!(feature = "image-generation")
+        );
+        assert_eq!(
+            groups.contains(&ToolPackFeatureGroup::OfficeDocuments),
+            cfg!(feature = "office-documents")
+        );
+        assert_eq!(
             groups.contains(&ToolPackFeatureGroup::MiniApp),
             cfg!(feature = "miniapp")
         );
         assert_eq!(
             groups.contains(&ToolPackFeatureGroup::Creation),
             cfg!(feature = "creation")
-        );
-        assert_eq!(
-            groups.contains(&ToolPackFeatureGroup::Canvas),
-            cfg!(feature = "canvas")
         );
         assert_eq!(
             groups.contains(&ToolPackFeatureGroup::AgentControl),
@@ -430,6 +448,20 @@ mod tests {
             assert!(
                 tool_feature_group(tool_name).is_some(),
                 "{tool_name} must have a compile-time feature owner"
+            );
+        }
+    }
+
+    #[test]
+    fn generation_and_inspection_have_independent_feature_owners() {
+        assert_eq!(
+            tool_feature_group("generate_image"),
+            Some(ToolPackFeatureGroup::ImageGeneration)
+        );
+        for tool_name in ["view_image", "analyze_image"] {
+            assert_eq!(
+                tool_feature_group(tool_name),
+                Some(ToolPackFeatureGroup::ImageAnalysis)
             );
         }
     }
@@ -475,9 +507,16 @@ mod tests {
         assert_eq!(ToolPackFeatureGroup::BrowserWeb.id(), "browser-web");
         assert_eq!(ToolPackFeatureGroup::ComputerUse.id(), "computer-use");
         assert_eq!(ToolPackFeatureGroup::ImageAnalysis.id(), "image-analysis");
+        assert_eq!(
+            ToolPackFeatureGroup::ImageGeneration.id(),
+            "image-generation"
+        );
+        assert_eq!(
+            ToolPackFeatureGroup::OfficeDocuments.id(),
+            "office-documents"
+        );
         assert_eq!(ToolPackFeatureGroup::MiniApp.id(), "miniapp");
         assert_eq!(ToolPackFeatureGroup::Creation.id(), "creation");
-        assert_eq!(ToolPackFeatureGroup::Canvas.id(), "canvas");
         assert_eq!(ToolPackFeatureGroup::AgentControl.id(), "agent-control");
     }
 
@@ -502,7 +541,6 @@ mod tests {
                 "core.miniapp",
                 "core.pages",
                 "core.creation",
-                "core.canvas",
             ]
         );
     }
@@ -521,11 +559,13 @@ mod tests {
                 "Read",
                 "view_image",
                 "analyze_image",
+                "generate_image",
                 "Glob",
                 "Grep",
                 "Write",
                 "Edit",
                 "Delete",
+                "GenOfficeFile",
                 "ExecCommand",
                 "WriteStdin",
                 "ExecControl",
@@ -552,6 +592,7 @@ mod tests {
                 "SessionHistory",
                 "Cron",
                 "PortForward",
+                "DesktopCard",
                 "GetFileDiff",
                 "Worktree",
                 "ReviewPlatform",
@@ -569,15 +610,13 @@ mod tests {
                 "InitMiniApp",
                 "FinalizeMiniApp",
                 "PublishMiniApp",
+                "MiniAppBrowser",
                 "PublishAppearance",
                 "Playbook",
+                "PageManage",
                 "PageDeploy",
                 "PagePublish",
                 "FrontendWorkbench",
-                "CreateCanvas",
-                "ReadCanvas",
-                "UpdateCanvas",
-                "PatchCanvas",
             ]
         );
     }
@@ -601,7 +640,15 @@ mod tests {
         assert_eq!(
             feature_groups,
             vec![
-                ("core.basic", vec!["basic", "image-analysis"]),
+                (
+                    "core.basic",
+                    vec![
+                        "basic",
+                        "image-analysis",
+                        "image-generation",
+                        "office-documents"
+                    ]
+                ),
                 ("core.agent", vec!["agent-control"]),
                 ("core.session", vec!["agent-control"]),
                 ("core.git", vec!["git"]),
@@ -612,7 +659,6 @@ mod tests {
                 ("core.miniapp", vec!["miniapp"]),
                 ("core.pages", vec!["pages"]),
                 ("core.creation", vec!["creation"]),
-                ("core.canvas", vec!["canvas"]),
             ]
         );
     }

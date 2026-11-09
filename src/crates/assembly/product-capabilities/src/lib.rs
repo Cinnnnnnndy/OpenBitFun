@@ -24,7 +24,6 @@ pub enum ProductCapabilityId {
     MiniApp,
     Pages,
     Creation,
-    Canvas,
     VoiceInput,
 }
 
@@ -37,7 +36,6 @@ impl ProductCapabilityId {
             Self::MiniApp => "miniapp",
             Self::Pages => "pages",
             Self::Creation => "creation",
-            Self::Canvas => "canvas",
             Self::VoiceInput => "voice-input",
         }
     }
@@ -58,10 +56,11 @@ pub enum ProductFeatureGroup {
     BrowserWeb,
     ComputerUse,
     ImageAnalysis,
+    ImageGeneration,
+    OfficeDocuments,
     MiniApp,
     Pages,
     Creation,
-    Canvas,
     AgentControl,
 }
 
@@ -74,10 +73,11 @@ impl ProductFeatureGroup {
             Self::BrowserWeb => "browser-web",
             Self::ComputerUse => "computer-use",
             Self::ImageAnalysis => "image-analysis",
+            Self::ImageGeneration => "image-generation",
+            Self::OfficeDocuments => "office-documents",
             Self::MiniApp => "miniapp",
             Self::Pages => "pages",
             Self::Creation => "creation",
-            Self::Canvas => "canvas",
             Self::AgentControl => "agent-control",
         }
     }
@@ -98,10 +98,11 @@ impl From<ToolPackFeatureGroup> for ProductFeatureGroup {
             ToolPackFeatureGroup::BrowserWeb => Self::BrowserWeb,
             ToolPackFeatureGroup::ComputerUse => Self::ComputerUse,
             ToolPackFeatureGroup::ImageAnalysis => Self::ImageAnalysis,
+            ToolPackFeatureGroup::ImageGeneration => Self::ImageGeneration,
+            ToolPackFeatureGroup::OfficeDocuments => Self::OfficeDocuments,
             ToolPackFeatureGroup::MiniApp => Self::MiniApp,
             ToolPackFeatureGroup::Pages => Self::Pages,
             ToolPackFeatureGroup::Creation => Self::Creation,
-            ToolPackFeatureGroup::Canvas => Self::Canvas,
             ToolPackFeatureGroup::AgentControl => Self::AgentControl,
         }
     }
@@ -116,10 +117,11 @@ impl From<ProductFeatureGroup> for ToolPackFeatureGroup {
             ProductFeatureGroup::BrowserWeb => Self::BrowserWeb,
             ProductFeatureGroup::ComputerUse => Self::ComputerUse,
             ProductFeatureGroup::ImageAnalysis => Self::ImageAnalysis,
+            ProductFeatureGroup::ImageGeneration => Self::ImageGeneration,
+            ProductFeatureGroup::OfficeDocuments => Self::OfficeDocuments,
             ProductFeatureGroup::MiniApp => Self::MiniApp,
             ProductFeatureGroup::Pages => Self::Pages,
             ProductFeatureGroup::Creation => Self::Creation,
-            ProductFeatureGroup::Canvas => Self::Canvas,
             ProductFeatureGroup::AgentControl => Self::AgentControl,
         }
     }
@@ -170,7 +172,7 @@ impl ProductCapabilityPack {
 pub enum DeliveryProfile {
     ProductFull,
     Desktop,
-    DataMigrator,
+    DataTools,
     Cli,
     Server,
     Remote,
@@ -185,7 +187,7 @@ impl DeliveryProfile {
         match self {
             Self::ProductFull => "product-full",
             Self::Desktop => "desktop",
-            Self::DataMigrator => "data-migrator",
+            Self::DataTools => "data-tools",
             Self::Cli => "cli",
             Self::Server => "server",
             Self::Remote => "remote",
@@ -200,7 +202,7 @@ impl DeliveryProfile {
         &[
             Self::ProductFull,
             Self::Desktop,
-            Self::DataMigrator,
+            Self::DataTools,
             Self::Cli,
             Self::Server,
             Self::Remote,
@@ -262,7 +264,7 @@ const PRODUCT_DELIVERY_PROFILE_ENTRIES: &[ProductDeliveryProfileEntry] = &[
         ProductCoreDependencyMode::ProductFullCompatibility,
     ),
     ProductDeliveryProfileEntry::new(
-        DeliveryProfile::DataMigrator,
+        DeliveryProfile::DataTools,
         ProductCoreDependencyMode::ExplicitCoreCapabilityClosure,
     ),
     ProductDeliveryProfileEntry::new(
@@ -956,7 +958,7 @@ pub fn product_extension_capabilities_for_profile(
         DeliveryProfile::Server
         | DeliveryProfile::Remote
         | DeliveryProfile::Acp
-        | DeliveryProfile::DataMigrator
+        | DeliveryProfile::DataTools
         | DeliveryProfile::Web
         | DeliveryProfile::MobileWeb
         | DeliveryProfile::Sdk => PluginRuntimeUnavailableReason::UnsupportedProfile,
@@ -1006,13 +1008,6 @@ const MINIAPP_SERVICES: &[RuntimeServiceCapability] = &[
     RuntimeServiceCapability::Workspace,
     RuntimeServiceCapability::Events,
 ];
-const CANVAS_SERVICES: &[RuntimeServiceCapability] = &[
-    RuntimeServiceCapability::FileSystem,
-    RuntimeServiceCapability::Workspace,
-    RuntimeServiceCapability::SessionStore,
-    RuntimeServiceCapability::Events,
-];
-
 const CODE_AGENT_TOOL_GROUPS: &[&str] = &[
     "core.basic",
     "core.agent",
@@ -1026,7 +1021,6 @@ const DEEP_REVIEW_TOOL_GROUPS: &[&str] = &["core.review"];
 const DEEP_RESEARCH_TOOL_GROUPS: &[&str] = &["core.web", "core.mcp"];
 const MINIAPP_TOOL_GROUPS: &[&str] = &["core.miniapp"];
 const CREATION_TOOL_GROUPS: &[&str] = &["core.creation", "core.miniapp"];
-const CANVAS_TOOL_GROUPS: &[&str] = &["core.canvas"];
 
 const CODE_AGENT_IDS: &[&str] = &[
     "OpenBitFun",
@@ -1090,12 +1084,6 @@ const CREATION_CAPABILITY_PACK: ProductCapabilityPack = ProductCapabilityPack::n
     CREATION_TOOL_GROUPS,
     CREATION_AGENT_IDS,
 );
-const CANVAS_CAPABILITY_PACK: ProductCapabilityPack = ProductCapabilityPack::new(
-    ProductCapabilityId::Canvas,
-    CANVAS_SERVICES,
-    CANVAS_TOOL_GROUPS,
-    NO_PRODUCT_AGENTS,
-);
 const VOICE_INPUT_CAPABILITY_PACK: ProductCapabilityPack =
     ProductCapabilityPack::new(ProductCapabilityId::VoiceInput, &[], &[], NO_PRODUCT_AGENTS);
 
@@ -1106,7 +1094,6 @@ const DEFAULT_PRODUCT_CAPABILITY_PACKS: &[ProductCapabilityPack] = &[
     MINIAPP_CAPABILITY_PACK,
     PAGES_CAPABILITY_PACK,
     CREATION_CAPABILITY_PACK,
-    CANVAS_CAPABILITY_PACK,
     VOICE_INPUT_CAPABILITY_PACK,
 ];
 const EMPTY_PRODUCT_CAPABILITY_PACKS: &[ProductCapabilityPack] = &[];
@@ -1153,7 +1140,7 @@ fn product_capability_registry_for_profile(profile: DeliveryProfile) -> ProductC
         }
         DeliveryProfile::Server
         | DeliveryProfile::Remote
-        | DeliveryProfile::DataMigrator
+        | DeliveryProfile::DataTools
         | DeliveryProfile::Web
         | DeliveryProfile::MobileWeb => {
             ProductCapabilityRegistry::new(EMPTY_PRODUCT_CAPABILITY_PACKS)

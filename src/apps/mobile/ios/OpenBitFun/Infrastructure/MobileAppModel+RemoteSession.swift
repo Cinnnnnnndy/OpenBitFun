@@ -171,7 +171,8 @@ extension MobileAppModel {
                     directoryExpanded: directory?.expanded ?? false,
                     directoryStatus: directory?.status.name ?? "IDLE",
                     remoteConnectionId: workspace.remoteConnectionId,
-                    remoteSshHost: workspace.remoteSshHost
+                    remoteSshHost: workspace.remoteSshHost,
+                    kind: workspace.kind
                 )
             }
             return MobileDeviceDirectoryEntry(
@@ -186,7 +187,7 @@ extension MobileAppModel {
                 recentWorkspaces: entry.recentWorkspaces.map { workspace in
                     MobileWorkspaceGroup(workspaceId: workspace.workspaceId, path: workspace.path, name: workspace.displayName,
                         selected: false, sessions: [], deviceKey: deviceKey,
-                        remoteConnectionId: workspace.remoteConnectionId, remoteSshHost: workspace.remoteSshHost)
+                        remoteConnectionId: workspace.remoteConnectionId, remoteSshHost: workspace.remoteSshHost, kind: workspace.kind)
                 }
             )
         }
@@ -393,6 +394,7 @@ extension MobileAppModel {
     /// normally arrive inside the grace period; a relay fetch gets an explicit
     /// skeleton instead of leaving the previous session visible.
     func beginRemoteConversationOpen(sessionID: String) {
+        remotePromptSuggestion = nil
         remoteOpenedSessionID = nil
         remoteConversationLoadTask?.cancel()
         remoteConversationLoadGeneration &+= 1
@@ -449,10 +451,11 @@ extension MobileAppModel {
                 "Remote session timeline ready elapsed_ms=\(elapsedMS, privacy: .public) generation=\(self.remoteConversationLoadGeneration, privacy: .public)"
             )
         }
-        resetRemoteConversationOpen()
+        resetRemoteConversationOpen(clearSuggestion: false)
     }
 
-    func resetRemoteConversationOpen() {
+    func resetRemoteConversationOpen(clearSuggestion: Bool = true) {
+        if clearSuggestion { remotePromptSuggestion = nil }
         remoteConversationLoadTask?.cancel()
         remoteConversationLoadTask = nil
         remoteConversationLoadGeneration &+= 1
@@ -809,7 +812,8 @@ extension MobileAppModel {
                         directoryExpanded: workspace.directoryExpanded,
                         directoryStatus: workspace.directoryStatus,
                         remoteConnectionId: workspace.remoteConnectionId,
-                        remoteSshHost: workspace.remoteSshHost
+                        remoteSshHost: workspace.remoteSshHost,
+                        kind: workspace.kind
                     )
                 },
                 sessions: device.sessions.filter { !succeeded.contains($0.id) },
@@ -996,6 +1000,11 @@ extension MobileAppModel {
         )
     }
 
+    func refreshMessageQueue() { coreAdapter?.refreshMessageQueue() }
+    func moveQueuedMessage(_ id: String, before: String?) { coreAdapter?.moveQueuedMessage(id, before: before) }
+    func cancelQueuedMessage(_ id: String) { coreAdapter?.cancelQueuedMessage(id) }
+    func promoteQueuedMessage(_ id: String) { coreAdapter?.promoteQueuedMessage(id) }
+
     func apply(remoteState state: RemoteSessionUiState, targetKey: String, epoch: UInt64) {
         guard !localActionPreview, !accountLoginPreview, !remoteCreatePreview else { return }
         guard RemoteAuthorityGate.callbackMatchesAuthority(
@@ -1016,6 +1025,7 @@ extension MobileAppModel {
                 return
             }
             permissionMailbox = nil
+            messageQueue = nil
             remoteOpenedSessionID = nil
             remoteInitialSessionReady = false
             if let failed = state as? RemoteSessionUiStateFailed {
@@ -1058,6 +1068,7 @@ extension MobileAppModel {
         ) else { return }
         setPublishedIfChanged(\.remoteOpenedSessionID, to: ready.timeline?.sessionId)
         permissionMailbox = ready.permissionMailbox
+        messageQueue = ready.messageQueue
         completionNotifier.observe(state, target: "\(targetKey):\(epoch)")
         remoteLastAppliedAuthority = RemoteAuthorityGate.updatedScope(
             targetKey: targetKey,
@@ -1145,6 +1156,8 @@ extension MobileAppModel {
         let acceptsTimeline = remoteConversationOpeningSessionID.map {
             ready.timeline?.sessionId == $0
         } ?? true
+        setPublishedIfChanged(\.remotePromptSuggestion,
+            to: acceptsTimeline && ready.selectedSessionId == selectedSessionID ? ready.promptSuggestion : nil)
         activeTurnID = acceptsTimeline ? ready.timeline?.activeTurn?.turnId : nil
         setPublishedIfChanged(\.isSending, to: acceptsTimeline && ready.timeline?.activeTurn != nil)
         let projectedModelOptions = ready.createModelOptions(fallbackLabel: localized("模型")).map { option in
@@ -1367,7 +1380,8 @@ extension MobileAppModel {
                 selected: workspace.selected,
                 sessions: remoteSessions.filter { ownedIDs.contains($0.id) },
                 remoteConnectionId: workspace.remoteConnectionId,
-                remoteSshHost: workspace.remoteSshHost
+                remoteSshHost: workspace.remoteSshHost,
+                kind: workspace.kind
             )
         }
         setPublishedIfChanged(\.remoteWorkspaces, to: projectedWorkspaces)

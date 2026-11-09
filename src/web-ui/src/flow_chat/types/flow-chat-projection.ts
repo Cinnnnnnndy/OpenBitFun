@@ -1,4 +1,4 @@
-import type { DialogTurn, ModelRound, FlowToolItem, FlowUserSteeringItem, TokenUsage } from './flow-chat';
+import type { DialogTurn, ModelRound, FlowUserSteeringItem, TokenUsage } from './flow-chat';
 import type { ExploreGroupData, FlowGroupData, ModelRoundItemGroup } from '../grouping/types';
 import type { TurnCompletionNotice } from '../utils/turnCompletionNotice';
 
@@ -16,11 +16,21 @@ export interface TimelineBlock {
   revealThinkingIds?: string[];
   /** Bounded, stable sibling grid; native rows wrap without reparenting cards. */
   layout?: 'agent-cards';
+  /** Presentation-only source coordinates. Canonical message text stays whole. */
+  markdownSection?: { start: number; end: number };
 }
 
 export type VirtualItem = VirtualContent & { timeline?: TimelineBlock };
 
 type VirtualContent =
+  | {
+      type: 'background-run';
+      data: DialogTurn['userMessage'];
+      turn: DialogTurn;
+      turnId: string;
+      absoluteTurnIndex?: number;
+      turnStatus?: DialogTurn['status'];
+    }
   | {
       type: 'user-message';
       data: DialogTurn['userMessage'];
@@ -56,8 +66,10 @@ type VirtualContent =
       turnStartedAt?: number;
       turnEndedAt?: number;
       turnDurationMs?: number;
+      /** Sum of model request durations including TTFT; the throughput denominator. */
+      turnOutputDurationMs?: number;
+      turnTtftMs?: number;
       turnTokenUsage?: TokenUsage;
-      canvasArtifactItems?: FlowToolItem[];
     }
   | { type: 'explore-group'; data: ExploreGroupData; turnId: string }
   | { type: 'turn-completion-notice'; data: TurnCompletionNotice; turnId: string }

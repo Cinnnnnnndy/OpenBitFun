@@ -8,7 +8,7 @@
 
 use std::sync::Arc;
 
-pub const AGENT_RUNTIME_SDK_API_VERSION: u32 = 10;
+pub const AGENT_RUNTIME_SDK_API_VERSION: u32 = 11;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
@@ -34,7 +34,6 @@ impl AgentRuntimeSdkCompatibility {
     }
 }
 
-pub use crate::context_profile::{ContextProfile, ContextProfilePolicy, ModelCapabilityProfile};
 pub use crate::dialog_turn::TurnTokenUsage;
 pub use crate::event_source::{AgentEventReceiver, AgentEventSource, AgentSessionEventReceiver};
 pub use crate::permission::{
@@ -543,6 +542,23 @@ impl AgentRuntime {
         request: AgentSessionModelUpdateRequest,
     ) -> Result<(), RuntimeError> {
         self.inner.update_session_model(request).await
+    }
+
+    pub async fn update_session_model_target(
+        &self,
+        session_id: &str,
+        selection: openbitfun_core_types::model_pool::ModelSelection,
+    ) -> Result<openbitfun_core_types::model_pool::SessionModelTarget, RuntimeError> {
+        self.inner
+            .update_session_model_target(session_id, selection)
+            .await
+    }
+
+    pub async fn get_session_model_target(
+        &self,
+        session_id: &str,
+    ) -> Result<openbitfun_core_types::model_pool::SessionModelTarget, RuntimeError> {
+        self.inner.get_session_model_target(session_id).await
     }
 
     pub async fn update_session_model_selection(

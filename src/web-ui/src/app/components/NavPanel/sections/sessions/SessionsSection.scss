@@ -25,7 +25,10 @@
     margin: 0 var(--openbitfun-space-1) 0 calc(var(--openbitfun-space-1) + 4px);
 
     &.is-flat-workspace-view {
-      margin: 0 6px;
+      // The avatar artwork is inset inside its box. Use the navigation's 8px
+      // optical inset for titles and the toggle, including the 1px list margin.
+      --openbitfun-nav-session-rail: calc(var(--openbitfun-space-2) - 1px);
+      margin: 0 1px;
       padding: 2px 0;
     }
   }
@@ -71,6 +74,7 @@
   }
 
   &__inline-loading {
+    animation: openbitfun-nav-inline-loading-reveal 160ms ease-out 200ms both;
     display: flex;
     align-items: center;
     gap: 5px;
@@ -246,8 +250,8 @@
     }
   }
 
-  // Status and the menu share one trailing cell, including when status is idle.
-  // Visibility changes never alter the title's available width.
+  // Nested rows keep one trailing cell, including when status is idle.
+  // Flat lists release unused menu space below.
   &__inline-item-trailing {
     display: grid;
     flex: 0 0 var(--openbitfun-space-5);
@@ -263,6 +267,28 @@
     .openbitfun-nav-panel__inline-item:hover &,
     .openbitfun-nav-panel__inline-item:focus-within &,
     .openbitfun-nav-panel__inline-item.is-menu-open & {
+      visibility: hidden;
+    }
+  }
+
+  &__inline-list.is-flat-workspace-view {
+    .openbitfun-nav-panel__inline-item.has-workspace-name .openbitfun-nav-panel__inline-item-trailing {
+      // Only an actual status occupies row space; hidden actions do not.
+      display: contents;
+    }
+
+    .openbitfun-nav-panel__inline-item.has-workspace-name .openbitfun-nav-panel__inline-item-actions {
+      position: absolute;
+      top: 50%;
+      right: var(--openbitfun-space-1);
+      transform: translateY(-50%);
+    }
+
+    // Preserve title geometry while the project name yields to row actions.
+    // Rows without actions keep their name visible.
+    .openbitfun-nav-panel__inline-item:has(.openbitfun-nav-panel__inline-item-actions):hover .openbitfun-nav-panel__inline-item-workspace-name,
+    .openbitfun-nav-panel__inline-item:has(.openbitfun-nav-panel__inline-item-actions):focus-within .openbitfun-nav-panel__inline-item-workspace-name,
+    .openbitfun-nav-panel__inline-item.is-menu-open .openbitfun-nav-panel__inline-item-workspace-name {
       visibility: hidden;
     }
   }
@@ -286,8 +312,14 @@
     }
   }
 
-  &__inline-item-btw-badge {
+  &__inline-item-btw-badge,
+  &__inline-item-source-badge {
     flex: 0 0 auto;
+  }
+
+  &__inline-item-archived-badge {
+    flex: 0 0 auto;
+    margin-inline-start: var(--openbitfun-space-1);
   }
 
   &__inline-item-dispatch-badge {
@@ -494,6 +526,7 @@
   &__inline-item-menu-popover {
     position: fixed;
     z-index: var(--openbitfun-layer-popover);
+    max-block-size: min(var(--openbitfun-overlay-menu-max-block-size), calc(100vh - 16px));
   }
 
   &__inline-item-edit {
@@ -776,7 +809,7 @@
 // response. Running/attention motion remains because it communicates state.
 .openbitfun-nav-panel {
   &__inline-list {
-    margin: 0 6px 0 var(--openbitfun-space-3);
+    margin: 0 var(--openbitfun-space-3);
     padding: 2px 0;
   }
 
@@ -909,4 +942,11 @@
   &__inline-item-edit-btn {
     @include nav-font.nav-panel-text-icon;
   }
+}
+
+// A wait that ends quickly shows nothing: the indicator fades in only once
+// the wait has lasted long enough to be noticed.
+@keyframes openbitfun-nav-inline-loading-reveal {
+  from { opacity: 0; }
+  to { opacity: 1; }
 }

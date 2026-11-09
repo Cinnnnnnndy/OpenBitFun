@@ -2,6 +2,8 @@
 //!
 //! Provides AI clients and related services
 
+pub(crate) mod account_client_source;
+pub(crate) mod channel_client_source;
 pub mod client_factory;
 pub(crate) mod provider_catalog;
 pub(crate) mod reasoning_catalog;
@@ -9,8 +11,8 @@ pub mod tool_call_accumulator;
 
 use std::time::Duration;
 
-pub use openbitfun_ai_adapters::providers;
 pub use openbitfun_ai_adapters::stream as ai_stream_handlers;
+pub use openbitfun_ai_adapters::{magpie, providers};
 
 pub use client_factory::{
     get_global_ai_client_factory, initialize_global_ai_client_factory, AIClientFactory,

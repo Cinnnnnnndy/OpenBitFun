@@ -20,11 +20,12 @@ import { useApp } from '../hooks/useApp';
 import { useShortcut } from '@/infrastructure/hooks/useShortcut';
 import { configManager } from '@/infrastructure/config/services/ConfigManager';
 import { FlowChatManager } from '../../flow_chat/services/FlowChatManager';
-import { isSurfaceChangedError } from '@/infrastructure/peer-device/deviceSurface';
+import { getActiveSurfaceId, isSurfaceChangedError } from '@/infrastructure/peer-device/deviceSurface';
+import { getDeviceOpenIntent, selectsDeviceSession } from '@/infrastructure/peer-device/deviceOpenIntent';
 import WorkspaceBody from './WorkspaceBody';
+import { WindowResizeLayout } from './WindowResizeLayout';
 import { useToolbarModeContext } from '../../flow_chat/components/toolbar-mode/ToolbarModeContext';
 import { MCPInteractionDialog } from '../components/MCPInteractionDialog/MCPInteractionDialog';
-import { workspaceAPI } from '@/infrastructure/api';
 import { systemAPI } from '@/infrastructure/api/service-api/SystemAPI';
 import type { CloseBehavior } from '@/infrastructure/api/service-api/SystemAPI';
 import { RetainedMountBoundary } from '@/shared/presence';
@@ -38,8 +39,9 @@ import { shortcutManager, parseStoredKeybindings } from '@/infrastructure/servic
 import { isMacOSDesktopRuntime } from '@/infrastructure/runtime';
 import { flowChatSessionConfigForWorkspace } from '../utils/projectSessionWorkspace';
 import { startSessionSceneLifecycle } from '../services/sessionSceneLifecycle';
+import { clearTransientGenerativeWidgetResources } from '@/shared/services/workbenchContentService';
 import { openMainSession } from '@/flow_chat/services/sessionActivation';
-import { notificationService } from '@/shared/notification-system';
+import { AcpSessionNotifications } from './AcpSessionNotifications';
 import { api } from '@/infrastructure/api/service-api/ApiClient';
 import { AppearanceBackgroundMediaLayer, appearanceRuntime, useAppearance } from '@/infrastructure/appearance';
 import { PeerConnectionStatus } from '@/infrastructure/peer-device/PeerConnectionStatus';
@@ -48,9 +50,6 @@ import './AppLayout.scss';
 type TransitionDirection = 'entering' | 'returning' | null;
 
 const log = createLogger('AppLayout');
-const NewProjectDialog = lazyWithRecovery(() =>
-  import('../components/NewProjectDialog').then(module => ({ default: module.NewProjectDialog }))
-);
 const ToolbarMode = lazyWithRecovery(() =>
   import('../../flow_chat/components/toolbar-mode/ToolbarMode').then(module => ({
     default: module.ToolbarMode,
@@ -68,14 +67,6 @@ interface AppLayoutProps {
   className?: string;
 }
 
-interface AcpSessionCreationEventDetail {
-  phase?: 'start' | 'finish';
-  clientId?: string;
-  action?: 'create' | 'restore';
-  requestId?: string;
-  succeeded?: boolean;
-}
-
 interface WindowModeHint {
   id: number;
   title: string;
@@ -84,6 +75,9 @@ interface WindowModeHint {
 
 const AppLayout: React.FC<AppLayoutProps> = ({ className = '' }) => {
   useLayoutEffect(startSessionSceneLifecycle, []);
+  useLayoutEffect(() => {
+    clearTransientGenerativeWidgetResources();
+  }, []);
   const { t } = useI18n('components');
   const { t: tCommon } = useI18n('common');
   const currentAppearance = useAppearance().current;
@@ -217,7 +211,6 @@ const AppLayout: React.FC<AppLayoutProps> = ({ className = '' }) => {
   }, [hasWorkspace, loading, recentWorkspaces, switchWorkspace]);
 
   // Dialog state (previously in TitleBar)
-  const [showNewProjectDialog, setShowNewProjectDialog] = useState(false);
   const [showAboutDialog, setShowAboutDialog] = useState(false);
   const closeAboutDialog = useCallback(() => setShowAboutDialog(false), []);
   const [showWorkspaceStatus, setShowWorkspaceStatus] = useState(false);
@@ -237,34 +230,19 @@ const AppLayout: React.FC<AppLayoutProps> = ({ className = '' }) => {
       log.error('Failed to open project', error);
     }
   }, [openWorkspace, t]);
-  const handleNewProject = useCallback(() => setShowNewProjectDialog(true), []);
+  const handleNewProject = useCallback(() => window.dispatchEvent(new Event('nav:new-project')), []);
   const handleShowAbout = useCallback(() => setShowAboutDialog(true), []);
-
-  const handleConfirmNewProject = useCallback(async (parentPath: string, projectName: string) => {
-    const normalized = parentPath.replace(/\\/g, '/');
-    const newProjectPath = `${normalized}/${projectName}`;
-    try {
-      await workspaceAPI.createDirectory(newProjectPath);
-      await openWorkspace(newProjectPath);
-    } catch (error) {
-      log.error('Failed to create project', error);
-      throw error;
-    }
-  }, [openWorkspace]);
 
   // Listen for nav-panel events dispatched by the workspace area
   useEffect(() => {
     const onOpenProject = () => { void handleOpenProject(); };
-    const onNewProject = () => handleNewProject();
     window.addEventListener('nav:open-project', onOpenProject);
-    window.addEventListener('nav:new-project', onNewProject);
     window.addEventListener('nav:show-about', handleShowAbout);
     return () => {
       window.removeEventListener('nav:open-project', onOpenProject);
-      window.removeEventListener('nav:new-project', onNewProject);
       window.removeEventListener('nav:show-about', handleShowAbout);
     };
-  }, [handleNewProject, handleOpenProject, handleShowAbout]);
+  }, [handleOpenProject, handleShowAbout]);
 
   // macOS native menubar events (previously in TitleBar)
   useEffect(() => {
@@ -296,6 +274,7 @@ const AppLayout: React.FC<AppLayoutProps> = ({ className = '' }) => {
     let cancelled = false;
     const initializeFlowChat = async () => {
       if (!currentWorkspace?.rootPath) return;
+      const explicitOpen = getDeviceOpenIntent();
 
       // Remote session index and turns live under ~/.openbitfun/remote_ssh/... (local disk).
       // Always initialize FlowChat so historical sessions list even when SSH is not connected yet.
@@ -317,6 +296,10 @@ const AppLayout: React.FC<AppLayoutProps> = ({ className = '' }) => {
         if (cancelled) {
           return;
         }
+        // The explicit device action opens or creates its own session, even
+        // when this workspace's metadata page is empty.
+        if (selectsDeviceSession(explicitOpen, getActiveSurfaceId())
+          || selectsDeviceSession(getDeviceOpenIntent(), getActiveSurfaceId())) return;
 
         let sessionId: string | undefined;
         const { flowChatStore } = await import('@/flow_chat/store/FlowChatStore');
@@ -615,35 +598,6 @@ const AppLayout: React.FC<AppLayoutProps> = ({ className = '' }) => {
     return () => window.removeEventListener('openbitfun:create-acp-session', handler);
   }, [currentWorkspace]);
 
-  React.useEffect(() => {
-    const handler = (event: Event) => {
-      const detail = (event as CustomEvent<AcpSessionCreationEventDetail>).detail;
-      const clientId = detail?.clientId?.trim() || 'ACP';
-      const action = detail?.action === 'restore' ? 'restore' : 'create';
-      const id = detail?.requestId?.trim() || `${action}:${clientId}`;
-      if (detail?.phase === 'start') {
-        notificationService.silent({
-          title: clientId,
-          message: tCommon('nav.workspaces.startingAcpSession'),
-          type: 'info',
-          metadata: { source: 'acp-session', clientId, action, requestId: id, phase: 'start' },
-        });
-      } else if (detail?.phase === 'finish') {
-        const succeeded = detail.succeeded !== false;
-        notificationService.silent({
-          title: clientId,
-          message: succeeded
-            ? tCommon('nav.workspaces.acpSessionStarted')
-            : tCommon('nav.workspaces.acpSessionStartFailed'),
-          type: succeeded ? 'success' : 'error',
-          metadata: { source: 'acp-session', clientId, action, requestId: id, phase: 'finish', succeeded },
-        });
-      }
-    };
-    window.addEventListener('openbitfun:acp-session-creation', handler);
-    return () => window.removeEventListener('openbitfun:acp-session-creation', handler);
-  }, [tCommon]);
-
   // Global drag-and-drop
   React.useEffect(() => {
     const handleDragStart = (e: DragEvent) => {
@@ -693,6 +647,7 @@ const AppLayout: React.FC<AppLayoutProps> = ({ className = '' }) => {
     return (
       <>
         <DailyAppUpdateGate />
+        <AcpSessionNotifications />
         {aboutDialog}
         <div
           className={`${containerClassName} openbitfun-app-layout--toolbar-mode`}
@@ -719,6 +674,8 @@ const AppLayout: React.FC<AppLayoutProps> = ({ className = '' }) => {
   return (
     <>
       <DailyAppUpdateGate />
+      <AcpSessionNotifications />
+      <WindowResizeLayout />
       <div
         className={containerClassName}
         data-testid="app-layout"
@@ -765,16 +722,6 @@ const AppLayout: React.FC<AppLayoutProps> = ({ className = '' }) => {
       </div>
 
       {/* Dialogs (previously owned by TitleBar) */}
-      <RetainedMountBoundary present={showNewProjectDialog}>
-        <Suspense fallback={null}>
-          <NewProjectDialog
-            isOpen={showNewProjectDialog}
-            onClose={() => setShowNewProjectDialog(false)}
-            onConfirm={handleConfirmNewProject}
-            defaultParentPath={hasWorkspace ? currentWorkspace?.rootPath : undefined}
-          />
-        </Suspense>
-      </RetainedMountBoundary>
       {aboutDialog}
       <RetainedMountBoundary present={showWorkspaceStatus}>
         <Suspense fallback={null}>

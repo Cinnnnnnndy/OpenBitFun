@@ -11,12 +11,10 @@
  * broadcast on the shared change event so those views stay in step.
  */
 
-import {
+import { captureConfirmationAnchor,
   Button,
   Icon,
-  IconButton,
   ScrollArea,
-  Tooltip,
   Dialog,
   DialogBody,
   DialogClose,
@@ -66,19 +64,17 @@ import {
   type TodoOccurrence,
 } from './todoOccurrences';
 import { buildWorkspaceOptions, formatDateTime } from './todoPresentation';
+import { useTodoClock } from './useTodoClock';
 import './TodosScene.scss';
 
 const log = createLogger('TodosScene');
-
-/** Keeps countdowns honest without re-rendering more than once a minute. */
-const CLOCK_TICK_MS = 30_000;
 
 function startOfCurrentMonthMs(nowMs: number): number {
   const now = new Date(nowMs);
   return new Date(now.getFullYear(), now.getMonth(), 1).getTime();
 }
 
-const TodosScene: React.FC = () => {
+const TodosScene: React.FC<{ isActive?: boolean }> = ({ isActive = true }) => {
   const { t, formatDate } = useI18n(['scenes/todos', 'common', 'shared']);
   const instanceIdRef = useRef(`todos-scene-${Math.random().toString(36).slice(2)}`);
 
@@ -86,7 +82,7 @@ const TodosScene: React.FC = () => {
 
   const [jobs, setJobs] = useState<CronJob[]>([]);
   const [saving, setSaving] = useState(false);
-  const [nowMs, setNowMs] = useState(() => Date.now());
+  const nowMs = useTodoClock(isActive);
   const [monthAnchorMs, setMonthAnchorMs] = useState(() => startOfCurrentMonthMs(Date.now()));
   const [selectedDayKey, setSelectedDayKey] = useState<string | null>(null);
 
@@ -149,11 +145,6 @@ const TodosScene: React.FC = () => {
     }
     return workspaceOptions[0]?.value ?? '';
   }, [currentWorkspace, primaryAssistantWorkspaceId, workspaceOptions]);
-
-  useEffect(() => {
-    const timer = window.setInterval(() => setNowMs(Date.now()), CLOCK_TICK_MS);
-    return () => window.clearInterval(timer);
-  }, []);
 
   const loadJobs = useCallback(async () => {
     try {
@@ -262,8 +253,8 @@ const TodosScene: React.FC = () => {
     }
   }, [loadJobs, t]);
 
-  const handleDelete = useCallback(async (job: CronJob) => {
-    const confirmed = await confirmDanger(t('deleteDialog.title', { name: job.name }), null);
+  const handleDelete = useCallback(async (job: CronJob, trigger?: HTMLElement) => {
+    const confirmed = await confirmDanger(t('deleteDialog.title', { name: job.name }), null, { anchor: captureConfirmationAnchor(trigger) });
     if (!confirmed) return;
 
     try {
@@ -312,6 +303,7 @@ const TodosScene: React.FC = () => {
           name: draft.name.trim(),
           payload: { text: draft.text.trim() },
           enabled: draft.enabled,
+          ...(editingJob?.reportPolicy !== undefined ? { reportPolicy: draft.reportPolicy } : {}),
           schedule,
           target,
         };
@@ -372,10 +364,6 @@ const TodosScene: React.FC = () => {
     [buckets.upcoming],
   );
 
-  const monthLabel = useMemo(() => (
-    formatDate(new Date(monthAnchorMs), { year: 'numeric', month: 'long' })
-  ), [formatDate, monthAnchorMs]);
-
   const clearSelectedDay = useCallback(() => {
     setSelectedDayKey(null);
   }, []);
@@ -407,270 +395,240 @@ const TodosScene: React.FC = () => {
       data-openbitfun-part="root"
       data-testid="todos-scene"
     >
-      <header className="openbitfun-todos__head" data-openbitfun-scene="todos" data-openbitfun-part="header">
-        <div className="openbitfun-todos__head-main">
-          <div className="openbitfun-todos__head-text">
-            <h2 className="openbitfun-todos__title">{t('title')}</h2>
-            <p className="openbitfun-todos__subtitle">{t('header.subtitle')}</p>
+      <div className="openbitfun-todos__content" data-testid="todos-content">
+        <header className="openbitfun-todos__head" data-openbitfun-scene="todos" data-openbitfun-part="header">
+          <div className="openbitfun-todos__head-main">
+            <div className="openbitfun-todos__head-text">
+              <h2 className="openbitfun-todos__title">{t('title')}</h2>
+              <p className="openbitfun-todos__subtitle">{t('header.subtitle')}</p>
+            </div>
           </div>
-        </div>
-        <div className="openbitfun-todos__head-actions" data-openbitfun-scene="todos" data-openbitfun-part="headerActions">
-          <div
-            className="openbitfun-todos__month-navigation"
-            data-openbitfun-scene="todos"
-            data-openbitfun-part="monthNavigation"
-          >
-            <Tooltip content={t('calendar.previousMonth')}>
-              <IconButton
-                type="button"
-                size="sm"
-                aria-label={t('calendar.previousMonth')}
-                icon={<Icon name="chevron-left" size="lg" />}
-                onClick={() => shiftMonth(-1)}
-                data-testid="todos-calendar-prev"
-              />
-            </Tooltip>
-            <span className="openbitfun-todos__month-label" data-testid="todos-calendar-month">
-              <CalendarDays size={14} aria-hidden="true" />
-              <span>{monthLabel}</span>
-            </span>
-            <Tooltip content={t('calendar.nextMonth')}>
-              <IconButton
-                type="button"
-                size="sm"
-                aria-label={t('calendar.nextMonth')}
-                icon={<Icon name="chevron-right" size="lg" />}
-                onClick={() => shiftMonth(1)}
-                data-testid="todos-calendar-next"
-              />
-            </Tooltip>
+          <div className="openbitfun-todos__head-actions" data-openbitfun-scene="todos" data-openbitfun-part="headerActions">
+            <Button
+              size="sm"
+              variant="primary"
+              className="openbitfun-todos__new-button"
+              leadingIcon={<Icon name="plus" size="lg" />}
+              onClick={handleCreateNew}
+              disabled={workspaceOptions.length === 0}
+              data-testid="todos-new"
+            >
+              {t('actions.newTodo')}
+            </Button>
           </div>
-          <Button
-            size="sm"
-            variant="outline"
-            className="openbitfun-todos__today-button"
-            onClick={showCurrentMonth}
-          >
-            {t('calendar.today')}
-          </Button>
-          <Button
-            size="sm"
-            variant="primary"
-            className="openbitfun-todos__new-button"
-            leadingIcon={<Icon name="plus" size="lg" />}
-            onClick={handleCreateNew}
-            disabled={workspaceOptions.length === 0}
-            data-testid="todos-new"
-          >
-            {t('actions.newTodo')}
-          </Button>
-        </div>
-      </header>
+        </header>
 
-      <Dialog
-        open={editorOpen}
-        onOpenChange={(nextOpen) => { if (!nextOpen) handleCloseEditor(); }}
-        size="2xl"
-        closeOnPointerOutside={!renderedEditor.saving}
-        aria-label={renderedEditor.editingJob ? t('editor.editTitle') : t('editor.createTitle')}
-        className="openbitfun-todos-editor-dialog"
-        data-testid="todos-editor-modal"
-      >
-        <DialogHeader className="openbitfun-todos-editor-dialog__header">
-          {!renderedEditor.saving && <DialogClose />}
-        </DialogHeader>
-        <DialogBody className="openbitfun-todos-editor-dialog__body" inset="none">
-          <TodoEditor
-            draft={renderedEditor.draft}
-            onDraftChange={setDraft}
-            validationErrors={renderedEditor.validationErrors}
-            onValidationErrorsChange={setValidationErrors}
-            workspaceOptions={renderedEditor.workspaceOptions}
-            selectedWorkspaceId={renderedEditor.selectedWorkspaceId}
-            onSelectedWorkspaceIdChange={setSelectedWorkspaceId}
-            isEditing={Boolean(renderedEditor.editingJob)}
-            boundSessionId={
-              renderedEditor.editingJob?.target.kind === 'session'
-                ? renderedEditor.editingJob.target.sessionId
-                : null
-            }
-            saving={renderedEditor.saving}
-            onSave={() => { void handleSave(); }}
-            onCancel={handleCloseEditor}
-          />
-        </DialogBody>
-      </Dialog>
-
-      <div className="openbitfun-todos__panes" data-openbitfun-scene="todos" data-openbitfun-part="panes">
-        {/* ── Tier 1: due within 24 hours ───────────────────── */}
-        <ScrollArea
-          className="openbitfun-todos__pane openbitfun-todos__pane--list"
-          aria-label={t('list.title')}
-          data-openbitfun-scene="todos"
-          data-openbitfun-part="listPane"
-          data-testid="todos-list-pane"
-          role="region"
+        <Dialog
+          open={editorOpen}
+          onOpenChange={(nextOpen) => { if (!nextOpen) handleCloseEditor(); }}
+          size="2xl"
+          closeOnPointerOutside={!renderedEditor.saving}
+          aria-label={renderedEditor.editingJob ? t('editor.editTitle') : t('editor.createTitle')}
+          className="openbitfun-todos-editor-dialog"
+          data-testid="todos-editor-modal"
         >
+          <DialogHeader className="openbitfun-todos-editor-dialog__header">
+            {!renderedEditor.saving && <DialogClose />}
+          </DialogHeader>
+          <DialogBody className="openbitfun-todos-editor-dialog__body" inset="none">
+            <TodoEditor
+              draft={renderedEditor.draft}
+              onDraftChange={setDraft}
+              validationErrors={renderedEditor.validationErrors}
+              onValidationErrorsChange={setValidationErrors}
+              workspaceOptions={renderedEditor.workspaceOptions}
+              selectedWorkspaceId={renderedEditor.selectedWorkspaceId}
+              onSelectedWorkspaceIdChange={setSelectedWorkspaceId}
+              isEditing={Boolean(renderedEditor.editingJob)}
+              boundSessionId={
+                renderedEditor.editingJob?.target.kind === 'session'
+                  ? renderedEditor.editingJob.target.sessionId
+                  : null
+              }
+              saving={renderedEditor.saving}
+              onSave={() => { void handleSave(); }}
+              onCancel={handleCloseEditor}
+            />
+          </DialogBody>
+        </Dialog>
+
+        <div className="openbitfun-todos__panes" data-openbitfun-scene="todos" data-openbitfun-part="panes">
           <section
-            className="openbitfun-todos__overview"
+            className="openbitfun-todos__pane openbitfun-todos__pane--overview"
             aria-label={t('overview.title')}
-            data-openbitfun-scene="todos"
-            data-openbitfun-part="overview"
-            data-testid="todos-overview"
           >
             <header className="openbitfun-todos__overview-head">
-              <h3 className="openbitfun-todos__overview-title">{t('overview.title')}</h3>
+              <h3 className="openbitfun-todos__pane-title">{t('overview.title')}</h3>
               <CalendarDays size={14} aria-hidden="true" />
             </header>
-            <div className="openbitfun-todos__overview-metrics">
-              <div className="openbitfun-todos__overview-metric">
-                <p className="openbitfun-todos__overview-value">
-                  <strong>{visibleTodos.length}</strong>
-                  <span>{t('overview.unit')}</span>
-                </p>
-                <p className="openbitfun-todos__overview-label">{t('overview.total')}</p>
-              </div>
-              <div className="openbitfun-todos__overview-metric">
-                <p className="openbitfun-todos__overview-value">
-                  <strong>{dueSoonTodoCount}</strong>
-                  <span>{t('overview.unit')}</span>
-                </p>
-                <p className="openbitfun-todos__overview-label">{t('overview.dueSoon')}</p>
+            <div
+              className="openbitfun-todos__overview"
+              data-openbitfun-scene="todos"
+              data-openbitfun-part="overview"
+              data-testid="todos-overview"
+            >
+              <div className="openbitfun-todos__overview-metrics">
+                <div className="openbitfun-todos__overview-metric">
+                  <p className="openbitfun-todos__overview-value">
+                    <strong>{visibleTodos.length}</strong>
+                    <span>{t('overview.unit')}</span>
+                  </p>
+                  <p className="openbitfun-todos__overview-label">{t('overview.total')}</p>
+                </div>
+                <div className="openbitfun-todos__overview-metric">
+                  <p className="openbitfun-todos__overview-value">
+                    <strong>{dueSoonTodoCount}</strong>
+                    <span>{t('overview.unit')}</span>
+                  </p>
+                  <p className="openbitfun-todos__overview-label">{t('overview.dueSoon')}</p>
+                </div>
               </div>
             </div>
           </section>
 
-          <header className="openbitfun-todos__pane-head">
-            <h3 className="openbitfun-todos__list-title">
-              {t('list.countTitle', { total: visibleTodos.length })}
-            </h3>
-          </header>
+          {/* ── Tier 1: due within 24 hours ───────────────────── */}
+          <section
+            className="openbitfun-todos__pane openbitfun-todos__pane--list"
+            aria-label={t('list.title')}
+            data-openbitfun-scene="todos"
+            data-openbitfun-part="listPane"
+            data-testid="todos-list-pane"
+            role="region"
+          >
+            <header className="openbitfun-todos__pane-head">
+              <h3 className="openbitfun-todos__list-title">
+                {t('list.countTitle', { total: visibleTodos.length })}
+              </h3>
+            </header>
 
-          {visibleTodos.length === 0 ? (
-            <p className="openbitfun-todos__empty" data-openbitfun-scene="todos" data-openbitfun-part="empty">
-              {t('list.empty')}
-            </p>
-          ) : (
-            <div className="openbitfun-todos__rows" data-openbitfun-scene="todos" data-openbitfun-part="rows">
-              {visibleTodos.map((occurrence) => (
-                <TodoItemRow
-                  key={occurrence.job.id}
-                  job={occurrence.job}
-                  atMs={occurrence.atMs}
-                  isOverdue={occurrence.isOverdue}
-                  isNextRun={occurrence.isNextRun}
-                  isRunning={occurrence.isRunning}
-                  nowMs={nowMs}
-                  workspaces={openedWorkspacesList}
-                  isSelected={editingJob?.id === occurrence.job.id}
-                  onEdit={handleEdit}
-                  onDelete={(job) => { void handleDelete(job); }}
-                  onToggleEnabled={(job, enabled) => { void handleToggleEnabled(job, enabled); }}
-                />
-              ))}
-            </div>
-          )}
-
-          {buckets.inactive.length > 0 ? (
-            <div className="openbitfun-todos__inactive" data-openbitfun-scene="todos" data-openbitfun-part="inactive">
-              <h4 className="openbitfun-todos__inactive-title">
-                {t('inactive.title', { total: buckets.inactive.length })}
-              </h4>
-              <div className="openbitfun-todos__rows">
-                {buckets.inactive.map((entry) => (
+            {visibleTodos.length === 0 ? (
+              <p className="openbitfun-todos__empty" data-openbitfun-scene="todos" data-openbitfun-part="empty">
+                {t('list.empty')}
+              </p>
+            ) : (
+              <div className="openbitfun-todos__rows" data-openbitfun-scene="todos" data-openbitfun-part="rows">
+                {visibleTodos.map((occurrence) => (
                   <TodoItemRow
-                    key={entry.job.id}
-                    job={entry.job}
-                    atMs={null}
+                    key={occurrence.job.id}
+                    job={occurrence.job}
+                    atMs={occurrence.atMs}
+                    isOverdue={occurrence.isOverdue}
+                    isNextRun={occurrence.isNextRun}
+                    isRunning={occurrence.isRunning}
                     nowMs={nowMs}
                     workspaces={openedWorkspacesList}
-                    statusLabel={inactiveStatusLabel(entry.reason)}
-                    isSelected={editingJob?.id === entry.job.id}
+                    isSelected={editingJob?.id === occurrence.job.id}
                     onEdit={handleEdit}
-                    onDelete={(job) => { void handleDelete(job); }}
+                    onDelete={(job, trigger) => { void handleDelete(job, trigger); }}
                     onToggleEnabled={(job, enabled) => { void handleToggleEnabled(job, enabled); }}
                   />
                 ))}
               </div>
-            </div>
-          ) : null}
-        </ScrollArea>
+            )}
 
-        {/* ── Tier 2: more than 24 hours out ────────────────── */}
-        <div
-          className="openbitfun-todos__pane openbitfun-todos__pane--calendar"
-          data-openbitfun-scene="todos"
-          data-openbitfun-part="calendarPane"
-          data-has-selection={selectedDayKey ? 'true' : 'false'}
-          data-testid="todos-calendar-pane"
-        >
-          <TodoCalendar
-            occurrences={buckets.calendar}
-            monthAnchorMs={monthAnchorMs}
-            selectedDayKey={selectedDayKey}
-            nowMs={nowMs}
-            onSelectDay={handleSelectDay}
-          />
+            {buckets.inactive.length > 0 ? (
+              <div className="openbitfun-todos__inactive" data-openbitfun-scene="todos" data-openbitfun-part="inactive">
+                <h4 className="openbitfun-todos__inactive-title">
+                  {t('inactive.title', { total: buckets.inactive.length })}
+                </h4>
+                <div className="openbitfun-todos__rows">
+                  {buckets.inactive.map((entry) => (
+                    <TodoItemRow
+                      key={entry.job.id}
+                      job={entry.job}
+                      atMs={null}
+                      nowMs={nowMs}
+                      workspaces={openedWorkspacesList}
+                      statusLabel={inactiveStatusLabel(entry.reason)}
+                      isSelected={editingJob?.id === entry.job.id}
+                      onEdit={handleEdit}
+                      onDelete={(job, trigger) => { void handleDelete(job, trigger); }}
+                      onToggleEnabled={(job, enabled) => { void handleToggleEnabled(job, enabled); }}
+                    />
+                  ))}
+                </div>
+              </div>
+            ) : null}
+          </section>
 
-          <RetainedMountBoundary
-            present={selectedDayKey != null}
-            retainForMs={160}
-            minimumRetainMs={160}
+          {/* ── Tier 2: more than 24 hours out ────────────────── */}
+          <div
+            className="openbitfun-todos__pane openbitfun-todos__pane--calendar"
+            data-openbitfun-scene="todos"
+            data-openbitfun-part="calendarPane"
+            data-has-selection={selectedDayKey ? 'true' : 'false'}
+            data-testid="todos-calendar-pane"
           >
-            <ScrollArea
-              className="openbitfun-todos__day-detail-presence"
-              data-open={selectedDayKey ? 'true' : 'false'}
-              aria-hidden={!selectedDayKey}
-              {...(!selectedDayKey ? { inert: '' } : {})}
+            <TodoCalendar
+              occurrences={buckets.calendar}
+              monthAnchorMs={monthAnchorMs}
+              selectedDayKey={selectedDayKey}
+              nowMs={nowMs}
+              onSelectDay={handleSelectDay}
+              onShiftMonth={shiftMonth}
+              onToday={showCurrentMonth}
+            />
+
+            <RetainedMountBoundary
+              present={selectedDayKey != null}
+              retainForMs={160}
+              minimumRetainMs={160}
             >
-              <section
-                className="openbitfun-todos__day-detail"
-                aria-label={t('calendar.dayDetailTitle')}
-                data-openbitfun-scene="todos"
-                data-openbitfun-part="dayDetail"
-                data-testid="todos-day-detail"
+              <div
+                className="openbitfun-todos__day-detail-presence"
+                data-open={selectedDayKey ? 'true' : 'false'}
+                aria-hidden={!selectedDayKey}
+                {...(!selectedDayKey ? { inert: '' } : {})}
               >
-                <header className="openbitfun-todos__day-detail-head">
-                  <h4 className="openbitfun-todos__day-detail-title">
-                    {renderedSelectedDayOccurrences[0]
-                      ? formatDateTime(renderedSelectedDayOccurrences[0].atMs, formatDate)
-                      : t('calendar.dayDetailTitle')}
-                  </h4>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={clearSelectedDay}
-                    data-testid="todos-day-clear"
-                  >
-                    {t('calendar.clearDay')}
-                  </Button>
-                </header>
-                {renderedSelectedDayOccurrences.length === 0 ? (
-                  <p className="openbitfun-todos__empty" data-testid="todos-day-empty">
-                    {t('calendar.dayEmpty')}
-                  </p>
-                ) : (
-                  <div className="openbitfun-todos__rows">
-                    {renderedSelectedDayOccurrences.map((occurrence) => (
-                      <TodoItemRow
-                        key={`${occurrence.job.id}-${occurrence.atMs}`}
-                        job={occurrence.job}
-                        atMs={occurrence.atMs}
-                        isNextRun={occurrence.isNextRun}
-                        isRunning={occurrence.isRunning}
-                        nowMs={nowMs}
-                        workspaces={openedWorkspacesList}
-                        isSelected={editingJob?.id === occurrence.job.id}
-                        onEdit={handleEdit}
-                        onDelete={(job) => { void handleDelete(job); }}
-                        onToggleEnabled={(job, enabled) => { void handleToggleEnabled(job, enabled); }}
-                      />
-                    ))}
-                  </div>
-                )}
-              </section>
-            </ScrollArea>
-          </RetainedMountBoundary>
+                <section
+                  className="openbitfun-todos__day-detail"
+                  aria-label={t('calendar.dayDetailTitle')}
+                  data-openbitfun-scene="todos"
+                  data-openbitfun-part="dayDetail"
+                  data-testid="todos-day-detail"
+                >
+                  <header className="openbitfun-todos__day-detail-head">
+                    <h4 className="openbitfun-todos__day-detail-title">
+                      {renderedSelectedDayOccurrences[0]
+                        ? formatDateTime(renderedSelectedDayOccurrences[0].atMs, formatDate)
+                        : t('calendar.dayDetailTitle')}
+                    </h4>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={clearSelectedDay}
+                      data-testid="todos-day-clear"
+                    >
+                      {t('calendar.clearDay')}
+                    </Button>
+                  </header>
+                  {renderedSelectedDayOccurrences.length === 0 ? (
+                    <p className="openbitfun-todos__empty" data-testid="todos-day-empty">
+                      {t('calendar.dayEmpty')}
+                    </p>
+                  ) : (
+                    <div className="openbitfun-todos__rows">
+                      {renderedSelectedDayOccurrences.map((occurrence) => (
+                        <TodoItemRow
+                          key={`${occurrence.job.id}-${occurrence.atMs}`}
+                          job={occurrence.job}
+                          atMs={occurrence.atMs}
+                          isNextRun={occurrence.isNextRun}
+                          isRunning={occurrence.isRunning}
+                          nowMs={nowMs}
+                          workspaces={openedWorkspacesList}
+                          isSelected={editingJob?.id === occurrence.job.id}
+                          onEdit={handleEdit}
+                          onDelete={(job, trigger) => { void handleDelete(job, trigger); }}
+                          onToggleEnabled={(job, enabled) => { void handleToggleEnabled(job, enabled); }}
+                        />
+                      ))}
+                    </div>
+                  )}
+                </section>
+              </div>
+            </RetainedMountBoundary>
+          </div>
         </div>
       </div>
     </ScrollArea>

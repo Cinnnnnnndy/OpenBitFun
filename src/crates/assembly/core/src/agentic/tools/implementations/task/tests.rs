@@ -1,6 +1,6 @@
 use super::{
-    execution::resolved_subagent_is_available, AgentExecutionTool, AgentSendInputTool,
-    AgentSpawnTool, LaunchReviewAgentTool, TaskTool,
+    execution::{requested_subagent_type_is_allowed, resolved_subagent_is_available},
+    AgentExecutionTool, AgentSendInputTool, AgentSpawnTool, LaunchReviewAgentTool, TaskTool,
 };
 use crate::agentic::agents::CustomSubagentConfig;
 use crate::agentic::agents::{
@@ -25,6 +25,15 @@ struct PromptOrderTestAgent {
     id: String,
 }
 
+fn named_agent(id: &str, name: &str) -> crate::agentic::agents::AgentInfo {
+    serde_json::from_value(json!({
+        "key": id, "id": id, "name": name, "description": "A specialist agent",
+        "isReadonly": true, "isReview": false, "toolCount": 1,
+        "defaultTools": ["Read"], "promptCacheScopeKey": "test", "source": "user"
+    }))
+    .expect("legacy catalog entry should deserialize")
+}
+
 #[test]
 fn external_subagent_validation_accepts_model_emitted_casing() {
     let available = vec!["FileFinder".to_string(), "explore".to_string()];
@@ -33,6 +42,18 @@ fn external_subagent_validation_accepts_model_emitted_casing() {
         &available,
         "Explore",
         "external_subagent_runtime:opencode-plugin:explore"
+    ));
+}
+
+#[test]
+fn fresh_subagent_type_validation_rejects_unknown_and_wrong_case_before_resolution() {
+    let available = vec!["Explore".to_string(), "GeneralPurpose".to_string()];
+
+    assert!(requested_subagent_type_is_allowed(&available, "Explore"));
+    assert!(!requested_subagent_type_is_allowed(&available, "explore"));
+    assert!(!requested_subagent_type_is_allowed(
+        &available,
+        "GhostAgent"
     ));
 }
 
@@ -94,6 +115,7 @@ fn test_tool_context(agent_type: &str) -> ToolUseContext {
         dialog_turn_id: Some("turn-1".to_string()),
         workspace: None,
         loaded_deferred_tool_specs: Vec::new(),
+        model_client: None,
         primary_model_facts: tool_runtime::context::PrimaryModelFacts::default(),
         custom_data: HashMap::new(),
         computer_use_host: None,
@@ -936,6 +958,7 @@ async fn call_impl_rejects_nested_subagent_delegation() {
         dialog_turn_id: Some("turn-1".to_string()),
         workspace: None,
         loaded_deferred_tool_specs: Vec::new(),
+        model_client: None,
         primary_model_facts: tool_runtime::context::PrimaryModelFacts::default(),
         custom_data: HashMap::from([
             (
@@ -1084,6 +1107,7 @@ async fn description_with_context_filters_restricted_subagents_by_parent_agent()
         dialog_turn_id: None,
         workspace: None,
         loaded_deferred_tool_specs: Vec::new(),
+        model_client: None,
         primary_model_facts: tool_runtime::context::PrimaryModelFacts::default(),
         custom_data: HashMap::new(),
         computer_use_host: None,
@@ -1121,6 +1145,7 @@ async fn prompt_stability_description_with_context_renders_available_agents_in_s
         dialog_turn_id: None,
         workspace: None,
         loaded_deferred_tool_specs: Vec::new(),
+        model_client: None,
         primary_model_facts: tool_runtime::context::PrimaryModelFacts::default(),
         custom_data: HashMap::new(),
         computer_use_host: None,

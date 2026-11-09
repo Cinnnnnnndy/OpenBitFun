@@ -24,6 +24,7 @@ import {
   readActiveTypographyTokenPx,
 } from '@/infrastructure/design-system/typographyRuntime';
 import { fontPreferenceService } from '@/infrastructure/font-preference';
+import { attachTerminalDiagnostics } from '../services/terminalDiagnostics';
 import '@xterm/xterm/css/xterm.css';
 import './Terminal.scss';
 
@@ -106,6 +107,11 @@ export interface TerminalProps {
   /** Notify backend PTY about size changes. */
   onResize?: (cols: number, rows: number) => void;
   onReady?: (terminal: XTerm) => void;
+  /**
+   * Link activation (Ctrl/Cmd+click). When omitted the link opens externally
+   * as-is; remote terminals use this to forward loopback ports first.
+   */
+  onLinkActivate?: (uri: string) => void;
   /**
    * Keyboard paste shortcut interceptor. Return true when the shortcut was
    * handled without reading clipboard text, for example by sending Ctrl+V to a
@@ -209,6 +215,7 @@ const Terminal = forwardRef<TerminalRef, TerminalProps>(({
   onTitleChange,
   onResize,
   onReady,
+  onLinkActivate,
   onPasteShortcut,
   onPaste,
   preventShrinkBelowColsRef,
@@ -233,6 +240,7 @@ const Terminal = forwardRef<TerminalRef, TerminalProps>(({
   const onTitleChangeRef = useRef(onTitleChange);
   const onResizeRef = useRef(onResize);
   const onReadyRef = useRef(onReady);
+  const onLinkActivateRef = useRef(onLinkActivate);
   const onPasteShortcutRef = useRef(onPasteShortcut);
   const onPasteRef = useRef(onPaste);
   const resizeSuspendedRef = useRef(resizeSuspended);
@@ -268,6 +276,7 @@ const Terminal = forwardRef<TerminalRef, TerminalProps>(({
   onTitleChangeRef.current = onTitleChange;
   onResizeRef.current = onResize;
   onReadyRef.current = onReady;
+  onLinkActivateRef.current = onLinkActivate;
   onPasteShortcutRef.current = onPasteShortcut;
   onPasteRef.current = onPaste;
   resizeSuspendedRef.current = resizeSuspended;
@@ -429,12 +438,20 @@ const Terminal = forwardRef<TerminalRef, TerminalProps>(({
       return;
     }
 
-    pendingFitAfterSuspendRef.current = false;
-    requestAnimationFrame(() => {
+    const frame = requestAnimationFrame(() => {
+      // A second drag can begin before this resume frame. Keep the pending fit
+      // until it can run; flushing while suspended discards the PTY resize.
+      if (resizeSuspendedRef.current) return;
+      pendingFitAfterSuspendRef.current = false;
       resizeDebouncerRef.current?.flush();
       fitRef.current(true);
+      // The local resize can precede its deferred PTY update. If suspension
+      // interrupted that update, an equal-size fit alone does not retry it.
+      const terminal = terminalRef.current;
+      if (terminal) doBackendResize(terminal.cols, terminal.rows);
     });
-  }, [resizeSuspended]);
+    return () => cancelAnimationFrame(frame);
+  }, [resizeSuspended, doBackendResize]);
 
   useImperativeHandle(ref, () => ({
     write: (data: string) => {
@@ -500,6 +517,11 @@ const Terminal = forwardRef<TerminalRef, TerminalProps>(({
     const webLinksAddon = new WebLinksAddon(
       (event, uri) => {
         if (event.ctrlKey || event.metaKey) {
+          const activate = onLinkActivateRef.current;
+          if (activate) {
+            activate(uri);
+            return;
+          }
           systemAPI.openExternal(uri).catch((error) => {
             log.error('Failed to open external link', { uri, error });
           });
@@ -534,6 +556,7 @@ const Terminal = forwardRef<TerminalRef, TerminalProps>(({
     terminal.loadAddon(webLinksAddon);
 
     terminal.open(container);
+    const releaseDiagnostics = attachTerminalDiagnostics(container, terminal);
 
     const xtermViewport = container.querySelector<HTMLElement>('.xterm-viewport');
     if (xtermViewport) {
@@ -817,6 +840,7 @@ const Terminal = forwardRef<TerminalRef, TerminalProps>(({
     intersectionObserverRef.current = intersectionObserver;
 
     return () => {
+      releaseDiagnostics();
       dataDisposable.dispose();
       binaryDisposable.dispose();
       titleDisposable.dispose();

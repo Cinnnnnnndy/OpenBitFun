@@ -138,7 +138,6 @@ pub struct OpenAISSEData {
     #[serde(default)]
     #[allow(dead_code)]
     created: Option<u64>,
-    #[allow(dead_code)]
     model: String,
     choices: Vec<Choice>,
     usage: Option<OpenAIUsage>,
@@ -158,6 +157,20 @@ impl OpenAISSEData {
     }
 
     pub fn into_unified_responses(self) -> Vec<UnifiedResponse> {
+        let response_model = (!self.model.trim().is_empty()).then(|| self.model.clone());
+        let mut responses = self.into_unified_response_parts();
+        if let Some(first) = responses.first_mut() {
+            first.response_model = response_model;
+        } else if response_model.is_some() {
+            responses.push(UnifiedResponse {
+                response_model,
+                ..Default::default()
+            });
+        }
+        responses
+    }
+
+    fn into_unified_response_parts(self) -> Vec<UnifiedResponse> {
         let mut usage = self.usage.map(|usage| usage.into());
 
         let Some(first_choice) = self.choices.into_iter().next() else {
@@ -191,6 +204,11 @@ impl OpenAISSEData {
         // can replay structurally present thinking blocks when a provider requires it.
         let content = content.filter(|s| !s.is_empty());
         let reasoning_content = reasoning_content.or(reasoning);
+        // OpenAI's Chat Completions contract uses `null` until a choice has
+        // actually finished. Some OpenAI-compatible gateways serialize that
+        // state as an empty string; treat it as an intermediate chunk so it
+        // cannot finalize and discard a tool-call argument buffer.
+        let finish_reason = finish_reason.filter(|reason| !reason.trim().is_empty());
 
         // MiniMax uses `reasoning_details` instead of `reasoning_content`.
         // Collect all "reasoning.text" entries and join them as a fallback.
@@ -222,6 +240,7 @@ impl OpenAISSEData {
                 tool_call_completion: None,
                 finish_reason: None,
                 provider_metadata: None,
+                response_model: None,
                 model_response_replay: None,
             });
         }
@@ -239,6 +258,7 @@ impl OpenAISSEData {
                     tool_call_completion: None,
                     finish_reason: None,
                     provider_metadata: None,
+                    response_model: None,
                     model_response_replay: None,
                 });
             }
@@ -261,6 +281,7 @@ impl OpenAISSEData {
                 tool_call_completion: Some(map_openai_finish_reason(&finish_reason)),
                 finish_reason: Some(finish_reason),
                 provider_metadata: None,
+                response_model: None,
                 model_response_replay: None,
             });
             return responses;
@@ -277,6 +298,7 @@ impl OpenAISSEData {
                 tool_call_completion: None,
                 finish_reason,
                 provider_metadata: None,
+                response_model: None,
                 model_response_replay: None,
             });
         }
@@ -317,6 +339,48 @@ mod tests {
             map_openai_finish_reason("custom_terminal_state"),
             ToolCallCompletion::Unknown
         );
+    }
+
+    #[test]
+    fn treats_blank_finish_reason_as_an_intermediate_chunk() {
+        for blank_reason in ["", "   "] {
+            let raw = r#"{
+                    "id": "chatcmpl_test",
+                    "created": 123,
+                    "model": "gateway-test",
+                    "choices": [{
+                        "index": 0,
+                        "delta": {
+                            "tool_calls": [{
+                                "index": 0,
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {
+                                    "name": "Read",
+                                    "arguments": "{\"path\":\"src/main.rs\"}"
+                                }
+                            }]
+                        },
+                        "finish_reason": "__BLANK_REASON__"
+                    }]
+                }"#
+            .replace("__BLANK_REASON__", blank_reason);
+
+            let sse_data: OpenAISSEData =
+                serde_json::from_str(&raw).expect("valid openai sse data");
+            let responses = sse_data.into_unified_responses();
+
+            assert_eq!(responses.len(), 1);
+            assert!(responses[0].finish_reason.is_none());
+            assert!(responses[0].tool_call_completion.is_none());
+            assert_eq!(
+                responses[0]
+                    .tool_call
+                    .as_ref()
+                    .and_then(|tool| tool.arguments.as_deref()),
+                Some(r#"{"path":"src/main.rs"}"#)
+            );
+        }
     }
 
     #[test]
@@ -571,7 +635,11 @@ mod tests {
         let sse_data: OpenAISSEData = serde_json::from_str(raw).expect("valid openai sse data");
         let responses = sse_data.into_unified_responses();
 
-        assert!(responses.is_empty());
+        assert_eq!(responses.len(), 1);
+        assert_eq!(responses[0].response_model.as_deref(), Some("gpt-test"));
+        assert!(responses[0].text.is_none());
+        assert!(responses[0].usage.is_none());
+        assert!(responses[0].tool_call.is_none());
     }
 
     #[test]

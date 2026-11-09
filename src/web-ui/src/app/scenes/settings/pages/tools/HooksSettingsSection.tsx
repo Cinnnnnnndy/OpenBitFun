@@ -19,7 +19,7 @@ import { useCurrentWorkspace } from '@/infrastructure/contexts/WorkspaceContext'
 import { useNotification } from '@/shared/notification-system';
 import { WorkspaceKind } from '@/shared/types';
 import { createLogger } from '@/shared/utils/logger';
-import {
+import { captureConfirmationAnchor,
   Button,
   ConfirmDialog,
   Dialog,
@@ -78,6 +78,7 @@ const HooksSettingsSection: React.FC = () => {
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [reviewPlan, setReviewPlan] = useState<ExternalHookImportPlan | null>(null);
   const [planNotice, setPlanNotice] = useState<string | null>(null);
+  const [confirmationAnchor, setConfirmationAnchor] = useState<ReturnType<typeof captureConfirmationAnchor>>(undefined);
   const [confirmation, setConfirmation] = useState<
     | { kind: 'remove'; importId: string }
     | { kind: 'reset'; scope: ExternalHookSource['scope'] }
@@ -311,7 +312,7 @@ const HooksSettingsSection: React.FC = () => {
   const content = (
     <>
       <ConfigPageSectionStack>
-        <ConfigPageSection title={t('activation.title')} description={t('activation.description')}>
+        <ConfigPageSection title={t('activation.title')}>
           <ConfigPageRow
             label={t('fields.enabled.label')}
             align="center"
@@ -340,7 +341,7 @@ const HooksSettingsSection: React.FC = () => {
         </ConfigPageSection>
 
 
-        <ConfigPageSection title={t('locations.title')} description={t('locations.description')}>
+        <ConfigPageSection title={t('locations.title')}>
           <ConfigPageRow
             label={t('locations.userFile.label')}
             description={t('locations.userFile.description')}
@@ -360,7 +361,6 @@ const HooksSettingsSection: React.FC = () => {
 
         <ConfigPageSection
           title={t('imports.title')}
-          description={config.enabled ? t('imports.description') : t('imports.masterDisabled')}
           extra={remoteWorkspace ? null : (
             <Button
               variant="outline"
@@ -375,6 +375,11 @@ const HooksSettingsSection: React.FC = () => {
             </Button>
           )}
         >
+          {!config.enabled && (
+            <ConfigPageRow label={t('imports.masterDisabled')}>
+              {null}
+            </ConfigPageRow>
+          )}
           {remoteWorkspace ? (
             <ConfigPageRow label={t('imports.remoteUnsupported')} align="center">
               {null}
@@ -417,7 +422,7 @@ const HooksSettingsSection: React.FC = () => {
                     tone="danger"
                     size="sm"
                     disabled={busyKey !== null}
-                    onClick={() => setConfirmation({ kind: 'remove', importId: item.importId })}
+                    onClick={event => { setConfirmationAnchor(captureConfirmationAnchor(event.currentTarget)); setConfirmation({ kind: 'remove', importId: item.importId }); }}
                   >
                     {t('imports.remove')}
                   </Button>
@@ -466,7 +471,6 @@ const HooksSettingsSection: React.FC = () => {
 
         <ConfigPageSection
           title={t('compatibility.title')}
-          description={t('compatibility.description')}
         >
           <ConfigPageRow
             label={t('compatibility.reference.label')}
@@ -553,6 +557,7 @@ const HooksSettingsSection: React.FC = () => {
       </Dialog>
 
       <ConfirmDialog
+        anchor={confirmation?.kind === 'remove' ? confirmationAnchor : undefined}
         open={confirmation !== null}
         onOpenChange={() => setConfirmation(null)}
         onConfirm={confirmMutation}

@@ -6,6 +6,7 @@ import RichTextInput, { type RichTextInputElement } from './RichTextInput';
 import type { ContextItem } from '../../shared/types/context';
 import { createMcpPromptReference } from '../utils/mcpPromptReference';
 import { composerPresentationToEditorText, parseComposerPresentation } from '../utils/composerPresentation';
+import { installTextInputGuard } from '../../../../shared/text-input/textInputGuard';
 
 type HarnessHandle = {
   setValue: (value: string) => void;
@@ -45,6 +46,7 @@ const ControlledHarness = forwardRef<HarnessHandle>(function ControlledHarness(_
 const describeWithJsdom = JSDOMCtor ? describe : describe.skip;
 
 describeWithJsdom('RichTextInput external sync', () => {
+  let removeTextInputGuard: () => void;
   let dom: { window: Window & typeof globalThis };
   let container: HTMLDivElement;
   let root: Root;
@@ -114,6 +116,7 @@ describeWithJsdom('RichTextInput external sync', () => {
 
     container = document.createElement('div');
     document.body.appendChild(container);
+    removeTextInputGuard = installTextInputGuard(document);
     root = createRoot(container);
   });
 
@@ -122,6 +125,7 @@ describeWithJsdom('RichTextInput external sync', () => {
       root.unmount();
     });
     container.remove();
+    removeTextInputGuard();
     dom.window.close();
     vi.unstubAllGlobals();
   });
@@ -135,6 +139,301 @@ describeWithJsdom('RichTextInput external sync', () => {
     expect(editor).toBeInstanceOf(HTMLDivElement);
     return editor as HTMLDivElement;
   }
+
+  it('disables native text correction and smart punctuation in the composer', async () => {
+    const editor = await renderHarness(createRef<HarnessHandle>());
+
+    expect(editor.getAttribute('spellcheck')).toBe('false');
+    expect(editor.getAttribute('autocorrect')).toBe('off');
+    expect(editor.getAttribute('autocapitalize')).toBe('off');
+  });
+
+  it('preserves ASCII apostrophes when a contraction is completed and followed by a space', async () => {
+    const onChange = vi.fn();
+    await act(async () => root.render(<RichTextInput value="" onChange={onChange} contexts={emptyContexts} onRemoveContext={() => {}} />));
+    const editor = container.querySelector('.rich-text-input') as HTMLDivElement;
+
+    for (const text of ["don'", "don't", "don't "]) {
+      editor.textContent = text;
+      setCaret(editor, text.length);
+      await act(async () => editor.dispatchEvent(new window.InputEvent('input', {
+        bubbles: true, inputType: 'insertText', data: text.slice(-1),
+      })));
+
+      expect(editor.textContent).toBe(text);
+      expect(onChange).toHaveBeenLastCalledWith(text.trim(), []);
+    }
+  });
+
+  it.each(['input', 'paste'] as const)('preserves explicitly authored straight and typographic quotes on %s', async (method) => {
+    const onChange = vi.fn();
+    await act(async () => root.render(<RichTextInput value="" onChange={onChange} contexts={emptyContexts} onRemoveContext={() => {}} />));
+    const editor = container.querySelector('.rich-text-input') as HTMLDivElement;
+    const text = `"literal" 'literal' \u2018quoted\u2019 \u201Cquoted\u201D`;
+
+    await act(async () => {
+      if (method === 'paste') {
+        setCaret(editor, 0);
+        paste(editor, { text });
+      } else {
+        editor.textContent = text;
+      }
+      // The execCommand fixture inserts DOM text without the browser's input event.
+      editor.dispatchEvent(new window.InputEvent('input', {
+        bubbles: true, inputType: method === 'paste' ? 'insertFromPaste' : 'insertText', data: text,
+      }));
+    });
+
+    expect(editor.textContent).toBe(text);
+    expect(onChange).toHaveBeenLastCalledWith(text, []);
+  });
+
+  it('rejects native arrow/function key text without changing the composer selection', async () => {
+    const ref = createRef<HarnessHandle>();
+    const editor = await renderHarness(ref);
+    setCaret(editor, 2);
+    for (const data of ['\uF700', '\uF701', '\uF702', '\uF703', '\uF704', '\u001B']) {
+      const event = new window.InputEvent('beforeinput', {
+        bubbles: true, cancelable: true, inputType: 'insertText', data,
+      });
+      await act(async () => { editor.dispatchEvent(event); });
+      expect(event.defaultPrevented).toBe(true);
+      expect(editor.textContent).toBe('hello');
+      expect(window.getSelection()?.anchorOffset).toBe(2);
+    }
+  });
+
+  it('undoes an IME commit without also undoing the typing before it', async () => {
+    const onChange = vi.fn();
+    const Controlled = () => {
+      const [value, setValue] = useState('');
+      return (
+        <RichTextInput
+          value={value}
+          onChange={(next, contexts) => { onChange(next, contexts); setValue(next); }}
+          contexts={emptyContexts}
+          onRemoveContext={() => {}}
+        />
+      );
+    };
+    await act(async () => root.render(<Controlled />));
+    const editor = container.querySelector('.rich-text-input') as HTMLDivElement;
+
+    for (const text of ['1', '12', '123', '1234', '12345']) {
+      await act(async () => {
+        editor.dispatchEvent(new window.InputEvent('beforeinput', {
+          bubbles: true, cancelable: true, inputType: 'insertText', data: text.slice(-1),
+        }));
+        editor.textContent = text;
+        setCaret(editor, text.length);
+        editor.dispatchEvent(new window.InputEvent('input', { bubbles: true, inputType: 'insertText' }));
+      });
+    }
+    await act(async () => {
+      Simulate.compositionStart(editor);
+      editor.textContent = '12345ni';
+      editor.dispatchEvent(new window.InputEvent('input', { bubbles: true, inputType: 'insertCompositionText' }));
+      editor.textContent = '12345你好';
+      setCaret(editor, 7);
+      Simulate.compositionEnd(editor);
+    });
+    expect(onChange).toHaveBeenLastCalledWith('12345你好', []);
+
+    const pressUndo = async (shiftKey = false) => {
+      const event = new window.KeyboardEvent('keydown', {
+        key: 'z', metaKey: true, shiftKey, bubbles: true, cancelable: true,
+      });
+      await act(async () => { editor.dispatchEvent(event); });
+      expect(event.defaultPrevented).toBe(true);
+    };
+
+    await pressUndo();
+    expect(editor.textContent).toBe('12345');
+    expect(onChange).toHaveBeenLastCalledWith('12345', []);
+    expect(window.getSelection()?.anchorOffset).toBe(5);
+
+    await pressUndo();
+    expect(editor.textContent).toBe('');
+
+    await pressUndo(true);
+    expect(editor.textContent).toBe('12345');
+    await pressUndo(true);
+    expect(editor.textContent).toBe('12345你好');
+  });
+
+  it.each([false, true])('keeps paste bodies through undo/redo and same-length edits (exact restore: %s)', async (exactRestore) => {
+    const placeholder = '[Pasted Content 1001 chars]';
+    const original = 'a'.repeat(1001);
+    const edited = 'b'.repeat(1001);
+    let currentPastes: Record<string, string> = {};
+    const Controlled = () => {
+      const [value, setValue] = useState('');
+      const [pastes, setPastes] = useState<Record<string, string>>({});
+      currentPastes = pastes;
+      return <RichTextInput
+        value={value}
+        onChange={(next) => {
+          setValue(next);
+          setPastes(previous => Object.fromEntries(Object.entries(previous).filter(([key]) => next.includes(key))));
+        }}
+        pendingLargePastes={pastes}
+        onRestoreLargePastes={exactRestore ? setPastes : undefined}
+        onLargePaste={(text) => { setPastes(previous => ({ ...previous, [placeholder]: text })); return placeholder; }}
+        onUpdateLargePaste={(key, text) => { setPastes(previous => ({ ...previous, [key]: text })); return key; }}
+        contexts={emptyContexts}
+        onRemoveContext={() => {}}
+      />;
+    };
+    await act(async () => root.render(<Controlled />));
+    const editor = container.querySelector('.rich-text-input') as HTMLDivElement;
+    setCaret(editor, 0);
+    await act(async () => paste(editor, { text: original }));
+    const undo = async (redo = false) => {
+      await act(async () => { editor.dispatchEvent(new window.KeyboardEvent('keydown', {
+        key: 'z', metaKey: true, shiftKey: redo, bubbles: true, cancelable: true,
+      })); });
+    };
+    for (let cycle = 0; cycle < 2; cycle++) {
+      await undo();
+      expect(editor.querySelector('[data-large-paste-placeholder]')).toBeNull();
+      await undo(true);
+      expect(editor.querySelector('[data-large-paste-placeholder]')).not.toBeNull();
+      expect(currentPastes[placeholder]).toBe(original);
+    }
+    await act(async () => { (editor.querySelector('[data-large-paste-placeholder]') as HTMLElement).click(); });
+    const textarea = document.body.querySelector('.rich-text-large-paste-dialog__textarea textarea') as HTMLTextAreaElement;
+    expect(textarea.value).toBe(original);
+    await act(async () => Simulate.change(textarea, { target: { value: edited } } as never));
+    const buttons = textarea.closest('[role="dialog"]')!.querySelectorAll('button');
+    await act(async () => { (buttons[buttons.length - 1] as HTMLButtonElement).click(); });
+    expect(currentPastes[placeholder]).toBe(edited);
+    await undo();
+    expect(currentPastes[placeholder]).toBe(original);
+    await undo(true);
+    expect(currentPastes[placeholder]).toBe(edited);
+  });
+
+  it('restores a newly inserted context through undo and redo before another edit', async () => {
+    const context: ContextItem = { id: 'undo-file', type: 'file', fileName: 'file.ts', filePath: '/workspace/file.ts', timestamp: 1 };
+    const inputRef = createRef<RichTextInputElement>();
+    let add: () => void = () => {};
+    let currentContexts: ContextItem[] = [];
+    const Controlled = () => {
+      const [value, setValue] = useState('');
+      const [contexts, setContexts] = useState<ContextItem[]>([]);
+      currentContexts = contexts;
+      add = () => {
+        setContexts([context]);
+        inputRef.current?.insertTag?.(context);
+      };
+      return <RichTextInput
+        ref={inputRef}
+        value={value}
+        contexts={contexts}
+        onChange={(next, visible) => {
+          setValue(next);
+          const visibleIds = new Set(visible.map(item => item.id));
+          const removedIds = new Set(contexts.filter(item => !visibleIds.has(item.id)).map(item => item.id));
+          setContexts(previous => previous.filter(item => !removedIds.has(item.id)));
+        }}
+        onRemoveContext={id => setContexts(previous => previous.filter(item => item.id !== id))}
+        onRestoreContexts={items => setContexts(previous => [...previous, ...items])}
+      />;
+    };
+    await act(async () => root.render(<Controlled />));
+    await act(async () => add());
+    const editor = inputRef.current!;
+    expect(editor.querySelector('[data-context-id="undo-file"]')).not.toBeNull();
+    for (let cycle = 0; cycle < 2; cycle++) {
+      await act(async () => { editor.dispatchEvent(new window.KeyboardEvent('keydown', {
+        key: 'z', metaKey: true, bubbles: true, cancelable: true,
+      })); });
+      expect(currentContexts).toEqual([]);
+      await act(async () => { editor.dispatchEvent(new window.KeyboardEvent('keydown', {
+        key: 'z', metaKey: true, shiftKey: true, bubbles: true, cancelable: true,
+      })); });
+      expect(editor.querySelector('[data-context-id="undo-file"]')).not.toBeNull();
+      expect(currentContexts).toEqual([context]);
+    }
+  });
+
+  it('forgets undo and redo when the session or device activation changes with identical draft text', async () => {
+    const renderScope = async (historyScope: string, value: string) => {
+      await act(async () => root.render(<RichTextInput
+        value={value} historyScope={historyScope} onChange={() => {}}
+        contexts={emptyContexts} onRemoveContext={() => {}}
+      />));
+    };
+    await renderScope('local:session-a:1', '');
+    const editor = container.querySelector('.rich-text-input') as HTMLDivElement;
+    editor.textContent = 'private';
+    await act(async () => { editor.dispatchEvent(new window.InputEvent('input', { bubbles: true })); });
+    await renderScope('local:session-b:1', 'private');
+    await act(async () => { editor.dispatchEvent(new window.InputEvent('beforeinput', {
+      inputType: 'historyUndo', bubbles: true, cancelable: true,
+    })); });
+    expect(editor.textContent).toBe('private');
+    editor.textContent = 'private draft';
+    await act(async () => { editor.dispatchEvent(new window.InputEvent('input', { bubbles: true })); });
+    await act(async () => { editor.dispatchEvent(new window.InputEvent('beforeinput', {
+      inputType: 'historyUndo', bubbles: true, cancelable: true,
+    })); });
+    expect(editor.textContent).toBe('private');
+    await renderScope('peer:session-b:2', 'private');
+    await act(async () => { editor.dispatchEvent(new window.InputEvent('beforeinput', {
+      inputType: 'historyRedo', bubbles: true, cancelable: true,
+    })); });
+    expect(editor.textContent).toBe('private');
+  });
+
+  it('starts a new undo step after moving the caret within a typing run', async () => {
+    const Controlled = () => {
+      const [value, setValue] = useState('');
+      return <RichTextInput value={value} onChange={setValue} contexts={emptyContexts} onRemoveContext={() => {}} />;
+    };
+    await act(async () => root.render(<Controlled />));
+    const editor = container.querySelector('.rich-text-input') as HTMLDivElement;
+    const insert = async (text: string, caret: number) => {
+      await act(async () => {
+        editor.dispatchEvent(new window.InputEvent('beforeinput', {
+          bubbles: true, cancelable: true, inputType: 'insertText', data: 'x',
+        }));
+        editor.textContent = text;
+        setCaret(editor, caret);
+        editor.dispatchEvent(new window.InputEvent('input', { bubbles: true, inputType: 'insertText' }));
+      });
+    };
+    await insert('abc', 3);
+    setCaret(editor, 0);
+    await insert('xabc', 1);
+    await act(async () => { editor.dispatchEvent(new window.KeyboardEvent('keydown', {
+      key: 'z', metaKey: true, bubbles: true, cancelable: true,
+    })); });
+    expect(editor.textContent).toBe('abc');
+  });
+
+  it('removes leaked key characters from composer output while preserving joined emoji and IME text', async () => {
+    const onChange = vi.fn();
+    await act(async () => root.render(<RichTextInput value="" onChange={onChange} contexts={emptyContexts} onRemoveContext={() => {}} />));
+    const editor = container.querySelector('.rich-text-input') as HTMLDivElement;
+    const expected = '中文 👩‍💻 👨‍👩‍👧‍👦 می\u200Cروم';
+    editor.textContent = `${expected}\uF700\u001B`;
+    await act(async () => editor.dispatchEvent(new window.InputEvent('input', { bubbles: true, inputType: 'insertText' })));
+    expect(editor.textContent).toBe(expected);
+    expect(onChange).toHaveBeenLastCalledWith(expected, []);
+  });
+
+  it('cleans pasted key characters before handing text to the large-paste owner', async () => {
+    const onLargePaste = vi.fn(() => null);
+    await act(async () => root.render(<RichTextInput value="hello" onChange={() => {}} onLargePaste={onLargePaste} contexts={emptyContexts} onRemoveContext={() => {}} />));
+    const editor = container.querySelector('.rich-text-input') as HTMLDivElement;
+    setCaret(editor, 2);
+    await act(async () => paste(editor, { text: '\uF700\u001B' }));
+    expect(editor.textContent).toBe('hello');
+    expect(onLargePaste).not.toHaveBeenCalled();
+    await act(async () => paste(editor, { text: '中文\uF700 👩‍💻' }));
+    expect(onLargePaste).toHaveBeenLastCalledWith('中文 👩‍💻');
+  });
 
   function paste(
     editor: HTMLDivElement,
@@ -881,6 +1180,21 @@ describeWithJsdom('RichTextInput external sync', () => {
     const pills = inputRef.current!.querySelectorAll<HTMLElement>('[data-inline-token-type="mcp-ref"]');
     expect(Array.from(pills, pill => pill.dataset.tagFormat)).toEqual([first, second]);
     expect(inputRef.current!.textContent).toBe('Compare Docs× with Docs× please.');
+  });
+
+  it('restores large paste capsules from a sent message presentation', async () => {
+    const placeholder = '[Pasted content 12 chars]';
+    const inputRef = createRef<RichTextInputElement>();
+    await act(async () => root.render(<RichTextInput ref={inputRef} value="" onChange={() => {}} contexts={emptyContexts} onRemoveContext={() => {}} />));
+    await act(async () => {
+      inputRef.current!.restoreComposerPresentation!(
+        { version: 1, segments: [{ kind: 'text', text: `Review ${placeholder} now` }] },
+        { largePastes: { [placeholder]: 'pasted body' } },
+      );
+    });
+    const capsule = inputRef.current!.querySelector<HTMLElement>('[data-large-paste-placeholder]');
+    expect(capsule?.dataset.largePastePlaceholder).toBe(placeholder);
+    expect(composerPresentationToEditorText(inputRef.current!.getComposerPresentation!()!)).toBe(`Review ${placeholder} now`);
   });
 
   it.each(['remove-button', 'Backspace'])('removes an MCP capsule atomically with %s', async method => {

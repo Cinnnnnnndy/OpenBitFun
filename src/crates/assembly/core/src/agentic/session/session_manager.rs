@@ -7,7 +7,7 @@ use crate::agentic::core::{
     new_turn_id, CompressionContract, CompressionState, InternalReminderKind, Message,
     MessageContent, MessageRole, MessageSemanticKind, ProcessingPhase, Session,
     SessionAgentRouteOwner, SessionConfig, SessionKind, SessionModelBindingPolicy, SessionState,
-    SessionSummary, TurnStats,
+    SessionSummary, ToolPresentationMode, TurnStats,
 };
 use crate::agentic::fork_agent::normalize_incomplete_tool_calls;
 use crate::agentic::image_analysis::ImageContextData;
@@ -77,6 +77,8 @@ use std::time::{Duration, SystemTime};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::time;
 
+const TOOL_PRESENTATION_MODE_CONFIG_PATH: &str = "ai.tool_presentation_mode";
+
 #[cfg(test)]
 tokio::task_local! {
     pub(crate) static TEST_MODEL_RESOLUTION_AI_CONFIG: crate::service::config::types::AIConfig;
@@ -132,6 +134,9 @@ pub(crate) const INTERRUPTED_TURN_REASONING_FINGERPRINT_METADATA_KEY: &str =
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TurnAdmissionSessionFacts {
     model_id: Option<String>,
+    model_routing: Option<String>,
+    model_pool_id: Option<String>,
+    model_pool_selection_revision: u64,
     reasoning_preset: Option<String>,
     permission_mode: Option<PermissionMode>,
     max_context_tokens: usize,
@@ -151,6 +156,9 @@ impl TurnAdmissionSessionFacts {
     pub(crate) fn from_session(session: &Session) -> Self {
         Self {
             model_id: session.config.model_id.clone(),
+            model_routing: session.config.model_routing.clone(),
+            model_pool_id: session.config.model_pool_id.clone(),
+            model_pool_selection_revision: session.config.model_pool_selection_revision,
             reasoning_preset: session.config.reasoning_preset.clone(),
             permission_mode: session.config.permission_mode,
             max_context_tokens: session.config.max_context_tokens,
@@ -173,7 +181,10 @@ impl TurnAdmissionSessionFacts {
     }
 
     fn matches(&self, session: &Session) -> bool {
-        self.model_id == session.config.model_id
+        self.model_routing == session.config.model_routing
+            && self.model_id == session.config.model_id
+            && self.model_pool_id == session.config.model_pool_id
+            && self.model_pool_selection_revision == session.config.model_pool_selection_revision
             && self.reasoning_preset == session.config.reasoning_preset
             && self.permission_mode == session.config.permission_mode
             && self.max_context_tokens == session.config.max_context_tokens
@@ -232,22 +243,44 @@ fn session_model_allows_fallback(binding_policy: SessionModelBindingPolicy) -> b
     binding_policy == SessionModelBindingPolicy::Mutable
 }
 
-fn effective_session_model_selector<'a>(
-    ai_config: &'a crate::service::config::types::AIConfig,
-    session: &'a Session,
-) -> &'a str {
+/// Project the same authoritative selection for runtime and persisted headers.
+pub fn session_model_target(
+    session: Session,
+) -> openbitfun_core_types::model_pool::SessionModelTarget {
+    use openbitfun_core_types::model_pool::{ModelSelection, SessionModelTarget};
+    let selection = if let Some(pool_id) = session.config.model_pool_id {
+        ModelSelection::Pool { pool_id }
+    } else {
+        ModelSelection::Model {
+            model_ref: session.config.model_id.unwrap_or_else(|| "primary".into()),
+        }
+    };
+    SessionModelTarget {
+        session_id: session.session_id,
+        selection,
+        reasoning_preset: session.config.reasoning_preset,
+        binding: session.config.model_pool_binding,
+    }
+}
+
+fn effective_session_model_selector(
+    ai_config: &crate::service::config::types::AIConfig,
+    session: &Session,
+) -> String {
     session
         .config
         .model_id
         .as_deref()
         .map(str::trim)
-        .filter(|model_id| !model_id.is_empty())
-        .or_else(|| {
-            (session.kind != SessionKind::Subagent)
-                .then_some(ai_config.agent_model_defaults.mode.trim())
-                .filter(|model_id| !model_id.is_empty())
+        .filter(|id| !id.is_empty())
+        .map(str::to_owned)
+        .unwrap_or_else(|| {
+            if session.kind == SessionKind::Subagent {
+                "primary".into()
+            } else {
+                ai_config.mode_model_reference().unwrap_or_default()
+            }
         })
-        .unwrap_or("primary")
 }
 
 fn concrete_model_for_session_selection<'a>(
@@ -260,9 +293,9 @@ fn concrete_model_for_session_selection<'a>(
         session.config.model_binding_policy,
         SessionModelBindingPolicy::ApprovedImmutable
     ) {
-        ai_config.resolve_model_reference(configured_model_id)
+        ai_config.resolve_model_reference(&configured_model_id)
     } else {
-        ai_config.resolve_model_selection(configured_model_id)
+        ai_config.resolve_model_selection(&configured_model_id)
     }?;
 
     ai_config
@@ -732,6 +765,27 @@ impl SessionManager {
         Self::load_effective_ai_config_from_service(config_service.as_ref()).await
     }
 
+    pub(crate) async fn load_ai_config_for_session(
+        config: &SessionConfig,
+    ) -> OpenBitFunResult<Option<AIConfig>> {
+        #[cfg(test)]
+        if let Ok(ai_config) = TEST_MODEL_RESOLUTION_AI_CONFIG.try_with(Clone::clone) {
+            return Ok(Some(ai_config));
+        }
+        let Ok(service) = get_global_config_service().await else {
+            return Ok(None);
+        };
+        service
+            .get_project_ai_config(
+                config
+                    .project_workspace_id
+                    .as_deref()
+                    .or(config.workspace_id.as_deref()),
+            )
+            .await
+            .map(Some)
+    }
+
     async fn load_effective_ai_config_from_service(
         config_service: &crate::service::config::ConfigService,
     ) -> Option<AIConfig> {
@@ -819,7 +873,7 @@ impl SessionManager {
     ) -> Option<usize> {
         Self::context_window_for_model_selection(
             ai_config,
-            effective_session_model_selector(ai_config, session),
+            &effective_session_model_selector(ai_config, session),
         )
     }
 
@@ -827,6 +881,9 @@ impl SessionManager {
         session: &mut Session,
         ai_config: &crate::service::config::types::AIConfig,
     ) -> Option<usize> {
+        if session.config.model_binding_policy == SessionModelBindingPolicy::Pool {
+            return None;
+        }
         let context_window = Self::session_context_window_from_ai_config(session, ai_config)?;
         session.config.max_context_tokens = context_window;
         Some(context_window)
@@ -836,6 +893,9 @@ impl SessionManager {
         session: &Session,
         ai_config: &crate::service::config::types::AIConfig,
     ) -> Option<String> {
+        if session.config.model_binding_policy == SessionModelBindingPolicy::Pool {
+            return None;
+        }
         let Some(preset_id) = session
             .config
             .reasoning_preset
@@ -1306,13 +1366,29 @@ impl SessionManager {
     }
 
     pub async fn persistent_model_exchange_trace_dir(&self, session_id: &str) -> Option<PathBuf> {
+        self.persistent_session_layout(session_id)
+            .await
+            .map(|layout| layout.request_traces_dir(session_id))
+    }
+
+    /// Runtime-owned checkpoints share the session snapshot directory, not diagnostic traces.
+    pub(crate) async fn persistent_context_snapshot_dir(
+        &self,
+        session_id: &str,
+    ) -> Option<PathBuf> {
+        self.persistent_session_layout(session_id)
+            .await
+            .map(|layout| layout.snapshots_dir(session_id))
+    }
+
+    async fn persistent_session_layout(&self, session_id: &str) -> Option<SessionStorageLayout> {
         if !self.should_persist_session_id(session_id) {
             return None;
         }
 
         let storage_path = self.effective_session_storage_path(session_id).await?;
 
-        Some(SessionStorageLayout::new(storage_path).request_traces_dir(session_id))
+        Some(SessionStorageLayout::new(storage_path))
     }
 
     /// Materialize a bounded transcript copy for a user-selected reference.
@@ -1522,6 +1598,7 @@ impl SessionManager {
         workspace_hint: Option<&WorkspaceInfo>,
     ) -> Option<SessionConfig> {
         let mut config = SessionConfig {
+            tool_presentation_mode: Default::default(),
             workspace_id: metadata
                 .workspace_id
                 .clone()
@@ -1974,6 +2051,20 @@ impl SessionManager {
             .select_latest_matching(session_id, messages)
     }
 
+    pub async fn select_latest_matching_token_anchor_for_model(
+        &self,
+        session_id: &str,
+        messages: &[Message],
+        model_id: &str,
+    ) -> TokenAnchorSelection {
+        self.ensure_token_anchors_loaded(session_id).await;
+        self.token_anchor_store.select_latest_matching_for_model(
+            session_id,
+            messages,
+            Some(model_id),
+        )
+    }
+
     pub async fn prune_token_anchors_to_messages(&self, session_id: &str, messages: &[Message]) {
         self.ensure_token_anchors_loaded(session_id).await;
         self.token_anchor_store
@@ -2309,6 +2400,11 @@ impl SessionManager {
             .iter()
             .filter_map(|entry| {
                 let session = entry.value();
+                // Reconciliation observes provider configuration; it is not an
+                // explicit manual selection that may retire a saved strategy.
+                if session.config.model_routing.as_deref() == Some("smart") {
+                    return None;
+                }
                 let current = session.config.model_id.as_deref()?.trim().to_string();
                 // External generations pin the model that the user approved.
                 // If that model disappears, execution must fail closed instead
@@ -2439,7 +2535,13 @@ impl SessionManager {
         session_id: &str,
         reason: &'static str,
     ) -> OpenBitFunResult<Option<String>> {
-        let Some(ai_config) = Self::load_ai_config_for_model_resolution().await else {
+        let config = self
+            .get_session(session_id)
+            .map(|session| session.config.clone());
+        let Some(ai_config) = (match config {
+            Some(config) => Self::load_ai_config_for_session(&config).await?,
+            None => None,
+        }) else {
             return Ok(self
                 .sessions
                 .get(session_id)
@@ -2450,13 +2552,13 @@ impl SessionManager {
     }
 
     async fn reconcile_loaded_session_reasoning_presets(&self, reason: &'static str) {
-        let Some(ai_config) = Self::load_ai_config_for_model_resolution().await else {
+        if Self::load_ai_config_for_model_resolution().await.is_none() {
             debug!(
                 "Skipping session reasoning preset reconciliation because AI config is unavailable: reason={}",
                 reason
             );
             return;
-        };
+        }
         let candidates = self
             .sessions
             .iter()
@@ -2466,7 +2568,7 @@ impl SessionManager {
 
         for session_id in candidates {
             if let Err(error) = self
-                .reconcile_session_reasoning_preset_locked(&session_id, &ai_config, reason)
+                .reconcile_session_reasoning_preset_for_turn(&session_id, reason)
                 .await
             {
                 warn!(
@@ -2727,6 +2829,21 @@ impl SessionManager {
         transient: bool,
     ) -> OpenBitFunResult<Session> {
         let mut config = config;
+        // The global setting is sampled exactly once while creating a session.
+        // A caller may provide an explicit PTC value (used by delegated/runtime
+        // paths); legacy/default native values follow the current global
+        // default. Persisting the resolved value makes existing sessions
+        // independent from later global changes.
+        if config.tool_presentation_mode.is_native() {
+            if let Ok(config_service) = get_global_config_service().await {
+                if let Ok(mode) = config_service
+                    .get_config::<ToolPresentationMode>(Some(TOOL_PRESENTATION_MODE_CONFIG_PATH))
+                    .await
+                {
+                    config.tool_presentation_mode = mode;
+                }
+            }
+        }
         crate::agentic::workspace::normalize_session_workspace(&mut config).await?;
         let _workspace_path = Self::session_workspace_from_config(&config).ok_or_else(|| {
             OpenBitFunError::Validation("Session workspace_path is required".to_string())
@@ -2746,7 +2863,32 @@ impl SessionManager {
         };
         session.created_by = created_by;
         session.kind = kind;
-        let ai_config = Self::load_ai_config_for_model_resolution().await;
+        let ai_config = Self::load_ai_config_for_session(&session.config).await?;
+        if session.config.model_routing.is_none()
+            && kind != SessionKind::Subagent
+            && session.config.model_binding_policy == SessionModelBindingPolicy::Mutable
+            && matches!(
+                session.config.agent_route_owner,
+                crate::agentic::core::SessionAgentRouteOwner::Local
+            )
+        {
+            if !crate::agentic::execution::round_model_routing::configuration::available() {
+                if ai_config.as_ref().is_some_and(|config| {
+                    config.model_routing.default_mode.as_deref() == Some("smart")
+                }) {
+                    info!("Smart mode is unavailable in this release; creating a manual session: session_id={}", session.session_id);
+                }
+                session.config.model_routing = Some("manual".into());
+            } else if let Some(mode) = ai_config
+                .as_ref()
+                .and_then(|config| config.model_routing.default_mode.as_ref())
+            {
+                session.config.model_routing = Some(mode.clone());
+            } else if !crate::agentic::execution::round_model_routing::configuration::legacy_enabled(
+            ) {
+                session.config.model_routing = Some("manual".into());
+            }
+        }
         if let Some(ai_config) = ai_config.as_ref() {
             let previous_reasoning_preset = session.config.reasoning_preset.clone();
             session.config.reasoning_preset =
@@ -2867,6 +3009,53 @@ impl SessionManager {
     /// Get session
     pub fn get_session(&self, session_id: &str) -> Option<Session> {
         self.sessions.get(session_id).map(|s| s.clone())
+    }
+
+    /// Read selector facts without restoring history, reserving runtime capacity,
+    /// or waiting for an executing Turn's mutation permit. An omitted locator
+    /// supports legacy callers only when this host already owns the session.
+    pub(crate) async fn read_session_header(
+        &self,
+        storage_path: Option<&Path>,
+        session_id: &str,
+        include_internal: bool,
+    ) -> OpenBitFunResult<Session> {
+        openbitfun_core_types::validate_session_id(session_id)
+            .map_err(OpenBitFunError::Validation)?;
+        if let Some(path) = storage_path {
+            self.validate_session_storage_path_binding(session_id, path)?;
+        }
+        let session = match self.get_session(session_id) {
+            Some(session) => session,
+            None => {
+                let path = storage_path.ok_or_else(|| {
+                    OpenBitFunError::NotFound(format!("Session not found: {session_id}"))
+                })?;
+                let persisted = self
+                    .persistence_manager
+                    .load_session_header(path, session_id)
+                    .await;
+                // A real restore or selector update may have completed during
+                // disk IO. Its live selection takes precedence over disk.
+                self.validate_session_storage_path_binding(session_id, path)?;
+                self.get_session(session_id).map(Ok).unwrap_or(persisted)?
+            }
+        };
+        if let Some(path) = storage_path {
+            self.validate_session_storage_path_binding(session_id, path)?;
+        }
+        if !include_internal
+            && (session.kind != SessionKind::Standard
+                || SessionMetadata::is_legacy_leaked_subagent_identity(
+                    session.created_by.as_deref(),
+                    &session.session_name,
+                ))
+        {
+            return Err(OpenBitFunError::NotFound(format!(
+                "Session not found: {session_id}"
+            )));
+        }
+        Ok(session)
     }
 
     /// Read only the execution fact; navigation must not clone Session content.
@@ -3250,6 +3439,21 @@ impl SessionManager {
         self.skill_agent_baseline_override_snapshot_store
             .insert(session_id.to_string(), snapshot.clone());
         Some(snapshot)
+    }
+
+    /// The snapshot that the request-head listing reminders are rendered from:
+    /// a fork's baseline override when present, otherwise the turn-0 snapshot.
+    pub async fn skill_agent_listing_baseline_snapshot(
+        &self,
+        session_id: &str,
+    ) -> Option<TurnSkillAgentSnapshot> {
+        match self
+            .skill_agent_baseline_override_snapshot(session_id)
+            .await
+        {
+            Some(snapshot) => Some(snapshot),
+            None => self.turn_skill_agent_snapshot(session_id, 0).await,
+        }
     }
 
     pub async fn seed_forked_skill_agent_listing_baselines(
@@ -3832,7 +4036,7 @@ impl SessionManager {
     ) -> OpenBitFunResult<()> {
         let normalized_title = Self::normalize_session_title_input(title)?;
         let _mutation_guard = self.acquire_session_mutation(session_id).await?;
-        self.update_session_title_locked(session_id, normalized_title)
+        self.update_session_title_locked(session_id, normalized_title, true)
             .await
     }
 
@@ -3840,6 +4044,7 @@ impl SessionManager {
         &self,
         session_id: &str,
         normalized_title: String,
+        user_edited: bool,
     ) -> OpenBitFunResult<()> {
         let workspace_path = self.effective_session_storage_path(session_id).await;
         let mut updated_session = self
@@ -3869,6 +4074,7 @@ impl SessionManager {
                     session_id,
                     &updated_session.session_name,
                     last_active_at,
+                    user_edited,
                 )
                 .await?;
         }
@@ -3898,6 +4104,17 @@ impl SessionManager {
     ) -> OpenBitFunResult<bool> {
         let normalized_title = Self::normalize_session_title_input(title)?;
         let _mutation_guard = self.acquire_session_mutation(session_id).await?;
+        if let Some(path) = self.effective_session_storage_path(session_id).await {
+            if self
+                .persistence_manager
+                .load_session_metadata(&path, session_id)
+                .await?
+                .and_then(|m| m.custom_metadata)
+                .is_some_and(|m| m.get("titleUserEdited").and_then(|v| v.as_bool()) == Some(true))
+            {
+                return Ok(false);
+            }
+        }
         let Some(session) = self.sessions.get(session_id) else {
             return Err(OpenBitFunError::NotFound(format!(
                 "Session not found: {}",
@@ -3914,7 +4131,7 @@ impl SessionManager {
         }
         drop(session);
 
-        self.update_session_title_locked(session_id, normalized_title)
+        self.update_session_title_locked(session_id, normalized_title, false)
             .await?;
         Ok(true)
     }
@@ -4225,11 +4442,28 @@ impl SessionManager {
         model_id: &str,
         reasoning_preset: Option<&str>,
     ) -> OpenBitFunResult<()> {
-        self.update_session_model_selection_in_storage(
+        self.update_session_model_selection_with_routing(
+            session_id,
+            model_id,
+            reasoning_preset,
+            None,
+        )
+        .await
+    }
+
+    pub async fn update_session_model_selection_with_routing(
+        &self,
+        session_id: &str,
+        model_id: &str,
+        reasoning_preset: Option<&str>,
+        routing_mode: Option<&str>,
+    ) -> OpenBitFunResult<()> {
+        self.update_session_model_selection_in_storage_with_routing(
             None,
             session_id,
             model_id,
             reasoning_preset,
+            routing_mode,
             true,
             |_| Ok(()),
         )
@@ -4237,6 +4471,7 @@ impl SessionManager {
         .map(|_| ())
     }
 
+    #[cfg(test)]
     pub(crate) async fn update_session_model_selection_in_storage(
         &self,
         storage_path: Option<&Path>,
@@ -4244,6 +4479,86 @@ impl SessionManager {
         model_id: &str,
         reasoning_preset: Option<&str>,
         include_internal: bool,
+        validate_binding: impl FnOnce(&Session) -> OpenBitFunResult<()>,
+    ) -> OpenBitFunResult<Session> {
+        self.update_session_model_selection_in_storage_with_routing(
+            storage_path,
+            session_id,
+            model_id,
+            reasoning_preset,
+            None,
+            include_internal,
+            validate_binding,
+        )
+        .await
+    }
+
+    pub(crate) async fn update_session_model_selection_in_storage_with_routing(
+        &self,
+        storage_path: Option<&Path>,
+        session_id: &str,
+        model_id: &str,
+        reasoning_preset: Option<&str>,
+        routing_mode: Option<&str>,
+        include_internal: bool,
+        validate_binding: impl FnOnce(&Session) -> OpenBitFunResult<()>,
+    ) -> OpenBitFunResult<Session> {
+        self.update_session_selection_in_storage(
+            storage_path,
+            session_id,
+            model_id,
+            reasoning_preset,
+            routing_mode,
+            include_internal,
+            None,
+            validate_binding,
+        )
+        .await
+    }
+
+    pub async fn update_session_model_target(
+        &self,
+        session_id: &str,
+        selection: &openbitfun_core_types::model_pool::ModelSelection,
+    ) -> OpenBitFunResult<Session> {
+        self.update_session_model_target_with_reasoning(session_id, selection, None)
+            .await
+    }
+
+    pub(crate) async fn update_session_model_target_with_reasoning(
+        &self,
+        session_id: &str,
+        selection: &openbitfun_core_types::model_pool::ModelSelection,
+        reasoning_preset: Option<&str>,
+    ) -> OpenBitFunResult<Session> {
+        use openbitfun_core_types::model_pool::ModelSelection;
+        let model_id = match selection {
+            ModelSelection::Model { model_ref } => model_ref.as_str(),
+            ModelSelection::Pool { .. } => "",
+        };
+        self.update_session_selection_in_storage(
+            None,
+            session_id,
+            model_id,
+            reasoning_preset,
+            None,
+            true,
+            Some(selection),
+            |_| Ok(()),
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn update_session_selection_in_storage(
+        &self,
+        storage_path: Option<&Path>,
+        session_id: &str,
+        model_id: &str,
+        reasoning_preset: Option<&str>,
+        routing_mode: Option<&str>,
+        include_internal: bool,
+        selection: Option<&openbitfun_core_types::model_pool::ModelSelection>,
         validate_binding: impl FnOnce(&Session) -> OpenBitFunResult<()>,
     ) -> OpenBitFunResult<Session> {
         let _mutation_guard = self.acquire_session_mutation(session_id).await?;
@@ -4287,11 +4602,105 @@ impl SessionManager {
             }
         };
         validate_binding(&original_session)?;
-        let ai_config = Self::load_ai_config_for_model_resolution().await;
+        if routing_mode == Some("smart") {
+            crate::agentic::execution::round_model_routing::configuration::require_available()?;
+        }
+        if original_session.config.model_pool_id.is_some() && selection.is_none() {
+            return Err(OpenBitFunError::validation("This session uses a model pool; explicit model_pool_selection_v1 selection is required"));
+        }
+        if selection.is_some()
+            && original_session.config.model_binding_policy
+                == SessionModelBindingPolicy::ApprovedImmutable
+        {
+            return Err(OpenBitFunError::validation(
+                "An approved immutable model binding cannot be replaced by model pool selection",
+            ));
+        }
+        let ai_config = Self::load_ai_config_for_session(&original_session.config).await?;
         let mut resolved_context_window = None;
         let mut auto_cleared_reasoning_preset = None;
         let mut updated_session = original_session.clone();
+        if routing_mode.is_none()
+            && selection.is_none()
+            && original_session.config.model_routing.as_deref() == Some("smart")
+            && original_session.config.model_id.as_deref() != Some(model_id)
+        {
+            if crate::agentic::execution::round_model_routing::configuration::available() {
+                return Err(OpenBitFunError::Validation(
+                    "This session uses smart routing; update its model strategy with a compatible GUI"
+                        .into(),
+                ));
+            }
+            // A legacy client explicitly choosing another ordinary model is a
+            // manual selection. Merely reading or updating reasoning preserves
+            // the retained smart-mode record.
+            updated_session.config.model_routing = Some("manual".into());
+        }
+        if let Some(mode) = routing_mode {
+            if !matches!(mode, "manual" | "smart") {
+                return Err(OpenBitFunError::Validation(
+                    "Unsupported model routing strategy".into(),
+                ));
+            }
+            if mode == "smart" {
+                let eligible = original_session.kind != SessionKind::Subagent
+                    && original_session.config.model_binding_policy
+                        != SessionModelBindingPolicy::ApprovedImmutable
+                    && matches!(
+                        original_session.config.agent_route_owner,
+                        crate::agentic::core::SessionAgentRouteOwner::Local
+                    );
+                if !eligible {
+                    return Err(OpenBitFunError::Validation(
+                        "Smart mode is unavailable for this session".into(),
+                    ));
+                }
+                crate::agentic::execution::round_model_routing::configuration::prepare_turn(
+                    Some(mode),
+                    true,
+                )
+                .await?;
+            }
+            updated_session.config.model_routing = Some(mode.into());
+        }
         updated_session.config.model_id = Some(model_id.to_string());
+        if let Some(selection) = selection {
+            updated_session.config.model_routing = Some("manual".into());
+            updated_session.config.model_pool_selection_revision = original_session
+                .config
+                .model_pool_selection_revision
+                .saturating_add(1);
+            updated_session.config.model_pool_binding = None;
+            use openbitfun_core_types::model_pool::ModelSelection;
+            match selection {
+                ModelSelection::Pool { pool_id } => {
+                    let config_service =
+                        crate::service::config::get_global_config_service().await?;
+                    let pool = config_service.model_pool_store().await.get(pool_id).await?;
+                    if pool.member_model_ids.is_empty() {
+                        return Err(OpenBitFunError::validation(
+                            "Cannot select an empty model pool",
+                        ));
+                    }
+                    updated_session.config.model_pool_id = Some(pool_id.clone());
+                    updated_session.config.model_binding_policy = SessionModelBindingPolicy::Pool;
+                    updated_session.config.model_id = None;
+                }
+                ModelSelection::Model { model_ref } => {
+                    let config = ai_config.as_ref().ok_or_else(|| {
+                        OpenBitFunError::config("AI configuration is unavailable")
+                    })?;
+                    if config.resolve_model_selection(model_ref).is_none() {
+                        return Err(OpenBitFunError::validation(
+                            "Selected model is missing or disabled",
+                        ));
+                    }
+                    updated_session.config.model_pool_id = None;
+                    updated_session.config.model_binding_policy =
+                        SessionModelBindingPolicy::Mutable;
+                }
+            }
+        }
         updated_session.config.reasoning_preset = reasoning_preset
             .map(str::trim)
             .filter(|preset| !preset.is_empty() && !preset.eq_ignore_ascii_case("auto"))
@@ -4314,7 +4723,11 @@ impl SessionManager {
             resolved_context_window =
                 Self::sync_session_context_window_from_ai_config(&mut updated_session, ai_config);
         }
-        if original_session.config.model_id == updated_session.config.model_id
+        if original_session.config.model_routing == updated_session.config.model_routing
+            && original_session.config.model_id == updated_session.config.model_id
+            && original_session.config.model_pool_id == updated_session.config.model_pool_id
+            && original_session.config.model_binding_policy
+                == updated_session.config.model_binding_policy
             && original_session.config.reasoning_preset == updated_session.config.reasoning_preset
             && original_session.config.max_context_tokens
                 == updated_session.config.max_context_tokens
@@ -4348,6 +4761,12 @@ impl SessionManager {
 
         if let Some(mut session) = self.sessions.get_mut(session_id) {
             session.config.model_id = updated_session.config.model_id.clone();
+            session.config.model_routing = updated_session.config.model_routing.clone();
+            session.config.model_pool_selection_revision =
+                updated_session.config.model_pool_selection_revision;
+            session.config.model_pool_id = updated_session.config.model_pool_id.clone();
+            session.config.model_pool_binding = updated_session.config.model_pool_binding.clone();
+            session.config.model_binding_policy = updated_session.config.model_binding_policy;
             session.config.reasoning_preset = updated_session.config.reasoning_preset.clone();
             session.config.max_context_tokens = updated_session.config.max_context_tokens;
             session.updated_at = now;
@@ -4375,6 +4794,36 @@ impl SessionManager {
         }
 
         Ok(updated_session)
+    }
+
+    /// Persist affinity without replacing the user's selection or a newer selection.
+    pub async fn remember_model_pool_binding(
+        &self,
+        session_id: &str,
+        selection_revision: u64,
+        binding: openbitfun_core_types::model_pool::ModelPoolBinding,
+    ) -> OpenBitFunResult<()> {
+        let _guard = self.acquire_session_mutation(session_id).await?;
+        let Some(mut session) = self.get_session(session_id) else {
+            return Ok(());
+        };
+        if session.config.model_pool_id.as_deref() != Some(&binding.pool_id)
+            || session.config.model_pool_selection_revision != selection_revision
+        {
+            return Ok(());
+        }
+        session.config.model_pool_binding = Some(binding.clone());
+        if self.should_persist_session_id(session_id) {
+            if let Some(path) = self.effective_session_storage_path(session_id).await {
+                self.persistence_manager
+                    .save_session_model_selection(&path, &session)
+                    .await?;
+            }
+        }
+        if let Some(mut current) = self.sessions.get_mut(session_id) {
+            current.config.model_pool_binding = Some(binding);
+        }
+        Ok(())
     }
 
     /// Sets the session's own tool permission mode (in-memory + persistence).
@@ -4642,7 +5091,13 @@ impl SessionManager {
     /// model's actual configured `context_window`, so subagents with large-context
     /// models are not prematurely capped.
     pub async fn refresh_session_context_window(&self, session_id: &str) -> OpenBitFunResult<()> {
-        if let Some(ai_config) = Self::load_ai_config_for_model_resolution().await {
+        let config = self
+            .get_session(session_id)
+            .map(|session| session.config.clone());
+        if let Some(ai_config) = match config {
+            Some(config) => Self::load_ai_config_for_session(&config).await?,
+            None => None,
+        } {
             if let Some(mut session) = self.sessions.get_mut(session_id) {
                 let previous = session.config.max_context_tokens;
                 Self::sync_session_context_window_from_ai_config(&mut session, &ai_config);
@@ -5038,6 +5493,11 @@ impl SessionManager {
         }
 
         crate::native_hooks::clear_session_hook_state(session_id);
+        #[cfg(feature = "tools-browser-web")]
+        crate::agentic::tools::implementations::control_hub_tool::release_browser_selection(
+            session_id,
+        )
+        .await;
         self.active_turn_permission_modes.remove(session_id);
         clear_session_runtime_stores(
             session_id,
@@ -5562,18 +6022,15 @@ impl SessionManager {
             .persistence_manager
             .load_session_revert_state(session_storage_path, session_id)
             .await?;
-        let effective_tail_turn_count = staged_revert
-            .as_ref()
-            .map(|_| None)
-            .unwrap_or(tail_turn_count);
         let session_started_at = Instant::now();
         let (mut session, mut persisted_turns, mut total_turn_count, turn_load) =
-            if let Some(tail_turn_count) = effective_tail_turn_count {
+            if let Some(tail_turn_count) = tail_turn_count {
                 self.persistence_manager
-                    .load_session_with_tail_turns_timed(
+                    .load_session_with_tail_turns_before_timed(
                         session_storage_path,
                         session_id,
                         tail_turn_count,
+                        staged_revert.as_ref().map(|revert| revert.boundary_turn),
                     )
                     .await?
             } else {
@@ -5586,7 +6043,9 @@ impl SessionManager {
             };
         if let Some(revert) = staged_revert.as_ref() {
             persisted_turns.retain(|turn| turn.turn_index < revert.boundary_turn);
-            total_turn_count = persisted_turns.len();
+            if tail_turn_count.is_none() {
+                total_turn_count = persisted_turns.len();
+            }
         }
         let load_session_with_turns_duration_ms = elapsed_ms_u64(session_started_at);
         debug!(
@@ -5760,13 +6219,16 @@ impl SessionManager {
             None
         };
         let claimed = self.claim_session_storage_path(session_id, session_storage_path, true)?;
-        let result = self
-            .restore_session_with_turns_from_claimed_storage_path_internal(
+        // Runtime restore includes history decoding and context reconstruction.
+        // Keep that state on the heap across the nested fork/restore facades.
+        let result = Box::pin(
+            self.restore_session_with_turns_from_claimed_storage_path_internal(
                 session_storage_path,
                 session_id,
                 include_internal,
-            )
-            .await;
+            ),
+        )
+        .await;
         if result.is_err() {
             self.release_failed_session_storage_path_claim(
                 session_id,
@@ -5874,7 +6336,7 @@ impl SessionManager {
             elapsed_ms_u64(session_started_at)
         );
 
-        let ai_config_for_restore = Self::load_ai_config_for_model_resolution().await;
+        let ai_config_for_restore = Self::load_ai_config_for_session(&session.config).await?;
         let mut should_persist_restored_session = false;
         let mut fallback_previous_model_id = None;
         let mut auto_cleared_reasoning_preset = None;
@@ -5965,6 +6427,8 @@ impl SessionManager {
             let trimmed = persisted_model_id.trim();
             let needs_fallback = if trimmed.is_empty()
                 || !session_model_allows_fallback(session.config.model_binding_policy)
+                || (!crate::agentic::execution::round_model_routing::configuration::available()
+                    && session.config.model_routing.as_deref() == Some("smart"))
             {
                 false
             } else if let Some(ai_config) = ai_config_for_restore.as_ref() {
@@ -6711,6 +7175,36 @@ impl SessionManager {
         self.persistence_manager
             .load_session_metadata(workspace_path, session_id)
             .await
+    }
+
+    /// Read the compact latest user-turn outcome without restoring a Session or
+    /// reading its transcript. Legacy metadata may have no summary yet.
+    pub(crate) async fn latest_turn_for_agent_listing(
+        &self,
+        session_id: &str,
+        parent_storage_path: Option<&Path>,
+    ) -> OpenBitFunResult<Option<(String, TurnStatus)>> {
+        if !self.should_persist_session_id(session_id) {
+            return Ok(self.transient_turns.get(session_id).and_then(|history| {
+                history
+                    .turns
+                    .iter()
+                    .rev()
+                    .find(|turn| turn.kind == DialogTurnKind::UserDialog)
+                    .map(|turn| (turn.turn_id.clone(), turn.status.clone()))
+            }));
+        }
+        let storage_path = match self.effective_session_storage_path(session_id).await {
+            Some(path) => path,
+            None => parent_storage_path.map(Path::to_path_buf).ok_or_else(|| {
+                OpenBitFunError::NotFound(format!("Agent session storage not found: {session_id}"))
+            })?,
+        };
+        Ok(self
+            .load_session_metadata(&storage_path, session_id)
+            .await?
+            .and_then(|metadata| metadata.last_turn)
+            .map(|turn| (turn.turn_id, turn.status)))
     }
 
     pub async fn update_session_metadata(
@@ -7712,6 +8206,14 @@ impl SessionManager {
                         || !tool_items.is_empty()
                         || !thinking_items.is_empty()
                     {
+                        // Messages written before the Runtime recorded round
+                        // timing leave these unknown rather than claiming 0 ms.
+                        let timing = msg
+                            .metadata
+                            .model_execution
+                            .as_ref()
+                            .and_then(|facts| facts.timing)
+                            .unwrap_or_default();
                         rounds.push(ModelRoundData {
                             id: round_id,
                             turn_id: turn_id.to_string(),
@@ -7723,14 +8225,28 @@ impl SessionManager {
                             thinking_items,
                             start_time: timestamp,
                             end_time: Some(timestamp),
-                            duration_ms: Some(0),
+                            duration_ms: timing.duration_ms,
                             provider_id: None,
-                            model_config_id: None,
-                            effective_model_name: None,
-                            first_chunk_ms: None,
-                            first_visible_output_ms: None,
-                            stream_duration_ms: None,
-                            attempt_count: None,
+                            model_config_id: msg
+                                .metadata
+                                .model_execution
+                                .as_ref()
+                                .map(|facts| facts.model_config_id.clone()),
+                            effective_model_name: msg
+                                .metadata
+                                .model_execution
+                                .as_ref()
+                                .map(|facts| facts.effective_model_name.clone()),
+                            routing: msg
+                                .metadata
+                                .model_execution
+                                .as_ref()
+                                .and_then(|facts| facts.routing.clone()),
+                            first_chunk_ms: timing.first_chunk_ms,
+                            first_visible_output_ms: timing.first_visible_output_ms,
+                            stream_duration_ms: timing.stream_duration_ms,
+                            ttft_ms: timing.ttft_ms,
+                            attempt_count: timing.attempt_count,
                             attempt_diagnostics: vec![],
                             failure_category: None,
                             token_details: None,
@@ -7903,6 +8419,7 @@ impl SessionManager {
             .collect();
         Ok(TransientSessionBranchSource {
             session,
+            metadata: None,
             turns,
             context_snapshots,
             prompt_cache: self.prompt_cache_store.get_cache(session_id),
@@ -7913,6 +8430,204 @@ impl SessionManager {
                 .map(|snapshot| snapshot.clone()),
             evidence_events,
         })
+    }
+
+    pub(crate) async fn background_delivery_for_turn(
+        &self,
+        session_id: &str,
+        turn_id: &str,
+    ) -> OpenBitFunResult<Option<openbitfun_core_types::background_delivery::BackgroundDelivery>>
+    {
+        let path = self
+            .effective_session_storage_path(session_id)
+            .await
+            .ok_or_else(|| OpenBitFunError::validation("Session storage is unavailable"))?;
+        let index = self
+            .sessions
+            .get(session_id)
+            .and_then(|session| session.dialog_turn_ids.iter().position(|id| id == turn_id))
+            .ok_or_else(|| OpenBitFunError::validation("Background run is not loaded"))?;
+        let turn = self
+            .load_runtime_dialog_turn(&path, session_id, index)
+            .await?;
+        Ok(turn.and_then(|turn| {
+            let mut delivery = openbitfun_core_types::background_delivery::BackgroundDelivery::from_metadata(turn.user_message.metadata.as_ref(), turn_id)?;
+            let generation = turn.recovery.as_ref().map(|recovery| recovery.execution_generation).or(turn.recovery_epoch).unwrap_or(0);
+            if generation > delivery.execution_generation {
+                delivery.execution_generation = generation;
+                delivery.disposition = openbitfun_core_types::background_delivery::BackgroundReportDisposition::Pending;
+                delivery.proposal = None;
+                delivery.resolved_at_ms = None;
+                delivery.decision_usage = None;
+                delivery.decision_source = "pending_recovery".to_owned();
+                delivery.reason.clear();
+            }
+            Some(delivery)
+        }))
+    }
+
+    pub(crate) async fn background_task_instructions(
+        &self,
+        session_id: &str,
+        turn_id: &str,
+    ) -> OpenBitFunResult<String> {
+        let path = self
+            .effective_session_storage_path(session_id)
+            .await
+            .ok_or_else(|| OpenBitFunError::validation("Session storage is unavailable"))?;
+        let index = self
+            .sessions
+            .get(session_id)
+            .and_then(|session| session.dialog_turn_ids.iter().position(|id| id == turn_id))
+            .ok_or_else(|| OpenBitFunError::validation("Background run is not loaded"))?;
+        Ok(self
+            .load_runtime_dialog_turn(&path, session_id, index)
+            .await?
+            .map(|turn| turn.user_message.content)
+            .unwrap_or_default())
+    }
+
+    pub(crate) async fn set_background_delivery_for_turn(
+        &self,
+        session_id: &str,
+        turn_id: &str,
+        delivery: &openbitfun_core_types::background_delivery::BackgroundDelivery,
+    ) -> OpenBitFunResult<()> {
+        use openbitfun_core_types::background_delivery::{
+            BackgroundDelivery, BACKGROUND_DELIVERY_METADATA_KEY,
+        };
+        let path = self
+            .effective_session_storage_path(session_id)
+            .await
+            .ok_or_else(|| OpenBitFunError::validation("Session storage is unavailable"))?;
+        let index = self
+            .sessions
+            .get(session_id)
+            .and_then(|session| session.dialog_turn_ids.iter().position(|id| id == turn_id))
+            .ok_or_else(|| OpenBitFunError::validation("Background run is not loaded"))?;
+        let _guard = self.acquire_session_mutation(session_id).await?;
+        let mut turn = self
+            .load_runtime_dialog_turn(&path, session_id, index)
+            .await?
+            .ok_or_else(|| OpenBitFunError::validation("Background run record is unavailable"))?;
+        let current =
+            BackgroundDelivery::from_metadata(turn.user_message.metadata.as_ref(), turn_id)
+                .ok_or_else(|| {
+                    OpenBitFunError::validation("This turn is not an admitted background run")
+                })?;
+        let generation = turn
+            .recovery
+            .as_ref()
+            .map(|recovery| recovery.execution_generation)
+            .or(turn.recovery_epoch)
+            .unwrap_or(0);
+        if current.task_id != delivery.task_id
+            || current.run_id != delivery.run_id
+            || current.policy != delivery.policy
+            || delivery.execution_generation != generation
+        {
+            return Err(OpenBitFunError::validation(
+                "Background report identity or policy changed",
+            ));
+        }
+        if current.resolved_at_ms.is_some()
+            && current.execution_generation >= delivery.execution_generation
+            && current != *delivery
+        {
+            return Err(OpenBitFunError::validation(
+                "Background report is already resolved",
+            ));
+        }
+        let metadata = turn
+            .user_message
+            .metadata
+            .get_or_insert_with(|| serde_json::json!({}));
+        if delivery.execution_generation > current.execution_generation {
+            if let Some(object) = metadata.as_object_mut() {
+                let history = object
+                    .entry("backgroundDeliveryHistory")
+                    .or_insert_with(|| serde_json::json!([]));
+                if let Some(history) = history.as_array_mut() {
+                    history.push(
+                        serde_json::to_value(&current)
+                            .map_err(|error| OpenBitFunError::validation(error.to_string()))?,
+                    );
+                }
+            }
+        }
+        metadata[BACKGROUND_DELIVERY_METADATA_KEY] = serde_json::to_value(delivery)
+            .map_err(|error| OpenBitFunError::validation(error.to_string()))?;
+        self.save_runtime_dialog_turn(&path, &turn).await
+    }
+
+    pub(crate) async fn propose_background_report(
+        &self,
+        session_id: &str,
+        turn_id: &str,
+        proposal: openbitfun_core_types::background_delivery::BackgroundReport,
+    ) -> OpenBitFunResult<()> {
+        use openbitfun_core_types::background_delivery::{
+            BackgroundReportDisposition as Disposition, BackgroundReportPolicy as Policy,
+        };
+        if proposal.reason.trim().is_empty()
+            || !matches!(
+                proposal.disposition,
+                Disposition::Quiet | Disposition::Report | Disposition::Attention
+            )
+        {
+            return Err(OpenBitFunError::validation(
+                "A final report disposition and reason are required",
+            ));
+        }
+        let mut delivery = self
+            .background_delivery_for_turn(session_id, turn_id)
+            .await?
+            .ok_or_else(|| {
+                OpenBitFunError::validation(
+                    "Report proposals are only available inside a background run",
+                )
+            })?;
+        if delivery.resolved_at_ms.is_some()
+            || (delivery.policy == Policy::Always && proposal.disposition == Disposition::Quiet)
+        {
+            return Err(OpenBitFunError::validation(
+                "The run policy does not permit this report proposal",
+            ));
+        }
+        delivery.proposal = Some(proposal);
+        self.set_background_delivery_for_turn(session_id, turn_id, &delivery)
+            .await
+    }
+
+    async fn load_turn_token_usage(
+        &self,
+        session_id: &str,
+        turn_id: &str,
+    ) -> OpenBitFunResult<Option<crate::service::session::DialogTurnTokenUsageData>> {
+        let Some(workspace_path) = self.effective_session_storage_path(session_id).await else {
+            return Ok(None);
+        };
+        let Some(turn_index) = self
+            .sessions
+            .get(session_id)
+            .and_then(|session| session.dialog_turn_ids.iter().position(|id| id == turn_id))
+        else {
+            return Ok(None);
+        };
+        let Some(turn) = self
+            .load_runtime_dialog_turn(&workspace_path, session_id, turn_index)
+            .await?
+            .filter(|turn| turn.turn_id == turn_id)
+        else {
+            return Ok(None);
+        };
+        Ok(super::turn_usage::load_turn_token_usage(
+            self.persistence_manager.path_manager(),
+            session_id,
+            &turn.turn_id,
+            turn.start_time,
+        )
+        .await)
     }
 
     /// Complete a dialog turn in its history owner.
@@ -7967,6 +8682,8 @@ impl SessionManager {
             "turn_completed",
         )
         .await;
+
+        let token_usage = self.load_turn_token_usage(session_id, turn_id).await?;
 
         // Serialize Runtime completion against projected UI checkpoints. If a
         // checkpoint wins first, the generation journal below repairs it; if
@@ -8060,9 +8777,11 @@ impl SessionManager {
                     provider_id: None,
                     model_config_id: None,
                     effective_model_name: None,
+                    routing: None,
                     first_chunk_ms: None,
                     first_visible_output_ms: None,
                     stream_duration_ms: None,
+                    ttft_ms: None,
                     attempt_count: None,
                     attempt_diagnostics: vec![],
                     failure_category: None,
@@ -8077,6 +8796,7 @@ impl SessionManager {
         turn.has_final_response = has_final_response;
         turn.duration_ms = Some(stats.duration_ms);
         turn.end_time = Some(completion_timestamp);
+        super::turn_usage::reconcile_turn_token_usage(&mut turn, token_usage);
 
         // Persist
         self.save_runtime_dialog_turn(&workspace_path, &turn)
@@ -8096,15 +8816,16 @@ impl SessionManager {
         new_messages: &[Message],
         timestamp: u64,
     ) -> usize {
-        let mut next_round_index = turn
-            .model_rounds
-            .iter()
-            .map(|round| round.round_index)
-            .max()
-            .map_or(0, |index| index.saturating_add(1));
         let generated_rounds =
             Self::build_model_rounds_from_messages(new_messages, turn_id, timestamp);
         let generated_count = generated_rounds.len();
+        if generated_count == 0 {
+            return 0;
+        }
+        let mut generation_order = BTreeMap::new();
+        for (index, round) in generated_rounds.iter().enumerate() {
+            generation_order.entry(round.id.clone()).or_insert(index);
+        }
         for mut round in generated_rounds {
             if let Some(existing_index) = turn
                 .model_rounds
@@ -8197,19 +8918,34 @@ impl SessionManager {
                     .cloned()
                     .collect::<Vec<_>>();
                 round.tool_items.extend(derived_tool_items);
-                round.round_index = existing.round_index;
                 round.round_group_id = existing.round_group_id.clone();
                 round.timestamp = existing.timestamp;
                 round.start_time = existing.start_time;
                 round.end_time = existing.end_time.or(round.end_time);
-                round.duration_ms = existing.duration_ms.or(round.duration_ms);
+                // Round timing is a Runtime fact carried by the generation
+                // journal. The client checkpoint only mirrors
+                // `ModelRoundCompleted`, and for the last round it routinely
+                // loses the race with Turn completion, so it is a fallback for
+                // journals written before the Runtime recorded timing. Older
+                // completion writers persisted `0` for unknown durations.
+                round.duration_ms = round
+                    .duration_ms
+                    .or(existing.duration_ms.filter(|duration_ms| *duration_ms > 0));
                 round.provider_id = existing.provider_id.clone();
-                round.model_config_id = existing.model_config_id.clone();
-                round.effective_model_name = existing.effective_model_name.clone();
-                round.first_chunk_ms = existing.first_chunk_ms;
-                round.first_visible_output_ms = existing.first_visible_output_ms;
-                round.stream_duration_ms = existing.stream_duration_ms;
-                round.attempt_count = existing.attempt_count;
+                round.model_config_id = round
+                    .model_config_id
+                    .or_else(|| existing.model_config_id.clone());
+                round.effective_model_name = round
+                    .effective_model_name
+                    .or_else(|| existing.effective_model_name.clone());
+                round.routing = round.routing.or_else(|| existing.routing.clone());
+                round.first_chunk_ms = round.first_chunk_ms.or(existing.first_chunk_ms);
+                round.first_visible_output_ms = round
+                    .first_visible_output_ms
+                    .or(existing.first_visible_output_ms);
+                round.stream_duration_ms = round.stream_duration_ms.or(existing.stream_duration_ms);
+                round.ttft_ms = round.ttft_ms.or(existing.ttft_ms);
+                round.attempt_count = round.attempt_count.or(existing.attempt_count);
                 round.attempt_diagnostics = existing.attempt_diagnostics.clone();
                 round.failure_category = existing.failure_category.clone();
                 round.token_details = existing.token_details.clone();
@@ -8218,12 +8954,129 @@ impl SessionManager {
                 }
                 turn.model_rounds[existing_index] = round;
             } else {
-                round.round_index = next_round_index;
-                next_round_index = next_round_index.saturating_add(1);
                 turn.model_rounds.push(round);
             }
         }
+
+        // A client can checkpoint only a suffix or scattered rounds. Appending
+        // missing earlier rounds behind that checkpoint puts the final answer
+        // in the middle. The generation journal owns their relative order.
+        // Keep older generations before the first shared round; other rounds
+        // absent from this journal stay beside their preceding shared round.
+        // Nothing is discarded, including interrupted or client-only records.
+        let mut preceding_generation_index = None;
+        let mut ordered = std::mem::take(&mut turn.model_rounds)
+            .into_iter()
+            .map(|round| {
+                let generation_index = generation_order.get(&round.id).copied();
+                if generation_index.is_some() {
+                    preceding_generation_index = generation_index;
+                }
+                (
+                    (preceding_generation_index, generation_index.is_none()),
+                    round,
+                )
+            })
+            .collect::<Vec<_>>();
+        ordered.sort_by_key(|(order, _)| *order);
+        turn.model_rounds = ordered
+            .into_iter()
+            .enumerate()
+            .map(|(index, (_, mut round))| {
+                round.round_index = index;
+                round
+            })
+            .collect();
         generated_count
+    }
+
+    /// Record a spawned subagent's child Session on the parent Turn's tool item.
+    ///
+    /// A synchronous delegated command is stamped in memory before its synthetic
+    /// Turn is written. An asynchronous spawn returns to the parent Turn long
+    /// before the child Turn finishes, so the link has to become durable on the
+    /// already persisted parent Turn for hosts that only read persisted Turns.
+    /// Rounds are materialized from the live generation exactly like a relay
+    /// read, so the stamped item keeps the round and item identity that the
+    /// later completion merge preserves.
+    ///
+    /// This is a best-effort annotation of an in-progress Turn: an unknown Turn,
+    /// an already terminal Turn, or a missing tool item leaves the Turn as is.
+    pub(crate) async fn link_subagent_session_on_parent_tool_item(
+        &self,
+        parent_session_id: &str,
+        parent_dialog_turn_id: &str,
+        parent_tool_call_id: &str,
+        subagent_session_id: &str,
+        subagent_dialog_turn_id: &str,
+        subagent_model_id: Option<String>,
+    ) -> OpenBitFunResult<()> {
+        if !self.should_persist_session_id(parent_session_id)
+            && !self.transient_turns.contains_key(parent_session_id)
+        {
+            return Ok(());
+        }
+        let Some(workspace_path) = self.effective_session_storage_path(parent_session_id).await
+        else {
+            return Ok(());
+        };
+        let _mutation_guard = self.acquire_session_mutation(parent_session_id).await?;
+        let Some(turn_index) = self.sessions.get(parent_session_id).and_then(|session| {
+            session
+                .dialog_turn_ids
+                .iter()
+                .position(|turn_id| turn_id == parent_dialog_turn_id)
+        }) else {
+            return Ok(());
+        };
+        let Some(mut turn) = self
+            .load_runtime_dialog_turn(&workspace_path, parent_session_id, turn_index)
+            .await?
+        else {
+            return Ok(());
+        };
+        // A terminal Turn is owned by its completion writer, which merges the
+        // same link from the in-memory rounds instead.
+        if turn.status != TurnStatus::InProgress {
+            return Ok(());
+        }
+        // Rounds materialize on the Turn's own start time, so a mid-Turn
+        // checkpoint does not reorder the running generation.
+        let materialized_at = turn.start_time;
+        let messages: Vec<Message> = self
+            .context_store
+            .get_context_messages(parent_session_id)
+            .into_iter()
+            .filter(|message| message.metadata.turn_id.as_deref() == Some(parent_dialog_turn_id))
+            .collect();
+        Self::append_generation_rounds(
+            &mut turn,
+            parent_dialog_turn_id,
+            &messages,
+            materialized_at,
+        );
+        let Some(tool_item) = turn
+            .model_rounds
+            .iter_mut()
+            .flat_map(|round| round.tool_items.iter_mut())
+            .find(|item| {
+                item.id == parent_tool_call_id || item.tool_call.id == parent_tool_call_id
+            })
+        else {
+            return Ok(());
+        };
+        tool_item.subagent_session_id = Some(subagent_session_id.to_string());
+        tool_item.subagent_dialog_turn_id = Some(subagent_dialog_turn_id.to_string());
+        if subagent_model_id.is_some() {
+            tool_item.subagent_model_id = subagent_model_id;
+        }
+        self.save_runtime_dialog_turn(&workspace_path, &turn)
+            .await?;
+        debug!(
+            "Linked spawned subagent Session on the parent tool item: parent_session_id={}, parent_turn_id={}, parent_tool_call_id={}, subagent_session_id={}",
+            parent_session_id, parent_dialog_turn_id, parent_tool_call_id, subagent_session_id
+        );
+        Ok(())
     }
 
     /// Complete a reopened interrupted turn by appending only the messages
@@ -8239,6 +9092,7 @@ impl SessionManager {
         finish_reason: Option<String>,
         has_final_response: Option<bool>,
     ) -> OpenBitFunResult<()> {
+        let token_usage = self.load_turn_token_usage(session_id, turn_id).await?;
         let _mutation_guard = self.acquire_session_mutation(session_id).await?;
         let workspace_path = self
             .effective_session_storage_path(session_id)
@@ -8313,9 +9167,11 @@ impl SessionManager {
                 provider_id: None,
                 model_config_id: None,
                 effective_model_name: None,
+                routing: None,
                 first_chunk_ms: None,
                 first_visible_output_ms: None,
                 stream_duration_ms: None,
+                ttft_ms: None,
                 attempt_count: None,
                 attempt_diagnostics: vec![],
                 failure_category: None,
@@ -8330,6 +9186,7 @@ impl SessionManager {
         turn.has_final_response = has_final_response;
         turn.duration_ms = Some(stats.duration_ms);
         turn.end_time = Some(completion_timestamp);
+        super::turn_usage::reconcile_turn_token_usage(&mut turn, token_usage);
 
         // A recovered generation is Runtime-owned, so its context snapshot is
         // part of the completion commit. Persist it before the Completed Turn:
@@ -8805,93 +9662,134 @@ impl SessionManager {
                         .to_string(),
                 )
             })?;
-        let resolved_model_id = user_message_metadata
-            .as_ref()
-            .and_then(|metadata| metadata.get(INTERRUPTED_TURN_RESOLVED_MODEL_ID_METADATA_KEY))
-            .and_then(serde_json::Value::as_str)
-            .map(str::trim)
-            .filter(|model_id| !model_id.is_empty())
-            .map(str::to_string)
-            .ok_or_else(|| {
-                OpenBitFunError::Validation(
-                    "Interrupted turn has no frozen resolved model; start a new turn instead"
-                        .to_string(),
-                )
-            })?;
-        let expected_model_binding_fingerprint = user_message_metadata
+        let pool_id = user_message_metadata
             .as_ref()
             .and_then(|metadata| {
-                metadata.get(INTERRUPTED_TURN_MODEL_BINDING_FINGERPRINT_METADATA_KEY)
+                metadata.get(crate::agentic::execution::model_pool::POOL_CONTEXT_KEY)
             })
-            .and_then(serde_json::Value::as_str)
-            .map(str::trim)
-            .filter(|fingerprint| !fingerprint.is_empty())
-            .map(str::to_string)
-            .ok_or_else(|| {
-                OpenBitFunError::Validation(
-                    "Interrupted turn has no frozen model binding; start a new turn instead"
-                        .to_string(),
-                )
-            })?;
-        let ai_config = Self::load_ai_config_for_model_resolution()
-            .await
-            .ok_or_else(|| {
-                OpenBitFunError::AIClient(
-                    "AI configuration is unavailable; retry interrupted turn recovery".to_string(),
-                )
-            })?;
-        let canonical_model_id = ai_config
-            .resolve_model_reference(&resolved_model_id)
-            .ok_or_else(|| {
-                OpenBitFunError::Validation(format!(
-                    "The interrupted turn model is unavailable: {resolved_model_id}"
-                ))
-            })?;
-        let model = ai_config
-            .models
-            .iter()
-            .find(|model| model.enabled && model.id == canonical_model_id)
-            .ok_or_else(|| {
-                OpenBitFunError::Validation(format!(
-                    "The interrupted turn model is unavailable: {resolved_model_id}"
-                ))
-            })?;
-        if model_runtime_binding_fingerprint(model) != expected_model_binding_fingerprint {
-            return Err(OpenBitFunError::Validation(format!(
+            .and_then(serde_json::Value::as_str);
+        let (resolved_model_id, expected_model_binding_fingerprint) = if let Some(pool_id) = pool_id
+        {
+            let service = crate::service::config::get_global_config_service().await?;
+            let pool = service.model_pool_store().await.get(pool_id).await?;
+            let config: crate::service::config::types::AIConfig =
+                service.get_config(Some("ai")).await?;
+            let bound = session
+                .config
+                .model_pool_binding
+                .as_ref()
+                .filter(|binding| binding.pool_id == pool_id);
+            let model = bound
+                .and_then(|binding| {
+                    config.models.iter().find(|model| {
+                        model.enabled
+                            && model.id == binding.model_id
+                            && pool.member_model_ids.contains(&model.id)
+                            && model_runtime_binding_fingerprint(model)
+                                == binding.configuration_fingerprint
+                    })
+                })
+                .or_else(|| {
+                    pool.member_model_ids.iter().find_map(|id| {
+                        config.models.iter().find(|model| {
+                            &model.id == id && model.enabled && model.supports_text_generation()
+                        })
+                    })
+                })
+                .ok_or_else(|| {
+                    OpenBitFunError::validation(
+                        "Interrupted turn model pool has no compatible configured members",
+                    )
+                })?;
+            (model.id.clone(), model_runtime_binding_fingerprint(model))
+        } else {
+            let resolved_model_id = user_message_metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get(INTERRUPTED_TURN_RESOLVED_MODEL_ID_METADATA_KEY))
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|model_id| !model_id.is_empty())
+                .map(str::to_string)
+                .ok_or_else(|| {
+                    OpenBitFunError::Validation(
+                        "Interrupted turn has no frozen resolved model; start a new turn instead"
+                            .to_string(),
+                    )
+                })?;
+            let expected_model_binding_fingerprint = user_message_metadata
+                .as_ref()
+                .and_then(|metadata| {
+                    metadata.get(INTERRUPTED_TURN_MODEL_BINDING_FINGERPRINT_METADATA_KEY)
+                })
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|fingerprint| !fingerprint.is_empty())
+                .map(str::to_string)
+                .ok_or_else(|| {
+                    OpenBitFunError::Validation(
+                        "Interrupted turn has no frozen model binding; start a new turn instead"
+                            .to_string(),
+                    )
+                })?;
+            let ai_config = Self::load_ai_config_for_model_resolution()
+                .await
+                .ok_or_else(|| {
+                    OpenBitFunError::AIClient(
+                        "AI configuration is unavailable; retry interrupted turn recovery"
+                            .to_string(),
+                    )
+                })?;
+            let canonical_model_id = ai_config
+                .resolve_model_reference(&resolved_model_id)
+                .ok_or_else(|| {
+                    OpenBitFunError::Validation(format!(
+                        "The interrupted turn model is unavailable: {resolved_model_id}"
+                    ))
+                })?;
+            let model = ai_config
+                .models
+                .iter()
+                .find(|model| model.enabled && model.id == canonical_model_id)
+                .ok_or_else(|| {
+                    OpenBitFunError::Validation(format!(
+                        "The interrupted turn model is unavailable: {resolved_model_id}"
+                    ))
+                })?;
+            if model_runtime_binding_fingerprint(model) != expected_model_binding_fingerprint {
+                return Err(OpenBitFunError::Validation(format!(
                 "The interrupted turn model binding changed after interruption: {resolved_model_id}"
             )));
-        }
-        let resolved_reasoning_preset = match user_message_metadata
-            .as_ref()
-            .and_then(|metadata| metadata.get(INTERRUPTED_TURN_REASONING_PRESET_METADATA_KEY))
-        {
-            Some(serde_json::Value::Null) => None,
-            Some(serde_json::Value::String(value)) => value
-                .trim()
-                .is_empty()
-                .then_some(None)
-                .unwrap_or_else(|| Some(value.trim().to_string())),
-            _ => {
-                return Err(OpenBitFunError::Validation(
-                    "Interrupted turn has no frozen reasoning preset; start a new turn instead"
-                        .to_string(),
-                ))
             }
-        };
-        let expected_reasoning_fingerprint = user_message_metadata
-            .as_ref()
-            .and_then(|metadata| metadata.get(INTERRUPTED_TURN_REASONING_FINGERPRINT_METADATA_KEY))
-            .and_then(serde_json::Value::as_str)
-            .map(str::trim)
-            .filter(|fingerprint| !fingerprint.is_empty())
-            .ok_or_else(|| {
-                OpenBitFunError::Validation(
+            let resolved_reasoning_preset =
+                match user_message_metadata.as_ref().and_then(|metadata| {
+                    metadata.get(INTERRUPTED_TURN_REASONING_PRESET_METADATA_KEY)
+                }) {
+                    Some(serde_json::Value::Null) => None,
+                    Some(serde_json::Value::String(value)) => value
+                        .trim()
+                        .is_empty()
+                        .then_some(None)
+                        .unwrap_or_else(|| Some(value.trim().to_string())),
+                    _ => return Err(OpenBitFunError::Validation(
+                        "Interrupted turn has no frozen reasoning preset; start a new turn instead"
+                            .to_string(),
+                    )),
+                };
+            let expected_reasoning_fingerprint = user_message_metadata
+                .as_ref()
+                .and_then(|metadata| {
+                    metadata.get(INTERRUPTED_TURN_REASONING_FINGERPRINT_METADATA_KEY)
+                })
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|fingerprint| !fingerprint.is_empty())
+                .ok_or_else(|| {
+                    OpenBitFunError::Validation(
                     "Interrupted turn has no frozen reasoning fingerprint; start a new turn instead"
                         .to_string(),
                 )
-            })?;
-        let reasoning_selection =
-            match user_message_metadata.as_ref().and_then(|metadata| {
+                })?;
+            let reasoning_selection = match user_message_metadata.as_ref().and_then(|metadata| {
                 metadata.get(INTERRUPTED_TURN_REASONING_SELECTION_METADATA_KEY)
             }) {
                 Some(serde_json::Value::Null) => None,
@@ -8905,31 +9803,33 @@ impl SessionManager {
                         .to_string(),
                 )),
             };
-        if reasoning_selection != session.config.reasoning_preset {
-            return Err(OpenBitFunError::Validation(
+            if reasoning_selection != session.config.reasoning_preset {
+                return Err(OpenBitFunError::Validation(
                 "The session reasoning preset changed after interruption; start a new turn instead"
                     .to_string(),
             ));
-        }
-        let (current_resolved_reasoning_preset, current_reasoning_fingerprint) =
-            Self::resolve_effective_reasoning_preset_from_config(
-                &ai_config,
-                &resolved_model_id,
-                reasoning_selection.as_deref(),
-            )
-            .await?;
-        if current_resolved_reasoning_preset != resolved_reasoning_preset {
-            return Err(OpenBitFunError::Validation(
+            }
+            let (current_resolved_reasoning_preset, current_reasoning_fingerprint) =
+                Self::resolve_effective_reasoning_preset_from_config(
+                    &ai_config,
+                    &resolved_model_id,
+                    reasoning_selection.as_deref(),
+                )
+                .await?;
+            if current_resolved_reasoning_preset != resolved_reasoning_preset {
+                return Err(OpenBitFunError::Validation(
                 "The dialog turn reasoning contract changed after interruption; start a new turn instead"
                     .to_string(),
             ));
-        }
-        if current_reasoning_fingerprint != expected_reasoning_fingerprint {
-            return Err(OpenBitFunError::Validation(
+            }
+            if current_reasoning_fingerprint != expected_reasoning_fingerprint {
+                return Err(OpenBitFunError::Validation(
                 "The dialog turn reasoning runtime contract changed after interruption; start a new turn instead"
                     .to_string(),
             ));
-        }
+            }
+            (resolved_model_id, expected_model_binding_fingerprint)
+        };
         let user_input = turn.user_message.content.clone();
 
         let mut updated_session = session.clone();
@@ -9620,8 +10520,11 @@ impl SessionManager {
         let ai_client_factory = get_global_ai_client_factory().await.map_err(|e| {
             OpenBitFunError::AIClient(format!("Failed to get AI client factory: {}", e))
         })?;
-        let ai_config = Self::load_ai_config_for_model_resolution()
-            .await
+        let title_session = self
+            .get_session(session_id)
+            .ok_or_else(|| OpenBitFunError::NotFound(format!("Session not found: {session_id}")))?;
+        let ai_config = Self::load_ai_config_for_session(&title_session.config)
+            .await?
             .ok_or_else(|| {
                 OpenBitFunError::AIClient("Failed to load AI configuration".to_string())
             })?;
@@ -10013,6 +10916,239 @@ mod tests {
     use uuid::Uuid;
 
     #[test]
+    fn model_routing_history_survives_headless_persistence_and_legacy_messages() {
+        let legacy = Message::assistant("legacy".into());
+        let mut legacy_json = serde_json::to_value(&legacy).unwrap();
+        legacy_json["metadata"]
+            .as_object_mut()
+            .unwrap()
+            .remove("model_execution");
+        let restored: Message = serde_json::from_value(legacy_json).unwrap();
+        assert!(restored.metadata.model_execution.is_none());
+        let mut routed = Message::assistant("routed".into()).with_round_id("round-economy".into());
+        routed.metadata.model_execution =
+            Some(crate::agentic::core::message::ModelExecutionMetadata {
+                model_config_id: "economy-config".into(),
+                effective_model_name: "economy-api-model".into(),
+                routing: Some(openbitfun_events::agentic::ModelRoutingDecision {
+                    route: "economy".into(),
+                    latency_ms: 17,
+                    fallback_reason: None,
+                }),
+                timing: None,
+            });
+        let restored: Message =
+            serde_json::from_value(serde_json::to_value(routed).unwrap()).unwrap();
+        let rounds =
+            SessionManager::build_model_rounds_from_messages(&[legacy, restored], "turn", 1);
+        assert!(rounds[0].routing.is_none());
+        assert_eq!(rounds[1].model_config_id.as_deref(), Some("economy-config"));
+        assert_eq!(
+            rounds[1].effective_model_name.as_deref(),
+            Some("economy-api-model")
+        );
+        assert_eq!(rounds[1].routing.as_ref().unwrap().latency_ms, 17);
+    }
+
+    #[test]
+    fn completion_merge_keeps_runtime_round_timing_over_stale_client_checkpoint() {
+        let timed_message = |round_id: &str, timing| {
+            let mut message = Message::assistant("answer".into()).with_round_id(round_id.into());
+            message.metadata.model_execution =
+                Some(crate::agentic::core::message::ModelExecutionMetadata {
+                    model_config_id: "model".into(),
+                    effective_model_name: "model".into(),
+                    routing: None,
+                    timing,
+                });
+            message
+        };
+        let mut turn = DialogTurnData::new(
+            "turn".into(),
+            0,
+            "session".into(),
+            UserMessageData {
+                id: "input".into(),
+                content: "hi".into(),
+                timestamp: 1,
+                metadata: None,
+            },
+        );
+        // The client checkpointed the final round before its
+        // `ModelRoundCompleted` arrived, and a checkpoint from an older writer
+        // recorded an unknown duration as 0.
+        let mut stale = SessionManager::build_model_rounds_from_messages(
+            &[timed_message("final", None)],
+            "turn",
+            1,
+        );
+        stale[0].duration_ms = Some(0);
+        // A legacy journal without timing keeps the client's real facts.
+        let mut checkpointed = SessionManager::build_model_rounds_from_messages(
+            &[timed_message("legacy", None)],
+            "turn",
+            1,
+        );
+        checkpointed[0].duration_ms = Some(900);
+        checkpointed[0].ttft_ms = Some(150);
+        turn.model_rounds = vec![checkpointed.remove(0), stale.remove(0)];
+
+        let runtime_timing = crate::agentic::core::message::ModelRoundTimingMetadata {
+            duration_ms: Some(2172),
+            first_chunk_ms: Some(10),
+            first_visible_output_ms: Some(20),
+            stream_duration_ms: Some(1500),
+            ttft_ms: Some(690),
+            attempt_count: Some(1),
+        };
+        SessionManager::append_generation_rounds(
+            &mut turn,
+            "turn",
+            &[
+                timed_message("legacy", None),
+                timed_message("final", Some(runtime_timing)),
+            ],
+            2,
+        );
+
+        let legacy = &turn.model_rounds[0];
+        assert_eq!(legacy.duration_ms, Some(900));
+        assert_eq!(legacy.ttft_ms, Some(150));
+        let last = &turn.model_rounds[1];
+        assert_eq!(last.duration_ms, Some(2172));
+        assert_eq!(last.ttft_ms, Some(690));
+        assert_eq!(last.stream_duration_ms, Some(1500));
+        assert_eq!(last.attempt_count, Some(1));
+    }
+
+    #[test]
+    fn generation_round_order_follows_journal_for_sparse_checkpoints() {
+        let ids = ["z-opening", "b-tool", "y-analysis", "a-tool", "m-final"];
+        let messages = ids
+            .iter()
+            .map(|id| Message::assistant((*id).into()).with_round_id((*id).into()))
+            .collect::<Vec<_>>();
+        // Runtime-rebuilt rounds can all have the completion timestamp. Neither
+        // timestamps, lexical IDs nor a partial checkpoint's indexes own order.
+        let rounds = SessionManager::build_model_rounds_from_messages(&messages, "turn", 10);
+        for mask in 0..(1 << ids.len()) {
+            for reverse in [false, true] {
+                let mut turn = DialogTurnData::new(
+                    "turn".into(),
+                    0,
+                    "session".into(),
+                    UserMessageData {
+                        id: "input".into(),
+                        content: "request".into(),
+                        timestamp: 1,
+                        metadata: None,
+                    },
+                );
+                turn.model_rounds = rounds
+                    .iter()
+                    .enumerate()
+                    .filter(|(index, _)| mask & (1 << index) != 0)
+                    .map(|(_, round)| round.clone())
+                    .collect();
+                if reverse {
+                    turn.model_rounds.reverse();
+                }
+                for (index, round) in turn.model_rounds.iter_mut().enumerate() {
+                    round.round_index = index;
+                    round.provider_id = Some("checkpoint-provider".into());
+                }
+                // The saved legacy shape needs no new fields to recover order.
+                let mut turn: DialogTurnData =
+                    serde_json::from_value(serde_json::to_value(turn).unwrap()).unwrap();
+                for _ in 0..2 {
+                    assert_eq!(
+                        SessionManager::append_generation_rounds(&mut turn, "turn", &messages, 10),
+                        ids.len()
+                    );
+                    assert_eq!(
+                        turn.model_rounds
+                            .iter()
+                            .map(|round| round.id.as_str())
+                            .collect::<Vec<_>>(),
+                        ids,
+                        "mask={mask}, reverse={reverse}"
+                    );
+                    for (index, round) in turn.model_rounds.iter().enumerate() {
+                        assert_eq!(round.round_index, index);
+                        assert_eq!(round.text_items[0].content, ids[index]);
+                        if mask & (1 << index) != 0 {
+                            assert_eq!(round.provider_id.as_deref(), Some("checkpoint-provider"));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn generation_round_order_preserves_prior_generations_and_unjournaled_rounds() {
+        let message = |id: &str| Message::assistant(id.into()).with_round_id(id.into());
+        let mut turn = DialogTurnData::new(
+            "turn".into(),
+            0,
+            "session".into(),
+            UserMessageData {
+                id: "input".into(),
+                content: "request".into(),
+                timestamp: 1,
+                metadata: None,
+            },
+        );
+        turn.model_rounds = SessionManager::build_model_rounds_from_messages(
+            &[
+                message("interrupted"),
+                message("second"),
+                message("retry"),
+                message("final"),
+                message("pending"),
+            ],
+            "turn",
+            10,
+        );
+        turn.model_rounds[0].status = "cancelled".into();
+        turn.model_rounds[2].status = "error".into();
+        turn.model_rounds[4].status = "streaming".into();
+        let preserved = [0, 2, 4].map(|index| turn.model_rounds[index].clone());
+        let messages = [message("first"), message("second"), message("final")];
+        for _ in 0..2 {
+            SessionManager::append_generation_rounds(&mut turn, "turn", &messages, 20);
+            assert_eq!(
+                turn.model_rounds
+                    .iter()
+                    .map(|round| round.id.as_str())
+                    .collect::<Vec<_>>(),
+                [
+                    "interrupted",
+                    "first",
+                    "second",
+                    "retry",
+                    "final",
+                    "pending"
+                ]
+            );
+            for (old, index) in preserved.iter().zip([0, 3, 5]) {
+                let mut expected = old.clone();
+                expected.round_index = index;
+                assert_eq!(
+                    serde_json::to_value(&turn.model_rounds[index]).unwrap(),
+                    serde_json::to_value(expected).unwrap()
+                );
+            }
+        }
+        let before = serde_json::to_value(&turn).unwrap();
+        assert_eq!(
+            SessionManager::append_generation_rounds(&mut turn, "turn", &[], 30),
+            0
+        );
+        assert_eq!(serde_json::to_value(&turn).unwrap(), before);
+    }
+
+    #[test]
     fn classified_edit_history_preserves_detail_and_readable_error() {
         let assistant = Message::assistant_with_tools(
             String::new(),
@@ -10353,6 +11489,215 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn background_delivery_is_bound_to_an_admitted_run_and_survives_completion_and_checkpoints(
+    ) {
+        use openbitfun_core_types::background_delivery::{
+            BackgroundDelivery, BackgroundReport, BackgroundReportDisposition as Disposition,
+            BackgroundReportPolicy as Policy, BACKGROUND_DELIVERY_METADATA_KEY,
+        };
+        let workspace = TestWorkspace::new();
+        let persistence = Arc::new(PersistenceManager::new(workspace.path_manager()).unwrap());
+        let manager = test_manager(persistence.clone());
+        let session = manager
+            .create_session(
+                "Background delivery".into(),
+                "Standard".into(),
+                SessionConfig {
+                    tool_presentation_mode: Default::default(),
+                    workspace_path: Some(workspace.path().to_string_lossy().to_string()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        let pending = BackgroundDelivery::pending(
+            "generic-monitor".into(),
+            "background-run".into(),
+            Policy::Conditional,
+        );
+        let turn = crate::service::session::DialogTurnData::new(
+            "background-run".into(),
+            0,
+            session.session_id.clone(),
+            crate::service::session::UserMessageData {
+                id: "input".into(),
+                content: "Only report changes.".into(),
+                timestamp: 1,
+                metadata: Some(serde_json::json!({BACKGROUND_DELIVERY_METADATA_KEY:pending})),
+            },
+        );
+        persistence
+            .save_dialog_turn(workspace.path(), &turn)
+            .await
+            .unwrap();
+        manager
+            .sessions
+            .get_mut(&session.session_id)
+            .unwrap()
+            .dialog_turn_ids
+            .push(turn.turn_id.clone());
+        let proposal = BackgroundReport {
+            disposition: Disposition::Quiet,
+            reason: "No reportable changes.".into(),
+        };
+        manager
+            .propose_background_report(&session.session_id, &turn.turn_id, proposal.clone())
+            .await
+            .unwrap();
+        let admitted = manager
+            .background_delivery_for_turn(&session.session_id, &turn.turn_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(admitted.proposal, Some(proposal.clone()));
+        let resolved = openbitfun_agent_runtime::scheduler::result_delivery::resolve_report(
+            admitted,
+            true,
+            "complete",
+            Some(proposal.clone()),
+            "structured",
+            2,
+        );
+        manager
+            .set_background_delivery_for_turn(&session.session_id, &turn.turn_id, &resolved)
+            .await
+            .unwrap();
+        manager
+            .complete_dialog_turn(
+                &session.session_id,
+                &turn.turn_id,
+                "Nothing changed; remaining quiet.".into(),
+                &[],
+                TurnStats {
+                    total_rounds: 1,
+                    total_tools: 0,
+                    total_tokens: 0,
+                    duration_ms: 10,
+                },
+                Some("complete".into()),
+                Some(true),
+            )
+            .await
+            .unwrap();
+        let completed = persistence
+            .load_dialog_turn(workspace.path(), &session.session_id, 0)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            completed.status,
+            crate::service::session::TurnStatus::Completed
+        );
+        assert!(!completed.model_rounds.is_empty());
+        let raw_rounds = serde_json::to_value(&completed.model_rounds).unwrap();
+        let mut checkpoint = completed;
+        checkpoint.user_message.metadata =
+            Some(serde_json::json!({BACKGROUND_DELIVERY_METADATA_KEY:pending}));
+        persistence
+            .save_dialog_turn(workspace.path(), &checkpoint)
+            .await
+            .unwrap();
+        let saved = persistence
+            .load_dialog_turn(workspace.path(), &session.session_id, 0)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(&saved.model_rounds).unwrap(),
+            raw_rounds
+        );
+        assert_eq!(
+            BackgroundDelivery::from_metadata(saved.user_message.metadata.as_ref(), &saved.turn_id)
+                .unwrap()
+                .disposition,
+            Disposition::Quiet
+        );
+        assert!(manager
+            .propose_background_report(&session.session_id, &turn.turn_id, proposal.clone())
+            .await
+            .is_err());
+        let mut resumed = saved;
+        resumed.recovery_epoch = Some(1);
+        resumed.status = crate::service::session::TurnStatus::InProgress;
+        persistence
+            .save_dialog_turn(workspace.path(), &resumed)
+            .await
+            .unwrap();
+        let recovering = manager
+            .background_delivery_for_turn(&session.session_id, &turn.turn_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(recovering.execution_generation, 1);
+        assert_eq!(recovering.disposition, Disposition::Pending);
+        assert!(recovering.resolved_at_ms.is_none());
+        let recovered = openbitfun_agent_runtime::scheduler::result_delivery::resolve_report(
+            recovering,
+            true,
+            "complete",
+            Some(proposal.clone()),
+            "structured",
+            4,
+        );
+        manager
+            .set_background_delivery_for_turn(&session.session_id, &turn.turn_id, &recovered)
+            .await
+            .unwrap();
+        // A delayed observer snapshot must retain both the new decision and the older audit record.
+        persistence
+            .save_dialog_turn(workspace.path(), &resumed)
+            .await
+            .unwrap();
+        let recovered = persistence
+            .load_dialog_turn(workspace.path(), &session.session_id, 0)
+            .await
+            .unwrap()
+            .unwrap();
+        let metadata = recovered.user_message.metadata.unwrap();
+        assert_eq!(
+            metadata[BACKGROUND_DELIVERY_METADATA_KEY]["executionGeneration"],
+            1
+        );
+        assert_eq!(
+            metadata[BACKGROUND_DELIVERY_METADATA_KEY]["disposition"],
+            "report"
+        );
+        assert_eq!(
+            metadata["backgroundDeliveryHistory"][0]["disposition"],
+            "quiet"
+        );
+        assert_eq!(
+            serde_json::to_value(&recovered.model_rounds).unwrap(),
+            raw_rounds
+        );
+        let ordinary = crate::service::session::DialogTurnData::new(
+            "ordinary".into(),
+            1,
+            session.session_id.clone(),
+            crate::service::session::UserMessageData {
+                id: "manual".into(),
+                content: "Tell me the last result.".into(),
+                timestamp: 3,
+                metadata: None,
+            },
+        );
+        persistence
+            .save_dialog_turn(workspace.path(), &ordinary)
+            .await
+            .unwrap();
+        manager
+            .sessions
+            .get_mut(&session.session_id)
+            .unwrap()
+            .dialog_turn_ids
+            .push(ordinary.turn_id.clone());
+        assert!(manager
+            .propose_background_report(&session.session_id, &ordinary.turn_id, proposal)
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
     async fn refreshed_turn_settlement_results_remain_bounded_and_clear_with_the_session() {
         let workspace = TestWorkspace::new();
         let persistence_manager = Arc::new(
@@ -10401,7 +11746,171 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn completion_replaces_a_projected_text_prefix_with_runtime_generation_content() {
+    async fn completion_turn_usage_survives_missing_or_stale_client_and_reopen() {
+        use crate::service::token_usage::TokenUsageService;
+        for checkpointed in [false, true] {
+            let workspace = TestWorkspace::new();
+            let persistence = Arc::new(PersistenceManager::new(workspace.path_manager()).unwrap());
+            let manager = test_manager(persistence.clone());
+            let session = manager
+                .create_session(
+                    "Turn usage".into(),
+                    "Standard".into(),
+                    SessionConfig {
+                        workspace_path: Some(workspace.path().to_string_lossy().to_string()),
+                        ..Default::default()
+                    },
+                )
+                .await
+                .unwrap();
+            let turn_id = manager
+                .start_dialog_turn(
+                    &session.session_id,
+                    "Standard".into(),
+                    "weather".into(),
+                    Some("turn-usage".into()),
+                    None,
+                    None,
+                )
+                .await
+                .unwrap();
+            if checkpointed {
+                let mut turn = persistence
+                    .load_dialog_turn(workspace.path(), &session.session_id, 0)
+                    .await
+                    .unwrap()
+                    .unwrap();
+                // An older frontend saved only the first request before the
+                // final request completed. The completion must replace it.
+                turn.token_usage = Some(
+                    serde_json::from_value(json!({
+                        "input_tokens": 28928, "output_tokens": 97,
+                        "total_tokens": 29025, "timestamp": 1
+                    }))
+                    .unwrap(),
+                );
+                persistence
+                    .save_dialog_turn(workspace.path(), &turn)
+                    .await
+                    .unwrap();
+            }
+            let ledger = TokenUsageService::new(workspace.path_manager())
+                .await
+                .unwrap();
+            let details = |attempt: &str| {
+                Some(json!({"openbitfunModelRequest": {
+                    "version": 1, "roundId": attempt, "attemptId": attempt,
+                    "attemptIndex": 1, "startedAt": chrono::Utc::now(),
+                    "authentication": "api_key", "requestedModel": "model",
+                    "outcome": "completed", "usageKnown": true
+                }}))
+            };
+            let second_details = details("second");
+            for (sid, tid, input, output, detail, is_child) in [
+                (
+                    session.session_id.as_str(),
+                    turn_id.as_str(),
+                    28928,
+                    97,
+                    details("first"),
+                    false,
+                ),
+                (
+                    session.session_id.as_str(),
+                    turn_id.as_str(),
+                    42794,
+                    237,
+                    second_details.clone(),
+                    false,
+                ),
+                (
+                    session.session_id.as_str(),
+                    turn_id.as_str(),
+                    6000,
+                    600,
+                    None,
+                    false,
+                ),
+                // Subscriber replay of the same immutable attempt is deduped.
+                (
+                    session.session_id.as_str(),
+                    turn_id.as_str(),
+                    42794,
+                    237,
+                    second_details,
+                    false,
+                ),
+                (
+                    session.session_id.as_str(),
+                    "other-turn",
+                    9000,
+                    900,
+                    details("other"),
+                    false,
+                ),
+                (
+                    "child-session",
+                    turn_id.as_str(),
+                    8000,
+                    800,
+                    details("child"),
+                    true,
+                ),
+            ] {
+                ledger
+                    .record_usage(
+                        "config".into(),
+                        "model".into(),
+                        sid.into(),
+                        tid.into(),
+                        input,
+                        output,
+                        None,
+                        detail,
+                        is_child,
+                    )
+                    .await
+                    .unwrap();
+            }
+            for _ in 0..2 {
+                manager
+                    .complete_dialog_turn(
+                        &session.session_id,
+                        &turn_id,
+                        "Sunny".into(),
+                        &[],
+                        TurnStats {
+                            total_rounds: 2,
+                            total_tools: 1,
+                            total_tokens: 0,
+                            duration_ms: 4250,
+                        },
+                        Some("complete".into()),
+                        Some(true),
+                    )
+                    .await
+                    .unwrap();
+            }
+            // Read through a fresh persistence instance, with no live client
+            // or event journal available to fill in the missing final usage.
+            let reopened = PersistenceManager::new(workspace.path_manager()).unwrap();
+            let restored = reopened
+                .load_dialog_turn(workspace.path(), &session.session_id, 0)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(restored.status, TurnStatus::Completed);
+            let usage = restored.token_usage.unwrap();
+            assert_eq!(usage.input_tokens, 71722);
+            assert_eq!(usage.output_tokens, Some(334));
+            assert_eq!(usage.total_tokens, 72056);
+            assert_eq!(usage.cached_tokens, None);
+            assert!((usage.output_tokens.unwrap() as f64 / 4.25 - 78.588235).abs() < 0.00001);
+        }
+    }
+
+    #[tokio::test]
+    async fn generation_round_order_survives_completion_with_a_projected_final_prefix() {
         let workspace = TestWorkspace::new();
         let persistence_manager = Arc::new(
             PersistenceManager::new(workspace.path_manager()).expect("persistence manager"),
@@ -10412,6 +11921,7 @@ mod tests {
                 "Completion merge".to_string(),
                 "Standard".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                     ..SessionConfig::default()
                 },
@@ -10460,17 +11970,48 @@ mod tests {
             .expect("projected prefix should persist");
 
         let complete_response = "Saved prefix: 1. first item\n2. second item";
+        let earlier = Message::assistant_with_tools(
+            "Checking the source".into(),
+            vec![ToolCall {
+                tool_id: "read-source".into(),
+                tool_name: "Read".into(),
+                arguments: json!({"path": "README.md"}),
+                raw_arguments: None,
+                is_error: false,
+                parse_error: None,
+                recovered_from_truncation: false,
+                repair_kind: Default::default(),
+            }],
+        )
+        .with_turn_id(turn_id.clone())
+        .with_round_id("round-first".into());
+        let result = Message::tool_result(ToolResult {
+            tool_id: "read-source".into(),
+            tool_name: "Read".into(),
+            effective_tool_name: None,
+            result: json!({"content": "source"}),
+            result_for_assistant: None,
+            is_error: false,
+            duration_ms: Some(1),
+            image_attachments: None,
+        })
+        .with_turn_id(turn_id.clone())
+        .with_round_id("round-first".into());
         manager
             .complete_dialog_turn(
                 &session.session_id,
                 &turn_id,
                 complete_response.to_string(),
-                &[Message::assistant(complete_response.to_string())
-                    .with_turn_id(turn_id.clone())
-                    .with_round_id("round-final".to_string())],
+                &[
+                    earlier,
+                    result,
+                    Message::assistant(complete_response.to_string())
+                        .with_turn_id(turn_id.clone())
+                        .with_round_id("round-final".to_string()),
+                ],
                 TurnStats {
-                    total_rounds: 1,
-                    total_tools: 0,
+                    total_rounds: 2,
+                    total_tools: 1,
                     total_tokens: 0,
                     duration_ms: 1,
                 },
@@ -10488,15 +12029,25 @@ mod tests {
         assert_eq!(completed.status, TurnStatus::Completed);
         assert_eq!(completed.finish_reason.as_deref(), Some("complete"));
         assert_eq!(completed.has_final_response, Some(true));
-        assert_eq!(completed.model_rounds.len(), 1);
-        assert_eq!(completed.model_rounds[0].id, "round-final");
+        assert_eq!(completed.model_rounds.len(), 2);
+        assert_eq!(completed.model_rounds[0].id, "round-first");
+        assert_eq!(completed.model_rounds[0].round_index, 0);
+        assert!(
+            completed.model_rounds[0].tool_items[0]
+                .tool_result
+                .as_ref()
+                .unwrap()
+                .success
+        );
+        assert_eq!(completed.model_rounds[1].id, "round-final");
+        assert_eq!(completed.model_rounds[1].round_index, 1);
         assert_eq!(
-            completed.model_rounds[0].text_items[0].content,
+            completed.model_rounds[1].text_items[0].content,
             complete_response,
         );
-        assert_eq!(completed.model_rounds[0].tool_items.len(), 1);
+        assert_eq!(completed.model_rounds[1].tool_items.len(), 1);
         assert_eq!(
-            completed.model_rounds[0].tool_items[0].id,
+            completed.model_rounds[1].tool_items[0].id,
             "plan-display-test",
         );
     }
@@ -10593,6 +12144,7 @@ mod tests {
                 "Usage persistence".to_string(),
                 "Standard".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                     ..SessionConfig::default()
                 },
@@ -10639,6 +12191,7 @@ mod tests {
                 "Recovery".to_string(),
                 "Standard".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                     ..SessionConfig::default()
                 },
@@ -10781,6 +12334,7 @@ mod tests {
                 "Recovery permission".to_string(),
                 "Standard".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                     permission_mode: Some(PermissionMode::FullAccess),
                     ..SessionConfig::default()
@@ -10841,6 +12395,7 @@ mod tests {
                 "Recovery reasoning preset".to_string(),
                 "Standard".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                     reasoning_preset: Some("high".to_string()),
                     ..SessionConfig::default()
@@ -10904,6 +12459,7 @@ mod tests {
                 "Recovery auto reasoning".to_string(),
                 "Standard".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     model_id: Some("model-original".to_string()),
                     workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                     ..SessionConfig::default()
@@ -10970,6 +12526,7 @@ mod tests {
                 "Recovery model binding".to_string(),
                 "Standard".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     model_id: Some("model-original".to_string()),
                     workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                     ..SessionConfig::default()
@@ -11036,6 +12593,7 @@ mod tests {
                 "Turn admission CAS".to_string(),
                 "Standard".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                     model_id: Some("model-original".to_string()),
                     reasoning_preset: Some("high".to_string()),
@@ -11082,6 +12640,7 @@ mod tests {
                 "Turn admission context window CAS".to_string(),
                 "Standard".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                     model_id: Some("model-original".to_string()),
                     max_context_tokens: 128_128,
@@ -11132,6 +12691,7 @@ mod tests {
                 "Turn admission route CAS".to_string(),
                 "Standard".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                     ..SessionConfig::default()
                 },
@@ -11179,6 +12739,7 @@ mod tests {
                 "Turn admission route key CAS".to_string(),
                 "Standard".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                     agent_route_key: Some("local:agentic:v1".to_string()),
                     ..SessionConfig::default()
@@ -11228,6 +12789,7 @@ mod tests {
                 "Turn admission workspace CAS".to_string(),
                 "Standard".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(original_workspace.clone()),
                     project_workspace_path: Some(original_workspace.clone()),
                     execution_target: Some(SessionExecutionTarget::local(
@@ -11286,6 +12848,7 @@ mod tests {
                 "Recovery rollback".to_string(),
                 "Standard".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                     ..SessionConfig::default()
                 },
@@ -11408,7 +12971,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn recovered_completion_appends_rounds_after_the_existing_history() {
+    async fn recovered_completion_appends_rounds_and_turn_usage_after_interruption() {
         let workspace = TestWorkspace::new();
         let persistence_manager = Arc::new(
             PersistenceManager::new(workspace.path_manager()).expect("persistence manager"),
@@ -11419,6 +12982,7 @@ mod tests {
                 "Recovery append".to_string(),
                 "Standard".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                     ..SessionConfig::default()
                 },
@@ -11443,6 +13007,30 @@ mod tests {
             )
             .await
             .expect("turn should start");
+        let details = |attempt: &str| {
+            Some(json!({"openbitfunModelRequest": {
+                "version": 1, "roundId": attempt, "attemptId": attempt, "attemptIndex": 1,
+                "startedAt": chrono::Utc::now(), "authentication": "api_key",
+                "requestedModel": "model", "outcome": "completed", "usageKnown": true
+            }}))
+        };
+        let ledger = crate::service::token_usage::TokenUsageService::new(workspace.path_manager())
+            .await
+            .unwrap();
+        ledger
+            .record_usage(
+                "config".into(),
+                "model".into(),
+                session.session_id.clone(),
+                turn_id.clone(),
+                28928,
+                97,
+                None,
+                details("before"),
+                false,
+            )
+            .await
+            .unwrap();
         let mut persisted_turn = persistence_manager
             .load_dialog_turn(workspace.path(), &session.session_id, 0)
             .await
@@ -11487,6 +13075,20 @@ mod tests {
             .turn_settlement_result(&session.session_id, &turn_id)
             .is_none());
 
+        ledger
+            .record_usage(
+                "config".into(),
+                "model".into(),
+                session.session_id.clone(),
+                turn_id.clone(),
+                42794,
+                237,
+                None,
+                details("after"),
+                false,
+            )
+            .await
+            .unwrap();
         manager
             .complete_recovered_dialog_turn(
                 &session.session_id,
@@ -11513,6 +13115,13 @@ mod tests {
             .await
             .expect("turn should load")
             .expect("turn should exist");
+        assert_eq!(
+            completed
+                .token_usage
+                .as_ref()
+                .and_then(|usage| usage.output_tokens),
+            Some(334)
+        );
         assert_eq!(completed.model_rounds.len(), 2);
         assert_eq!(completed.model_rounds[0].round_index, 0);
         assert_eq!(completed.model_rounds[1].round_index, 1);
@@ -11538,6 +13147,7 @@ mod tests {
                 "Repeated recovery".to_string(),
                 "Standard".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                     ..SessionConfig::default()
                 },
@@ -11660,6 +13270,7 @@ mod tests {
                 "Interrupted merge".to_string(),
                 "Standard".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                     ..SessionConfig::default()
                 },
@@ -11744,6 +13355,7 @@ mod tests {
                 "Recovery restart".to_string(),
                 "Standard".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     model_id: Some("primary".to_string()),
                     workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                     ..SessionConfig::default()
@@ -11838,6 +13450,7 @@ mod tests {
                 "ACP usage".to_string(),
                 "acp:codex".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                     ..SessionConfig::default()
                 },
@@ -11880,6 +13493,7 @@ mod tests {
                 "Delayed usage".to_string(),
                 "Standard".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                     ..SessionConfig::default()
                 },
@@ -11946,6 +13560,7 @@ mod tests {
                 "Binding race".to_string(),
                 "Standard".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                     ..SessionConfig::default()
                 },
@@ -11993,6 +13608,7 @@ mod tests {
                 "View-only binding".to_string(),
                 "Standard".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                     project_workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                     ..SessionConfig::default()
@@ -12046,6 +13662,7 @@ mod tests {
                 "Boundary zero binding".to_string(),
                 "Standard".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                     project_workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                     ..SessionConfig::default()
@@ -12149,6 +13766,7 @@ mod tests {
             },
         );
         let config = SessionConfig {
+            tool_presentation_mode: Default::default(),
             workspace_path: Some(workspace.path().to_string_lossy().to_string()),
             ..Default::default()
         };
@@ -12201,6 +13819,7 @@ mod tests {
                 "Single writer".to_string(),
                 "Standard".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                     ..Default::default()
                 },
@@ -12214,6 +13833,7 @@ mod tests {
                 "Duplicate".to_string(),
                 "Standard".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                     ..Default::default()
                 },
@@ -12260,6 +13880,7 @@ mod tests {
             PersistenceManager::new(path_manager.clone()).expect("fixture persistence manager"),
         );
         let config = SessionConfig {
+            tool_presentation_mode: Default::default(),
             workspace_path: Some(workspace.path().to_string_lossy().to_string()),
             ..Default::default()
         };
@@ -12315,6 +13936,7 @@ mod tests {
                 "Aliased workspace".to_string(),
                 "Standard".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                     ..Default::default()
                 },
@@ -12352,6 +13974,7 @@ mod tests {
             "Recovered fixture".to_string(),
             "Standard".to_string(),
             SessionConfig {
+                tool_presentation_mode: Default::default(),
                 workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                 ..Default::default()
             },
@@ -12386,6 +14009,7 @@ mod tests {
                 "Failed fixture".to_string(),
                 "Standard".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                     ..Default::default()
                 },
@@ -12402,6 +14026,7 @@ mod tests {
                 "Recovered fixture".to_string(),
                 "Standard".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                     ..Default::default()
                 },
@@ -12426,6 +14051,7 @@ mod tests {
                 "Unload failure".to_string(),
                 "Standard".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                     ..Default::default()
                 },
@@ -12463,6 +14089,7 @@ mod tests {
                 "Processing".to_string(),
                 "Standard".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                     ..Default::default()
                 },
@@ -12493,10 +14120,105 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn session_permission_read_preserves_override_legacy_default_and_live_turn_authority() {
+        use openbitfun_services_core::session::SessionStorageLayout;
+
+        let workspace = TestWorkspace::new();
+        let paths = workspace.path_manager();
+        let persistence = Arc::new(PersistenceManager::new(paths.clone()).unwrap());
+        let manager = test_manager(persistence.clone());
+        let id = Uuid::new_v4().to_string();
+        let mut session = Session::new_with_id(
+            id.clone(),
+            "Permission header".into(),
+            "Standard".into(),
+            SessionConfig {
+                workspace_path: Some(workspace.path().to_string_lossy().into_owned()),
+                ..Default::default()
+            },
+        );
+        let storage_path = paths.project_sessions_dir(workspace.path());
+        let layout = SessionStorageLayout::new(&storage_path);
+        for mode in [
+            None,
+            Some(PermissionMode::Ask),
+            Some(PermissionMode::AutoApprove),
+            Some(PermissionMode::FullAccess),
+        ] {
+            session.config.permission_mode = mode;
+            persistence
+                .save_session(workspace.path(), &session)
+                .await
+                .unwrap();
+            let header = manager
+                .read_session_header(Some(&storage_path), &id, false)
+                .await
+                .unwrap();
+            // Read the session override as stored. None continues to mean
+            // inherit; a query must not resolve or persist a global default.
+            assert_eq!(header.config.permission_mode, mode);
+            assert!(manager.get_session(&id).is_none());
+            assert!(manager.active_session_permits.is_empty());
+            assert!(!manager.context_store.has_session(&id));
+        }
+        let state_path = layout.state_path(&id);
+        let mut state: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&state_path).unwrap()).unwrap();
+        state["runtime_state"] = serde_json::to_value(SessionState::Processing {
+            current_turn_id: "interrupted".into(),
+            phase: ProcessingPhase::Thinking,
+        })
+        .unwrap();
+        std::fs::write(&state_path, serde_json::to_vec(&state).unwrap()).unwrap();
+        let header = manager
+            .read_session_header(Some(&storage_path), &id, false)
+            .await
+            .unwrap();
+        assert!(matches!(header.state, SessionState::Idle));
+        assert_eq!(
+            manager.active_turn_permission_mode(&id, "interrupted"),
+            None
+        );
+        assert!(manager.get_session(&id).is_none());
+
+        std::fs::remove_file(&state_path).unwrap();
+        let legacy = manager
+            .read_session_header(Some(&storage_path), &id, false)
+            .await
+            .unwrap();
+        assert_eq!(legacy.config.permission_mode, None);
+        assert!(!state_path.exists());
+        // Without a workspace or live Session, the override is unknown rather
+        // than inherited. Do not manufacture a null/default permission reply.
+        assert!(manager.read_session_header(None, &id, false).await.is_err());
+
+        session.state = SessionState::Processing {
+            current_turn_id: "live-turn".into(),
+            phase: ProcessingPhase::Thinking,
+        };
+        manager.sessions.insert(id.clone(), session);
+        assert!(manager.set_active_turn_permission_mode(&id, "live-turn", PermissionMode::Ask));
+        let live = manager.read_session_header(None, &id, false).await.unwrap();
+        assert_eq!(
+            live.config.permission_mode,
+            Some(PermissionMode::FullAccess)
+        );
+        assert_eq!(
+            manager.active_turn_permission_mode(&id, "live-turn"),
+            Some(PermissionMode::Ask)
+        );
+        assert_eq!(
+            manager.active_turn_permission_mode(&id, "interrupted"),
+            None
+        );
+    }
+
+    #[tokio::test]
     async fn session_permission_mode_is_per_session_and_clearable() {
         let workspace = TestWorkspace::new();
         let manager = in_memory_test_manager();
         let config = SessionConfig {
+            tool_presentation_mode: Default::default(),
             workspace_path: Some(workspace.path().to_string_lossy().to_string()),
             ..Default::default()
         };
@@ -12635,6 +14357,7 @@ mod tests {
                 "Connection Session".to_string(),
                 "Standard".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                     ..Default::default()
                 },
@@ -12663,6 +14386,7 @@ mod tests {
                 "Prepared Subagent".to_string(),
                 "Standard".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                     ..Default::default()
                 },
@@ -12688,6 +14412,7 @@ mod tests {
             PersistenceManager::new(workspace.path_manager()).expect("persistence manager"),
         );
         let config = SessionConfig {
+            tool_presentation_mode: Default::default(),
             workspace_path: Some(workspace.path().to_string_lossy().to_string()),
             ..Default::default()
         };
@@ -12753,6 +14478,7 @@ mod tests {
             },
         ));
         let config = SessionConfig {
+            tool_presentation_mode: Default::default(),
             workspace_path: Some(workspace.path().to_string_lossy().to_string()),
             ..Default::default()
         };
@@ -12804,6 +14530,7 @@ mod tests {
             "Unavailable mode".to_string(),
             "removed-mode-that-cannot-exist".to_string(),
             SessionConfig {
+                tool_presentation_mode: Default::default(),
                 workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                 ..Default::default()
             },
@@ -12850,6 +14577,7 @@ mod tests {
             "Unavailable mode".to_string(),
             "removed-mode-that-cannot-exist".to_string(),
             SessionConfig {
+                tool_presentation_mode: Default::default(),
                 workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                 ..Default::default()
             },
@@ -12877,6 +14605,616 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn model_routing_preserves_strategy_when_only_reasoning_changes() {
+        let workspace = TestWorkspace::new();
+        let persistence = Arc::new(PersistenceManager::new(workspace.path_manager()).unwrap());
+        let manager = test_manager(persistence.clone());
+        let id = Uuid::new_v4().to_string();
+        let session = Session::new_with_id(
+            id.clone(),
+            "Smart session".into(),
+            "Standard".into(),
+            SessionConfig {
+                workspace_path: Some(workspace.path().to_string_lossy().into_owned()),
+                model_id: Some("primary".into()),
+                model_routing: Some("smart".into()),
+                reasoning_preset: Some("high".into()),
+                ..Default::default()
+            },
+        );
+        persistence
+            .save_session(workspace.path(), &session)
+            .await
+            .unwrap();
+        let updated = manager
+            .update_session_model_selection_in_storage(
+                Some(workspace.path()),
+                &id,
+                "primary",
+                None,
+                false,
+                |_| Ok(()),
+            )
+            .await
+            .unwrap();
+        assert_eq!(updated.config.model_routing.as_deref(), Some("smart"));
+        assert!(updated.config.reasoning_preset.is_none());
+        let persisted = persistence
+            .load_session_header(workspace.path(), &id)
+            .await
+            .unwrap();
+        assert_eq!(persisted.config.model_routing.as_deref(), Some("smart"));
+        assert_eq!(persisted.config.model_id.as_deref(), Some("primary"));
+        assert!(persisted.config.reasoning_preset.is_none());
+        assert!(manager.get_session(&id).is_none());
+    }
+
+    #[tokio::test]
+    async fn smart_release_gate_new_sessions_ignore_saved_smart_defaults() {
+        let workspace = TestWorkspace::new();
+        let persistence = Arc::new(PersistenceManager::new(workspace.path_manager()).unwrap());
+        let manager = test_manager(persistence);
+        let mut ai = crate::service::config::types::AIConfig::default();
+        ai.model_routing.default_mode = Some("smart".into());
+        ai.model_routing.summary_enabled = false;
+        let session = TEST_MODEL_RESOLUTION_AI_CONFIG
+            .scope(
+                ai,
+                manager.create_session(
+                    "Release gate fixture".into(),
+                    "Standard".into(),
+                    SessionConfig {
+                        workspace_path: Some(workspace.path().to_string_lossy().into_owned()),
+                        ..Default::default()
+                    },
+                ),
+            )
+            .await
+            .unwrap();
+        assert_eq!(session.config.model_routing.as_deref(), Some("manual"));
+    }
+
+    #[tokio::test]
+    async fn smart_release_gate_reconcile_preserves_old_smart_but_keeps_manual_fallback() {
+        let workspace = TestWorkspace::new();
+        let paths = workspace.path_manager();
+        let persistence = Arc::new(PersistenceManager::new(paths.clone()).unwrap());
+        let manager = test_manager(persistence);
+        let mut ai = crate::service::config::types::AIConfig::default();
+        for id in ["removed-model", "fallback-model"] {
+            ai.models
+                .push(crate::service::config::types::AIModelConfig {
+                    id: id.into(),
+                    enabled: true,
+                    ..Default::default()
+                });
+        }
+        ai.default_models.primary = Some("fallback-model".into());
+        let (retained, manual) = TEST_MODEL_RESOLUTION_AI_CONFIG
+            .scope(ai.clone(), async {
+                let mut sessions = Vec::new();
+                for mode in ["smart", "manual"] {
+                    sessions.push(
+                        manager
+                            .create_session(
+                                mode.into(),
+                                "Standard".into(),
+                                SessionConfig {
+                                    model_id: Some("removed-model".into()),
+                                    model_routing: Some(mode.into()),
+                                    workspace_path: Some(
+                                        workspace.path().to_string_lossy().into_owned(),
+                                    ),
+                                    ..Default::default()
+                                },
+                            )
+                            .await
+                            .unwrap(),
+                    );
+                }
+                (sessions.remove(0), sessions.remove(0))
+            })
+            .await;
+        let state_path = paths
+            .project_sessions_dir(workspace.path())
+            .join(&retained.session_id)
+            .join("state.json");
+        let bytes = std::fs::read(&state_path).unwrap();
+        ai.models.retain(|model| model.id != "removed-model");
+        TEST_MODEL_RESOLUTION_AI_CONFIG
+            .scope(
+                ai,
+                manager.apply_fallback_to_invalidated_session_models(
+                    &["removed-model".into()],
+                    "release_gate_fixture",
+                ),
+            )
+            .await;
+        let retained = manager.get_session(&retained.session_id).unwrap();
+        assert_eq!(retained.config.model_routing.as_deref(), Some("smart"));
+        assert_eq!(retained.config.model_id.as_deref(), Some("removed-model"));
+        assert_eq!(std::fs::read(&state_path).unwrap(), bytes);
+        let manual = manager.get_session(&manual.session_id).unwrap();
+        assert_eq!(manual.config.model_routing.as_deref(), Some("manual"));
+        assert_eq!(manual.config.model_id.as_deref(), Some("primary"));
+    }
+
+    #[tokio::test]
+    async fn smart_release_gate_restore_preserves_old_smart_model_reference() {
+        let workspace = TestWorkspace::new();
+        let paths = workspace.path_manager();
+        let persistence = Arc::new(PersistenceManager::new(paths.clone()).unwrap());
+        let manager = test_manager(persistence.clone());
+        let id = Uuid::new_v4().to_string();
+        let session = Session::new_with_id(
+            id.clone(),
+            "Retained smart session".into(),
+            "Standard".into(),
+            SessionConfig {
+                model_id: Some("removed-model".into()),
+                model_routing: Some("smart".into()),
+                workspace_path: Some(workspace.path().to_string_lossy().into_owned()),
+                ..Default::default()
+            },
+        );
+        persistence
+            .save_session(workspace.path(), &session)
+            .await
+            .unwrap();
+        let summary_path = paths
+            .project_sessions_dir(workspace.path())
+            .join(&id)
+            .join("retained-router-summary.json");
+        std::fs::write(&summary_path, b"Retained historical summary evidence").unwrap();
+        let mut ai = crate::service::config::types::AIConfig::default();
+        ai.models
+            .push(crate::service::config::types::AIModelConfig {
+                id: "fallback-model".into(),
+                enabled: true,
+                ..Default::default()
+            });
+        ai.default_models.primary = Some("fallback-model".into());
+        let restored = TEST_MODEL_RESOLUTION_AI_CONFIG
+            .scope(ai, manager.restore_session(workspace.path(), &id))
+            .await
+            .unwrap();
+        assert_eq!(restored.config.model_routing.as_deref(), Some("smart"));
+        assert_eq!(restored.config.model_id.as_deref(), Some("removed-model"));
+        let persisted = persistence
+            .load_session_header(workspace.path(), &id)
+            .await
+            .unwrap();
+        assert_eq!(persisted.config.model_routing.as_deref(), Some("smart"));
+        assert_eq!(persisted.config.model_id.as_deref(), Some("removed-model"));
+        assert_eq!(
+            std::fs::read(&summary_path).unwrap(),
+            b"Retained historical summary evidence"
+        );
+    }
+
+    #[tokio::test]
+    async fn smart_release_gate_rejects_public_smart_selection_without_changing_old_records() {
+        let workspace = TestWorkspace::new();
+        let paths = workspace.path_manager();
+        let persistence = Arc::new(PersistenceManager::new(paths.clone()).unwrap());
+        let manager = test_manager(persistence.clone());
+        let id = Uuid::new_v4().to_string();
+        let session = Session::new_with_id(
+            id.clone(),
+            "Retained smart session".into(),
+            "Standard".into(),
+            SessionConfig {
+                model_id: Some("primary".into()),
+                model_routing: Some("smart".into()),
+                workspace_path: Some(workspace.path().to_string_lossy().into_owned()),
+                ..Default::default()
+            },
+        );
+        persistence
+            .save_session(workspace.path(), &session)
+            .await
+            .unwrap();
+        let directory = paths.project_sessions_dir(workspace.path()).join(&id);
+        let state_path = directory.join("state.json");
+        let summary_path = directory.join("retained-router-summary.json");
+        std::fs::write(&summary_path, b"Retained historical summary evidence").unwrap();
+        for loaded in [false, true] {
+            if loaded {
+                manager
+                    .restore_session(workspace.path(), &id)
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    manager
+                        .get_session(&id)
+                        .unwrap()
+                        .config
+                        .model_routing
+                        .as_deref(),
+                    Some("smart")
+                );
+            }
+            let bytes = std::fs::read(&state_path).unwrap();
+            let error = manager
+                .update_session_model_selection_in_storage_with_routing(
+                    if loaded { None } else { Some(workspace.path()) },
+                    &id,
+                    "primary",
+                    Some("high"),
+                    Some("smart"),
+                    false,
+                    |_| Ok(()),
+                )
+                .await
+                .unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("Smart mode is unavailable in this release"),
+                "loaded={loaded}: {error}"
+            );
+            assert_eq!(std::fs::read(&state_path).unwrap(), bytes);
+            assert_eq!(
+                std::fs::read(&summary_path).unwrap(),
+                b"Retained historical summary evidence"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn smart_release_gate_legacy_explicit_model_change_returns_to_manual() {
+        let workspace = TestWorkspace::new();
+        let paths = workspace.path_manager();
+        let persistence = Arc::new(PersistenceManager::new(paths.clone()).unwrap());
+        let manager = test_manager(persistence.clone());
+        let id = Uuid::new_v4().to_string();
+        let session = Session::new_with_id(
+            id.clone(),
+            "Retained smart session".into(),
+            "Standard".into(),
+            SessionConfig {
+                model_id: Some("primary".into()),
+                model_routing: Some("smart".into()),
+                workspace_path: Some(workspace.path().to_string_lossy().into_owned()),
+                ..Default::default()
+            },
+        );
+        persistence
+            .save_session(workspace.path(), &session)
+            .await
+            .unwrap();
+        let directory = paths.project_sessions_dir(workspace.path()).join(&id);
+        let summary_path = directory.join("retained-router-summary.json");
+        std::fs::write(&summary_path, b"Retained historical summary evidence").unwrap();
+        let mut ai = crate::service::config::types::AIConfig::default();
+        ai.models
+            .push(crate::service::config::types::AIModelConfig {
+                id: "chosen-model".into(),
+                enabled: true,
+                ..Default::default()
+            });
+        let updated = TEST_MODEL_RESOLUTION_AI_CONFIG
+            .scope(
+                ai,
+                manager.update_session_model_selection_in_storage(
+                    Some(workspace.path()),
+                    &id,
+                    "chosen-model",
+                    None,
+                    false,
+                    |_| Ok(()),
+                ),
+            )
+            .await
+            .unwrap();
+        assert_eq!(updated.config.model_routing.as_deref(), Some("manual"));
+        assert_eq!(updated.config.model_id.as_deref(), Some("chosen-model"));
+        let persisted = persistence
+            .load_session_header(workspace.path(), &id)
+            .await
+            .unwrap();
+        assert_eq!(persisted.config.model_routing.as_deref(), Some("manual"));
+        assert_eq!(persisted.config.model_id.as_deref(), Some("chosen-model"));
+        assert_eq!(
+            std::fs::read(&summary_path).unwrap(),
+            b"Retained historical summary evidence"
+        );
+        assert!(manager.get_session(&id).is_none());
+    }
+
+    #[tokio::test]
+    async fn model_routing_explicit_typed_target_returns_to_manual_without_restoring_session() {
+        let workspace = TestWorkspace::new();
+        let persistence = Arc::new(PersistenceManager::new(workspace.path_manager()).unwrap());
+        let manager = test_manager(persistence.clone());
+        let id = Uuid::new_v4().to_string();
+        let session = Session::new_with_id(
+            id.clone(),
+            "Smart session".into(),
+            "Standard".into(),
+            SessionConfig {
+                model_id: Some("primary".into()),
+                model_routing: Some("smart".into()),
+                workspace_path: Some(workspace.path().to_string_lossy().into_owned()),
+                ..Default::default()
+            },
+        );
+        persistence
+            .save_session(workspace.path(), &session)
+            .await
+            .unwrap();
+        let mut ai = crate::service::config::types::AIConfig::default();
+        ai.models
+            .push(crate::service::config::types::AIModelConfig {
+                id: "chosen-model".into(),
+                enabled: true,
+                ..Default::default()
+            });
+        let target = openbitfun_core_types::model_pool::ModelSelection::Model {
+            model_ref: "chosen-model".into(),
+        };
+        let updated = TEST_MODEL_RESOLUTION_AI_CONFIG
+            .scope(
+                ai,
+                manager.update_session_selection_in_storage(
+                    Some(workspace.path()),
+                    &id,
+                    "chosen-model",
+                    None,
+                    None,
+                    false,
+                    Some(&target),
+                    |_| Ok(()),
+                ),
+            )
+            .await
+            .unwrap();
+        assert_eq!(updated.config.model_routing.as_deref(), Some("manual"));
+        assert_eq!(updated.config.model_id.as_deref(), Some("chosen-model"));
+        let saved = persistence
+            .load_session_header(workspace.path(), &id)
+            .await
+            .unwrap();
+        assert_eq!(saved.config.model_routing.as_deref(), Some("manual"));
+        assert_eq!(saved.config.model_id.as_deref(), Some("chosen-model"));
+        assert!(manager.get_session(&id).is_none());
+    }
+
+    #[tokio::test]
+    async fn cold_session_model_read_ignores_history_and_context_without_activating_runtime() {
+        use openbitfun_core_types::model_pool::{ModelPoolBinding, ModelSelection};
+        use openbitfun_services_core::session::SessionStorageLayout;
+
+        let workspace = TestWorkspace::new();
+        let paths = workspace.path_manager();
+        let persistence = Arc::new(PersistenceManager::new(paths.clone()).unwrap());
+        let manager = test_manager(persistence.clone());
+        let id = Uuid::new_v4().to_string();
+        let binding = ModelPoolBinding {
+            pool_id: "pool".into(),
+            model_id: "chosen-member".into(),
+            configuration_fingerprint: "current-binding".into(),
+            generation: 7,
+        };
+        let session = Session::new_with_id(
+            id.clone(),
+            "Cold selector read".into(),
+            "Standard".into(),
+            SessionConfig {
+                workspace_path: Some(workspace.path().to_string_lossy().into_owned()),
+                model_id: Some("primary".into()),
+                model_pool_id: Some("pool".into()),
+                model_pool_binding: Some(binding.clone()),
+                reasoning_preset: Some("high".into()),
+                model_routing: Some("manual".into()),
+                ..Default::default()
+            },
+        );
+        persistence
+            .save_session(workspace.path(), &session)
+            .await
+            .unwrap();
+        let storage_path = paths.project_sessions_dir(workspace.path());
+        let layout = SessionStorageLayout::new(&storage_path);
+        std::fs::create_dir_all(layout.turns_dir(&id)).unwrap();
+        std::fs::create_dir_all(layout.snapshots_dir(&id)).unwrap();
+        let unreadable = "unreadable unrelated historical content".repeat(32_768);
+        std::fs::write(layout.turn_path(&id, 0), &unreadable).unwrap();
+        std::fs::write(layout.context_snapshot_path(&id, 0), &unreadable).unwrap();
+        let state_bytes = std::fs::read(layout.state_path(&id)).unwrap();
+        let metadata_bytes = std::fs::read(layout.metadata_path(&id)).unwrap();
+
+        let header = manager
+            .read_session_header(Some(&storage_path), &id, false)
+            .await
+            .unwrap();
+        assert!(header.dialog_turn_ids.is_empty());
+        assert_eq!(header.config.model_routing.as_deref(), Some("manual"));
+        let target = super::session_model_target(header);
+        assert_eq!(
+            target.selection,
+            ModelSelection::Pool {
+                pool_id: "pool".into()
+            }
+        );
+        assert_eq!(target.binding, Some(binding));
+        assert_eq!(target.reasoning_preset.as_deref(), Some("high"));
+        assert!(manager.get_session(&id).is_none());
+        assert!(!manager
+            .is_session_loaded_from_storage_path(&storage_path, &id)
+            .unwrap());
+        assert!(manager.active_session_permits.is_empty());
+        assert!(manager.session_write_locks.is_empty());
+        assert!(!manager.context_store.has_session(&id));
+        assert!(!manager.session_storage_path_index.contains_key(&id));
+        assert_eq!(std::fs::read(layout.state_path(&id)).unwrap(), state_bytes);
+        assert_eq!(
+            std::fs::read(layout.metadata_path(&id)).unwrap(),
+            metadata_bytes
+        );
+        assert_eq!(
+            std::fs::read_to_string(layout.turn_path(&id, 0)).unwrap(),
+            unreadable
+        );
+        assert_eq!(
+            std::fs::read_to_string(layout.context_snapshot_path(&id, 0)).unwrap(),
+            unreadable
+        );
+    }
+
+    #[tokio::test]
+    async fn session_model_read_prefers_live_selection_without_waiting_for_turn_or_ignoring_scope()
+    {
+        use openbitfun_core_types::model_pool::ModelSelection;
+
+        let workspace = TestWorkspace::new();
+        let persistence = Arc::new(PersistenceManager::new(workspace.path_manager()).unwrap());
+        let manager = test_manager(persistence);
+        let id = Uuid::new_v4().to_string();
+        let mut session = Session::new_with_id(
+            id.clone(),
+            "Live selector".into(),
+            "Standard".into(),
+            SessionConfig {
+                model_id: Some("live-model".into()),
+                reasoning_preset: Some("low".into()),
+                ..Default::default()
+            },
+        );
+        session.state = SessionState::Processing {
+            current_turn_id: "running".into(),
+            phase: ProcessingPhase::Thinking,
+        };
+        manager.sessions.insert(id.clone(), session);
+        manager.bind_session_storage_path_committed(&id, workspace.path().to_path_buf());
+        // No persisted session exists. A running Turn holds this permit until
+        // completion; reading the selector must still return its live facts.
+        let _turn = manager.acquire_session_mutation(&id).await.unwrap();
+        let header = tokio::time::timeout(
+            Duration::from_secs(1),
+            manager.read_session_header(Some(workspace.path()), &id, false),
+        )
+        .await
+        .expect("a model read must not wait for the running Turn")
+        .unwrap();
+        assert!(matches!(header.state, SessionState::Processing { .. }));
+        let target = super::session_model_target(header);
+        assert_eq!(
+            target.selection,
+            ModelSelection::Model {
+                model_ref: "live-model".into()
+            }
+        );
+        assert_eq!(target.reasoning_preset.as_deref(), Some("low"));
+        assert!(manager.read_session_header(None, &id, false).await.is_ok());
+        assert!(manager
+            .read_session_header(Some(&workspace.path().join("other")), &id, false)
+            .await
+            .is_err());
+        manager.sessions.get_mut(&id).unwrap().kind = SessionKind::Subagent;
+        assert!(manager.read_session_header(None, &id, false).await.is_err());
+        assert!(manager.read_session_header(None, &id, true).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn cold_session_model_read_preserves_legacy_metadata_and_internal_visibility() {
+        use openbitfun_core_types::model_pool::{ModelSelection, SessionModelTarget};
+        use openbitfun_services_core::session::SessionStorageLayout;
+
+        let workspace = TestWorkspace::new();
+        let paths = workspace.path_manager();
+        let persistence = Arc::new(PersistenceManager::new(paths.clone()).unwrap());
+        let manager = test_manager(persistence.clone());
+        let id = Uuid::new_v4().to_string();
+        let mut session = Session::new_with_id(
+            id.clone(),
+            "Legacy selector".into(),
+            "Standard".into(),
+            SessionConfig {
+                workspace_path: Some(workspace.path().to_string_lossy().into()),
+                model_id: Some("fast".into()),
+                ..Default::default()
+            },
+        );
+        persistence
+            .save_session(workspace.path(), &session)
+            .await
+            .unwrap();
+        let storage_path = paths.project_sessions_dir(workspace.path());
+        let layout = SessionStorageLayout::new(&storage_path);
+        std::fs::remove_file(layout.state_path(&id)).unwrap();
+        let metadata_bytes = std::fs::read(layout.metadata_path(&id)).unwrap();
+        let target = super::session_model_target(
+            manager
+                .read_session_header(Some(&storage_path), &id, false)
+                .await
+                .unwrap(),
+        );
+        assert_eq!(
+            target.selection,
+            ModelSelection::Model {
+                model_ref: "fast".into()
+            }
+        );
+        assert_eq!(target.reasoning_preset, None);
+        assert_eq!(target.binding, None);
+        let old_payload =
+            json!({ "sessionId": id, "selection": { "kind": "model", "model_ref": "fast" } });
+        let old_target: SessionModelTarget = serde_json::from_value(old_payload).unwrap();
+        assert_eq!(target, old_target);
+        assert_eq!(
+            serde_json::from_value::<SessionModelTarget>(serde_json::to_value(&target).unwrap())
+                .unwrap(),
+            old_target
+        );
+        assert!(!layout.state_path(&id).exists());
+        assert_eq!(
+            std::fs::read(layout.metadata_path(&id)).unwrap(),
+            metadata_bytes
+        );
+        assert!(manager.read_session_header(None, &id, false).await.is_err());
+        assert!(manager
+            .read_session_header(Some(&storage_path), "missing-session", false)
+            .await
+            .is_err());
+        session.kind = SessionKind::Subagent;
+        persistence
+            .save_session(workspace.path(), &session)
+            .await
+            .unwrap();
+        assert!(manager
+            .read_session_header(Some(&storage_path), &id, false)
+            .await
+            .is_err());
+        assert!(manager
+            .read_session_header(Some(&storage_path), &id, true)
+            .await
+            .is_ok());
+        // Pre-kind releases leaked internal children as Standard sessions.
+        // Keep the metadata owner's compatibility rule for both cold and live reads.
+        session.kind = SessionKind::Standard;
+        session.created_by = Some("session-parent".into());
+        session.session_name = "Subagent: legacy child".into();
+        persistence
+            .save_session(workspace.path(), &session)
+            .await
+            .unwrap();
+        assert!(manager
+            .read_session_header(Some(&storage_path), &id, false)
+            .await
+            .is_err());
+        assert!(manager
+            .read_session_header(Some(&storage_path), &id, true)
+            .await
+            .is_ok());
+        manager.sessions.insert(id.clone(), session);
+        assert!(manager.read_session_header(None, &id, false).await.is_err());
+        assert!(manager.read_session_header(None, &id, true).await.is_ok());
+        manager.sessions.remove(&id);
+        assert!(manager.get_session(&id).is_none());
+    }
+
+    #[tokio::test]
     async fn cold_session_model_update_preserves_history_and_unknown_state_without_restore() {
         let workspace = TestWorkspace::new();
         let paths = workspace.path_manager();
@@ -12888,6 +15226,7 @@ mod tests {
             "Cold selector".into(),
             "Standard".into(),
             SessionConfig {
+                tool_presentation_mode: Default::default(),
                 workspace_path: Some(workspace.path().to_string_lossy().into_owned()),
                 model_id: Some("primary".into()),
                 ..Default::default()
@@ -12955,6 +15294,35 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(std::fs::read(&state_path).unwrap(), bytes);
+        manager
+            .update_session_model_selection_in_storage_with_routing(
+                Some(workspace.path()),
+                &id,
+                "fast",
+                Some("high"),
+                Some("manual"),
+                false,
+                |_| Ok(()),
+            )
+            .await
+            .unwrap();
+        let routed: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&state_path).unwrap()).unwrap();
+        assert_eq!(routed["config"]["model_routing"], "manual");
+        assert_eq!(routed["future_state"], state["future_state"]);
+        assert_eq!(routed["config"]["future_config"], 42);
+        assert!(manager
+            .update_session_model_selection_in_storage_with_routing(
+                Some(workspace.path()),
+                &id,
+                "fast",
+                Some("high"),
+                Some("future-mode"),
+                false,
+                |_| Ok(())
+            )
+            .await
+            .is_err());
         // Clearing a preset on the same model is a real mutation.
         manager
             .update_session_model_selection_in_storage(
@@ -13088,6 +15456,7 @@ mod tests {
             "Legacy".into(),
             "Standard".into(),
             SessionConfig {
+                tool_presentation_mode: Default::default(),
                 workspace_path: Some(workspace.path().to_string_lossy().into_owned()),
                 model_id: Some("primary".into()),
                 ..Default::default()
@@ -13171,6 +15540,7 @@ mod tests {
                 "Persisted model update".to_string(),
                 "Standard".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace.path().to_string_lossy().into_owned()),
                     model_id: Some("primary".to_string()),
                     ..Default::default()
@@ -13204,6 +15574,7 @@ mod tests {
             "Legacy model selector".to_string(),
             "Standard".to_string(),
             SessionConfig {
+                tool_presentation_mode: Default::default(),
                 workspace_path: Some(workspace.path().to_string_lossy().into_owned()),
                 model_id: Some("auto".to_string()),
                 ..Default::default()
@@ -13253,6 +15624,7 @@ mod tests {
                 "Failed model update".to_string(),
                 "Standard".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace.path().to_string_lossy().into_owned()),
                     model_id: Some("primary".to_string()),
                     ..Default::default()
@@ -13341,6 +15713,7 @@ mod tests {
         let manager = in_memory_test_manager();
         let session_id = "reusable-session-id";
         let config = SessionConfig {
+            tool_presentation_mode: Default::default(),
             workspace_path: Some(workspace.path().to_string_lossy().to_string()),
             ..Default::default()
         };
@@ -13395,6 +15768,7 @@ mod tests {
         let manager = test_manager(persistence_manager);
         let session_id = "persisted-session-id";
         let config = SessionConfig {
+            tool_presentation_mode: Default::default(),
             workspace_path: Some(workspace.path().to_string_lossy().to_string()),
             ..Default::default()
         };
@@ -13444,6 +15818,7 @@ mod tests {
                 "Invalid".to_string(),
                 "Standard".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                     ..Default::default()
                 },
@@ -13466,6 +15841,7 @@ mod tests {
         persistence_manager.fail_next_session_state_write_for_test(session_id);
         let manager = test_manager(persistence_manager.clone());
         let config = SessionConfig {
+            tool_presentation_mode: Default::default(),
             workspace_path: Some(workspace.path().to_string_lossy().to_string()),
             ..Default::default()
         };
@@ -13517,6 +15893,7 @@ mod tests {
                 "Storage binding".to_string(),
                 "Standard".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                     ..Default::default()
                 },
@@ -13591,6 +15968,7 @@ mod tests {
                 "Original".to_string(),
                 "Standard".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                     ..Default::default()
                 },
@@ -13633,6 +16011,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn manual_title_equal_to_default_blocks_delayed_generation_after_restore() {
+        let workspace = TestWorkspace::new();
+        let persistence_manager =
+            Arc::new(PersistenceManager::new(workspace.path_manager()).unwrap());
+        let manager = test_manager(persistence_manager);
+        let session = manager
+            .create_session(
+                "New Session".into(),
+                "Claw".into(),
+                SessionConfig {
+                    tool_presentation_mode: Default::default(),
+                    workspace_path: Some(workspace.path().to_string_lossy().into_owned()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        manager
+            .update_session_title(&session.session_id, "New Session")
+            .await
+            .unwrap();
+        assert!(!manager
+            .update_session_title_if_current(&session.session_id, "New Session", "Generated topic")
+            .await
+            .unwrap());
+        manager.evict_loaded_session_for_test(&session.session_id);
+        let restored = manager
+            .restore_session(workspace.path(), &session.session_id)
+            .await
+            .unwrap();
+        assert_eq!(restored.session_name, "New Session");
+        assert!(!manager
+            .update_session_title_if_current(&session.session_id, "New Session", "Another topic")
+            .await
+            .unwrap());
+    }
+
+    #[tokio::test]
     async fn failed_title_persistence_does_not_publish_the_new_name_in_memory() {
         let workspace = TestWorkspace::new();
         let persistence_manager = Arc::new(
@@ -13644,6 +16060,7 @@ mod tests {
                 "Original".to_string(),
                 "Standard".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                     ..Default::default()
                 },
@@ -13676,6 +16093,7 @@ mod tests {
                 "Original".to_string(),
                 "Standard".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace.path().to_string_lossy().into_owned()),
                     ..Default::default()
                 },
@@ -13709,6 +16127,7 @@ mod tests {
                 "Original".to_string(),
                 "Standard".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace.path().to_string_lossy().into_owned()),
                     ..Default::default()
                 },
@@ -13754,6 +16173,7 @@ mod tests {
                 "Original".to_string(),
                 "Standard".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace.path().to_string_lossy().into_owned()),
                     ..Default::default()
                 },
@@ -13791,6 +16211,7 @@ mod tests {
                 "Active".to_string(),
                 "Standard".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                     ..Default::default()
                 },
@@ -13834,6 +16255,7 @@ mod tests {
                 "Active".to_string(),
                 "Standard".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                     ..Default::default()
                 },
@@ -13877,6 +16299,7 @@ mod tests {
                     "Serialized".to_string(),
                     "Standard".to_string(),
                     SessionConfig {
+                        tool_presentation_mode: Default::default(),
                         workspace_path: Some(workspace_path),
                         ..Default::default()
                     },
@@ -13905,6 +16328,7 @@ mod tests {
                 "Persisted".to_string(),
                 "Standard".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                     ..Default::default()
                 },
@@ -13944,6 +16368,7 @@ mod tests {
                 "Serialized mode update".to_string(),
                 "Standard".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                     ..Default::default()
                 },
@@ -13981,6 +16406,7 @@ mod tests {
                 "Serialized compression update".to_string(),
                 "Standard".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                     ..Default::default()
                 },
@@ -14024,6 +16450,7 @@ mod tests {
                 "Serialized turn start".to_string(),
                 "Standard".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                     ..Default::default()
                 },
@@ -14068,6 +16495,7 @@ mod tests {
                 "Idempotent mode update".to_string(),
                 "Standard".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                     ..Default::default()
                 },
@@ -14106,6 +16534,7 @@ mod tests {
                 "Durable mode update".to_string(),
                 "Standard".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                     ..Default::default()
                 },
@@ -14144,6 +16573,7 @@ mod tests {
                 "Durable external route".to_string(),
                 "Standard".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                     ..Default::default()
                 },
@@ -14231,6 +16661,7 @@ mod tests {
                 "Metadata-only mode update".to_string(),
                 "Standard".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                     ..Default::default()
                 },
@@ -14273,6 +16704,116 @@ mod tests {
             context_window: Some(context_window),
             ..Default::default()
         }
+    }
+
+    #[tokio::test]
+    async fn btw_typed_model_choice_leaves_inherited_pool_without_mutating_parent() {
+        use openbitfun_core_types::model_pool::{ModelPoolBinding, ModelSelection};
+        let workspace = TestWorkspace::new();
+        let manager = test_manager(Arc::new(
+            PersistenceManager::new(workspace.path_manager()).unwrap(),
+        ));
+        let mut parent = Session::new(
+            "Parent".into(),
+            "Standard".into(),
+            SessionConfig {
+                tool_presentation_mode: Default::default(),
+                workspace_path: Some(workspace.path().to_string_lossy().into_owned()),
+                model_id: Some("model-a".into()),
+                model_pool_id: Some("pool-a".into()),
+                model_pool_binding: Some(ModelPoolBinding {
+                    pool_id: "pool-a".into(),
+                    model_id: "model-a".into(),
+                    configuration_fingerprint: "model-a-v1".into(),
+                    generation: 3,
+                }),
+                model_binding_policy: SessionModelBindingPolicy::Pool,
+                ..Default::default()
+            },
+        );
+        parent.kind = SessionKind::EphemeralChild;
+        let snapshot = crate::agentic::fork_agent::ForkAgentContextSnapshot::from_parent_session(
+            &parent,
+            vec![],
+        )
+        .unwrap();
+        let mut child = Session::new(
+            "Side question".into(),
+            "Standard".into(),
+            snapshot.build_child_session_config(None),
+        );
+        child.kind = SessionKind::EphemeralChild;
+        assert_eq!(
+            child.config.model_pool_binding,
+            parent.config.model_pool_binding
+        );
+        let child_id = child.session_id.clone();
+        manager
+            .sessions
+            .insert(parent.session_id.clone(), parent.clone());
+        manager.sessions.insert(child_id.clone(), child.clone());
+        TEST_MODEL_RESOLUTION_AI_CONFIG
+            .scope(
+                ServiceAIConfig {
+                    models: vec![
+                        test_model("model-a", 128_000),
+                        configured_reasoning_model("model-b"),
+                    ],
+                    ..Default::default()
+                },
+                async {
+                    assert!(manager
+                        .update_session_model_selection(&child_id, "model-b", Some("high"))
+                        .await
+                        .is_err());
+                    assert!(manager
+                        .update_session_model_target_with_reasoning(
+                            &child_id,
+                            &ModelSelection::Model {
+                                model_ref: "missing".into()
+                            },
+                            Some("high")
+                        )
+                        .await
+                        .is_err());
+                    let unchanged = manager.get_session(&child_id).unwrap();
+                    assert_eq!(
+                        unchanged.config.model_pool_binding,
+                        child.config.model_pool_binding
+                    );
+                    assert_eq!(
+                        unchanged.config.model_pool_selection_revision,
+                        child.config.model_pool_selection_revision
+                    );
+                    let selected = manager
+                        .update_session_model_target_with_reasoning(
+                            &child_id,
+                            &ModelSelection::Model {
+                                model_ref: "model-b".into(),
+                            },
+                            Some("high"),
+                        )
+                        .await
+                        .unwrap();
+                    assert_eq!(selected.config.model_id.as_deref(), Some("model-b"));
+                    assert_eq!(selected.config.reasoning_preset.as_deref(), Some("high"));
+                    assert!(selected.config.model_pool_id.is_none());
+                    assert!(selected.config.model_pool_binding.is_none());
+                    assert_eq!(
+                        selected.config.model_binding_policy,
+                        SessionModelBindingPolicy::Mutable
+                    );
+                    assert_eq!(
+                        manager
+                            .get_session(&parent.session_id)
+                            .unwrap()
+                            .config
+                            .model_pool_binding,
+                        parent.config.model_pool_binding
+                    );
+                },
+            )
+            .await;
     }
 
     fn configured_reasoning_model(id: &str) -> ServiceAIModelConfig {
@@ -14335,6 +16876,7 @@ mod tests {
             "Reasoning selection".to_string(),
             "Standard".to_string(),
             SessionConfig {
+                tool_presentation_mode: Default::default(),
                 model_id: Some("model-a".to_string()),
                 reasoning_preset: Some("high".to_string()),
                 ..Default::default()
@@ -14365,6 +16907,7 @@ mod tests {
                 "Stale reasoning preset".to_string(),
                 "Standard".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace.path().to_string_lossy().into_owned()),
                     model_id: Some("model-b".to_string()),
                     reasoning_preset: Some("obsolete".to_string()),
@@ -14432,6 +16975,7 @@ mod tests {
                         "Remote session".to_string(),
                         "Standard".to_string(),
                         SessionConfig {
+                            tool_presentation_mode: Default::default(),
                             workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                             model_id: Some("deepseek-v4-flash".to_string()),
                             max_context_tokens: 128_128,
@@ -14463,6 +17007,7 @@ mod tests {
             "DeepSeek session".to_string(),
             "Standard".to_string(),
             SessionConfig {
+                tool_presentation_mode: Default::default(),
                 model_id: Some("deepseek-v4-pro".to_string()),
                 max_context_tokens: 256_000,
                 ..Default::default()
@@ -14486,13 +17031,23 @@ mod tests {
             ..Default::default()
         };
         ai_config.default_models.primary = Some("primary-model".to_string());
-        ai_config.agent_model_defaults.mode = "agent-model".to_string();
+        ai_config
+            .set_model_selections(
+                openbitfun_config_contracts::model_pool::AgentModelSelections {
+                    mode: openbitfun_core_types::model_pool::ModelSelection::Model {
+                        model_ref: "agent-model".into(),
+                    },
+                    ..Default::default()
+                },
+            )
+            .unwrap();
 
         let mut session = Session::new_with_id(
             "session-default".to_string(),
             "Default session".to_string(),
             "Standard".to_string(),
             SessionConfig {
+                tool_presentation_mode: Default::default(),
                 model_id: None,
                 max_context_tokens: 256_000,
                 ..Default::default()
@@ -14505,7 +17060,16 @@ mod tests {
         assert_eq!(resolved, Some(1_000_000));
         assert_eq!(session.config.max_context_tokens, 1_000_000);
 
-        ai_config.agent_model_defaults.mode = "primary".to_string();
+        ai_config
+            .set_model_selections(
+                openbitfun_config_contracts::model_pool::AgentModelSelections {
+                    mode: openbitfun_core_types::model_pool::ModelSelection::Model {
+                        model_ref: "primary".into(),
+                    },
+                    ..Default::default()
+                },
+            )
+            .unwrap();
         session.config.max_context_tokens = 256_000;
 
         let resolved =
@@ -14525,13 +17089,23 @@ mod tests {
             ..Default::default()
         };
         ai_config.default_models.primary = Some("primary-model".to_string());
-        ai_config.agent_model_defaults.mode = "mode-model".to_string();
+        ai_config
+            .set_model_selections(
+                openbitfun_config_contracts::model_pool::AgentModelSelections {
+                    mode: openbitfun_core_types::model_pool::ModelSelection::Model {
+                        model_ref: "mode-model".into(),
+                    },
+                    ..Default::default()
+                },
+            )
+            .unwrap();
 
         let mut session = Session::new_with_id(
             "subagent-default".to_string(),
             "Default subagent".to_string(),
             "Explore".to_string(),
             SessionConfig {
+                tool_presentation_mode: Default::default(),
                 model_id: None,
                 max_context_tokens: 256_000,
                 ..Default::default()
@@ -14565,6 +17139,7 @@ mod tests {
                 "Auto-save snapshot".to_string(),
                 "agent".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                     ..Default::default()
                 },
@@ -14713,6 +17288,7 @@ mod tests {
                 "Voice".into(),
                 "agent".into(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                     ..Default::default()
                 },
@@ -14789,6 +17365,7 @@ mod tests {
                 "Voice".into(),
                 "agent".into(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                     ..Default::default()
                 },
@@ -14820,6 +17397,7 @@ mod tests {
                 "Usage session".to_string(),
                 "agent".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                     ..Default::default()
                 },
@@ -14881,6 +17459,7 @@ mod tests {
                 "Serialized local command".to_string(),
                 "agent".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                     ..Default::default()
                 },
@@ -14926,6 +17505,7 @@ mod tests {
             "Legacy processing session".to_string(),
             "agent".to_string(),
             SessionConfig {
+                tool_presentation_mode: Default::default(),
                 workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                 ..Default::default()
             },
@@ -14973,6 +17553,7 @@ mod tests {
                 "Side thread".to_string(),
                 "Standard".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                     ..Default::default()
                 },
@@ -15010,6 +17591,7 @@ mod tests {
                 "Main thread".to_string(),
                 "Standard".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                     ..Default::default()
                 },
@@ -15047,6 +17629,7 @@ mod tests {
                 "Review child".to_string(),
                 "CodeReview".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                     ..Default::default()
                 },
@@ -15386,6 +17969,7 @@ mod tests {
                 "Bound writes".into(),
                 "Standard".into(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_id: Some(workspace.workspace_id().into()),
                     ..Default::default()
                 },
@@ -15450,6 +18034,7 @@ mod tests {
                 "Bound history".into(),
                 "Standard".into(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_id: Some(workspace.workspace_id().into()),
                     ..Default::default()
                 },
@@ -15629,6 +18214,7 @@ mod tests {
             "Resolved sessions restore".to_string(),
             "Standard".to_string(),
             SessionConfig {
+                tool_presentation_mode: Default::default(),
                 workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                 ..Default::default()
             },
@@ -15661,6 +18247,7 @@ mod tests {
             "Resolved sessions restore".to_string(),
             "Standard".to_string(),
             SessionConfig {
+                tool_presentation_mode: Default::default(),
                 workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                 ..Default::default()
             },
@@ -15701,6 +18288,7 @@ mod tests {
             "Remote identity restore".to_string(),
             "Standard".to_string(),
             SessionConfig {
+                tool_presentation_mode: Default::default(),
                 workspace_path: Some("/home/wsp/project".to_string()),
                 remote_connection_id: Some("ssh-1".to_string()),
                 remote_ssh_host: Some("dev-host".to_string()),
@@ -15741,6 +18329,7 @@ mod tests {
             "Large history".to_string(),
             "agent".to_string(),
             SessionConfig {
+                tool_presentation_mode: Default::default(),
                 workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                 ..Default::default()
             },
@@ -15791,6 +18380,160 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn restore_session_view_tail_with_staged_revert_reads_only_visible_tail() {
+        use crate::agentic::session::revert::{
+            SessionRevertPhase, SessionRevertState, SESSION_REVERT_SCHEMA_VERSION,
+        };
+        use openbitfun_services_core::session::SessionStorageLayout;
+
+        let workspace = TestWorkspace::new();
+        let paths = workspace.path_manager();
+        let persistence = Arc::new(PersistenceManager::new(paths.clone()).unwrap());
+        let manager = test_manager(persistence.clone());
+        let session_id = Uuid::new_v4().to_string();
+        let session = Session::new_with_id(
+            session_id.clone(),
+            "Visible history tail".into(),
+            "Standard".into(),
+            SessionConfig {
+                workspace_path: Some(workspace.path().to_string_lossy().into()),
+                ..Default::default()
+            },
+        );
+        persistence
+            .save_session(workspace.path(), &session)
+            .await
+            .unwrap();
+        // A sparse legacy sequence proves the boundary is a storage index,
+        // while total_turn_count and tail selection use visible ordinals.
+        for index in [0, 2, 4, 7] {
+            let mut turn = DialogTurnData::new(
+                format!("turn-{index}"),
+                index,
+                session_id.clone(),
+                UserMessageData {
+                    id: format!("user-{index}"),
+                    content: format!("prompt {index}"),
+                    timestamp: index as u64,
+                    metadata: None,
+                },
+            );
+            turn.mark_completed();
+            persistence
+                .save_dialog_turn(workspace.path(), &turn)
+                .await
+                .unwrap();
+        }
+        let storage_path = paths.project_sessions_dir(workspace.path());
+        let layout = SessionStorageLayout::new(&storage_path);
+        let answer = "complete last visible answer\n".repeat(8192);
+        let rounds = SessionManager::build_model_rounds_from_messages(
+            &[Message::assistant(answer.clone()).with_round_id("visible-round".into())],
+            "turn-2",
+            2,
+        );
+        // Keep an old persisted shape: no kind, recovery, usage or finish fields.
+        let legacy_turn = json!({
+            "schema_version": 1,
+            "turnId": "turn-2", "turnIndex": 2, "sessionId": session_id,
+            "timestamp": 2, "startTime": 2, "status": "completed",
+            "userMessage": { "id": "user-2", "content": "visible prompt", "timestamp": 2 },
+            "modelRounds": rounds,
+        });
+        std::fs::write(
+            layout.turn_path(&session_id, 2),
+            serde_json::to_vec(&legacy_turn).unwrap(),
+        )
+        .unwrap();
+        std::fs::remove_file(layout.turn_catalog_path(&session_id)).unwrap();
+        // Neither unrelated older content nor the hidden suffix may be parsed.
+        for index in [0, 4, 7] {
+            std::fs::write(
+                layout.turn_path(&session_id, index),
+                "unreadable unrelated turn",
+            )
+            .unwrap();
+        }
+        let mut revert = SessionRevertState {
+            schema_version: SESSION_REVERT_SCHEMA_VERSION,
+            boundary_turn: 4,
+            original_turn_end: 8,
+            phase: SessionRevertPhase::Staged,
+            workspace_checkpoint: Vec::new(),
+        };
+        persistence
+            .save_session_revert_state(workspace.path(), &session_id, &revert)
+            .await
+            .unwrap();
+
+        // Local path resolution and the resolved host-storage entry used by
+        // Peer callers must share the same bounded restore behavior.
+        for resolved_storage in [false, true] {
+            let (view, turns, total, timing) = if resolved_storage {
+                manager
+                    .restore_session_view_from_storage_path_tail_timed(
+                        &storage_path,
+                        &session_id,
+                        1,
+                    )
+                    .await
+            } else {
+                manager
+                    .restore_session_view_tail_timed(workspace.path(), &session_id, 1)
+                    .await
+            }
+            .expect("only the requested visible Turn should be read");
+            assert_eq!(total, 2);
+            assert_eq!(timing.turn_load.requested_tail_turn_count, Some(1));
+            assert_eq!(timing.turn_load.loaded_turn_count, 1);
+            assert_eq!(view.dialog_turn_ids, ["turn-2"]);
+            assert_eq!(turns.len(), 1);
+            assert_eq!(turns[0].turn_index, 2);
+            assert_eq!(turns[0].model_rounds[0].text_items[0].content, answer);
+            let round_trip: DialogTurnData =
+                serde_json::from_value(serde_json::to_value(&turns[0]).unwrap()).unwrap();
+            assert_eq!(round_trip.model_rounds[0].text_items[0].content, answer);
+            let catalog = persistence
+                .load_session_turn_catalog(&storage_path, &session_id, &turns, total)
+                .await
+                .unwrap();
+            assert_eq!(
+                catalog
+                    .entries
+                    .iter()
+                    .map(|entry| entry.storage_turn_index)
+                    .collect::<Vec<_>>(),
+                [0, 2]
+            );
+            assert!(manager.get_session(&session_id).is_none());
+        }
+
+        let (_, turns, total, _) = manager
+            .restore_session_view_tail_timed(workspace.path(), &session_id, 0)
+            .await
+            .unwrap();
+        assert!(turns.is_empty());
+        assert_eq!(total, 2);
+        revert.boundary_turn = 0;
+        persistence
+            .save_session_revert_state(workspace.path(), &session_id, &revert)
+            .await
+            .unwrap();
+        let (_, turns, total, _) = manager
+            .restore_session_view_tail_timed(workspace.path(), &session_id, 1)
+            .await
+            .unwrap();
+        assert!(turns.is_empty());
+        assert_eq!(total, 0);
+        for index in [0, 4, 7] {
+            assert_eq!(
+                std::fs::read_to_string(layout.turn_path(&session_id, index)).unwrap(),
+                "unreadable unrelated turn"
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn legacy_auto_restore_session_view_uses_primary_without_writing_history() {
         let workspace = TestWorkspace::new();
         let paths = workspace.path_manager();
@@ -15815,6 +18558,7 @@ mod tests {
                 "Legacy model".into(),
                 agent.into(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace.path().to_string_lossy().into_owned()),
                     model_id: Some(metadata_model.into()),
                     ..Default::default()
@@ -15884,6 +18628,7 @@ mod tests {
                 "Fork child".to_string(),
                 "Standard".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                     ..Default::default()
                 },
@@ -15962,6 +18707,7 @@ mod tests {
                 "Atomic admission".to_string(),
                 "Standard".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                     ..Default::default()
                 },
@@ -16018,6 +18764,7 @@ mod tests {
                 "Retry admission".to_string(),
                 "Standard".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                     ..Default::default()
                 },
@@ -16073,6 +18820,7 @@ mod tests {
                 "Failed maintenance".to_string(),
                 "Standard".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                     ..Default::default()
                 },
@@ -16131,6 +18879,7 @@ mod tests {
             "History with tool output".to_string(),
             "agent".to_string(),
             SessionConfig {
+                tool_presentation_mode: Default::default(),
                 workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                 ..Default::default()
             },
@@ -16209,9 +18958,11 @@ mod tests {
             provider_id: None,
             model_config_id: None,
             effective_model_name: None,
+            routing: None,
             first_chunk_ms: None,
             first_visible_output_ms: None,
             stream_duration_ms: None,
+            ttft_ms: None,
             attempt_count: None,
             attempt_diagnostics: vec![],
             failure_category: None,
@@ -16266,6 +19017,7 @@ mod tests {
                 "Rollback session".to_string(),
                 "agent".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                     ..Default::default()
                 },
@@ -16501,6 +19253,7 @@ mod tests {
                 "Staged revert".to_string(),
                 "Standard".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                     ..Default::default()
                 },
@@ -16629,6 +19382,7 @@ mod tests {
                 "Rollback failure".to_string(),
                 "agent".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                     ..Default::default()
                 },
@@ -16694,6 +19448,7 @@ mod tests {
                 "Serialized rollback".to_string(),
                 "agent".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                     ..Default::default()
                 },
@@ -16764,6 +19519,7 @@ mod tests {
                 "Skill agent snapshot".to_string(),
                 "agent".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                     ..Default::default()
                 },
@@ -16786,6 +19542,7 @@ mod tests {
                         description: "desc-a".to_string(),
                         default_tools: vec!["Read".to_string()],
                     }],
+                    deferred_tools: None,
                 },
             )
             .await;
@@ -16804,6 +19561,7 @@ mod tests {
                         description: "desc-b".to_string(),
                         default_tools: vec!["Read".to_string(), "Grep".to_string()],
                     }],
+                    deferred_tools: None,
                 },
             )
             .await;
@@ -16828,6 +19586,7 @@ mod tests {
                     description: "desc-a".to_string(),
                     default_tools: vec!["Read".to_string()],
                 }],
+                deferred_tools: None,
             },
         );
 
@@ -16855,6 +19614,7 @@ mod tests {
                 "Listing baseline rebuild".to_string(),
                 "Standard".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                     ..Default::default()
                 },
@@ -16955,6 +19715,98 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn listing_baseline_prefers_override_and_rebuild_carries_deferred_tools() {
+        use crate::agentic::skill_agent_snapshot::{
+            DeferredToolSnapshotEntry, TurnSkillAgentSnapshot,
+        };
+
+        let deferred = |names: &[&str]| TurnSkillAgentSnapshot {
+            deferred_tools: Some(
+                names
+                    .iter()
+                    .map(|name| DeferredToolSnapshotEntry {
+                        name: (*name).to_string(),
+                        short_description: None,
+                    })
+                    .collect(),
+            ),
+            ..Default::default()
+        };
+        let workspace = TestWorkspace::new();
+        let persistence_manager = Arc::new(
+            PersistenceManager::new(workspace.path_manager()).expect("persistence manager"),
+        );
+        let manager = test_manager(persistence_manager.clone());
+        let session = manager
+            .create_session(
+                "Deferred listing baseline".to_string(),
+                "Standard".to_string(),
+                SessionConfig {
+                    tool_presentation_mode: Default::default(),
+                    workspace_path: Some(workspace.path().to_string_lossy().to_string()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("session should create");
+        let session_id = session.session_id.as_str();
+        {
+            let mut active = manager
+                .sessions
+                .get_mut(session_id)
+                .expect("session should be active");
+            active.dialog_turn_ids = vec!["turn-0".to_string(), "turn-1".to_string()];
+        }
+
+        manager
+            .remember_turn_skill_agent_snapshot(session_id, 0, deferred(&["WebFetch"]))
+            .await;
+        let latest = deferred(&["WebFetch", "mcp__docs__search"]);
+        manager
+            .remember_turn_skill_agent_snapshot(session_id, 1, latest.clone())
+            .await;
+        assert_eq!(
+            manager
+                .skill_agent_listing_baseline_snapshot(session_id)
+                .await,
+            Some(deferred(&["WebFetch"]))
+        );
+        assert_eq!(
+            persistence_manager
+                .load_turn_skill_agent_snapshot(workspace.path(), session_id, 1)
+                .await
+                .expect("snapshot lookup should succeed"),
+            Some(latest.clone())
+        );
+
+        manager
+            .remember_skill_agent_baseline_override_snapshot(session_id, deferred(&["Cron"]))
+            .await;
+        assert_eq!(
+            manager
+                .skill_agent_listing_baseline_snapshot(session_id)
+                .await,
+            Some(deferred(&["Cron"]))
+        );
+
+        assert!(
+            manager
+                .rebuild_skill_agent_listing_baseline_to_latest(session_id)
+                .await
+        );
+        assert_eq!(
+            manager
+                .skill_agent_listing_baseline_snapshot(session_id)
+                .await,
+            Some(latest.clone())
+        );
+        assert_eq!(
+            manager.turn_skill_agent_snapshot(session_id, 0).await,
+            Some(latest)
+        );
+    }
+
+    #[tokio::test]
     async fn restore_session_sanitizes_pre_cutoff_listing_diff_snapshot() {
         use crate::agentic::core::{InternalReminderKind, Message, MessageSemanticKind};
 
@@ -16969,6 +19821,7 @@ mod tests {
             "Restore sanitize".to_string(),
             "Standard".to_string(),
             SessionConfig {
+                tool_presentation_mode: Default::default(),
                 workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                 ..Default::default()
             },
@@ -17072,6 +19925,7 @@ mod tests {
                 "Rollback sanitize".to_string(),
                 "Standard".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                     ..Default::default()
                 },
@@ -17198,6 +20052,7 @@ mod tests {
                 "Rollback empty history".to_string(),
                 "Cowork".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                     ..Default::default()
                 },
@@ -17255,6 +20110,7 @@ mod tests {
                 "Cached session".to_string(),
                 "agent".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                     ..Default::default()
                 },
@@ -17303,6 +20159,7 @@ mod tests {
                 "Resolved storage session".to_string(),
                 "agent".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                     ..Default::default()
                 },
@@ -17334,6 +20191,7 @@ mod tests {
                 "Evicted cleanup session".to_string(),
                 "agent".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                     ..Default::default()
                 },
@@ -17369,6 +20227,7 @@ mod tests {
                 "Bound session".to_string(),
                 "agent".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                     ..Default::default()
                 },
@@ -17400,6 +20259,7 @@ mod tests {
                 "Failure atomic session".to_string(),
                 "agent".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                     ..Default::default()
                 },
@@ -17450,6 +20310,7 @@ mod tests {
                 "Pending revert delete".to_string(),
                 "agent".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace.path().to_string_lossy().into_owned()),
                     ..Default::default()
                 },
@@ -17601,6 +20462,7 @@ mod tests {
                 "Durable evidence".to_string(),
                 "Standard".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                     ..Default::default()
                 },
@@ -17705,6 +20567,7 @@ mod tests {
                 "Staged evidence".to_string(),
                 "Standard".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                     ..Default::default()
                 },
@@ -17785,6 +20648,7 @@ mod tests {
                 "Staged revert evidence".to_string(),
                 "Standard".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                     ..Default::default()
                 },
@@ -18230,6 +21094,7 @@ mod tests {
                 "Staged revert explicit history evidence".to_string(),
                 "Standard".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                     ..Default::default()
                 },
@@ -18369,6 +21234,7 @@ mod tests {
                 "Rollback evidence".to_string(),
                 "Standard".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                     ..Default::default()
                 },
@@ -18506,6 +21372,7 @@ mod tests {
                 "Evidence write failure".to_string(),
                 "Standard".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                     ..Default::default()
                 },
@@ -18546,6 +21413,7 @@ mod tests {
                 "Concurrent evidence".to_string(),
                 "Standard".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                     ..Default::default()
                 },
@@ -18627,6 +21495,7 @@ mod tests {
                 "Corrupt evidence".to_string(),
                 "Standard".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                     ..Default::default()
                 },
@@ -18671,6 +21540,7 @@ mod tests {
                 "Corrupt retention evidence".to_string(),
                 "Standard".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                     ..Default::default()
                 },
@@ -18716,6 +21586,7 @@ mod tests {
                 "Remote evidence".to_string(),
                 "Standard".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some("/home/wsp/project".to_string()),
                     remote_connection_id: Some("ssh-1".to_string()),
                     remote_ssh_host: Some("dev-host".to_string()),
@@ -18771,6 +21642,7 @@ mod tests {
                 "Converge evidence".to_string(),
                 "Standard".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                     ..Default::default()
                 },
@@ -18891,6 +21763,7 @@ mod tests {
                 "Fork evidence".to_string(),
                 "Standard".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                     ..Default::default()
                 },
@@ -19009,6 +21882,7 @@ mod tests {
                 "Prompt cache".to_string(),
                 "Standard".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace_path),
                     ..Default::default()
                 },
@@ -19067,6 +21941,7 @@ mod tests {
                 "Listing baseline".to_string(),
                 "Standard".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                     ..Default::default()
                 },
@@ -19225,6 +22100,7 @@ mod tests {
                 "Edit constraint persistence".to_string(),
                 "Standard".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                     ..Default::default()
                 },
@@ -19350,6 +22226,7 @@ mod tests {
                 "Parent".to_string(),
                 "Standard".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                     ..Default::default()
                 },
@@ -19361,6 +22238,7 @@ mod tests {
                 "Child".to_string(),
                 "Standard".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                     ..Default::default()
                 },
@@ -19451,6 +22329,7 @@ mod tests {
                 "Prompt cache".to_string(),
                 "Standard".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace_path),
                     ..Default::default()
                 },
@@ -19520,6 +22399,7 @@ mod tests {
                 "Prompt cache".to_string(),
                 "Standard".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                     ..Default::default()
                 },
@@ -19603,6 +22483,7 @@ mod tests {
                 "Prompt cache source".to_string(),
                 "Standard".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace_path.clone()),
                     ..Default::default()
                 },
@@ -19614,6 +22495,7 @@ mod tests {
                 "Prompt cache target".to_string(),
                 "Standard".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace_path),
                     ..Default::default()
                 },
@@ -19695,6 +22577,7 @@ mod tests {
                 "Prompt cache".to_string(),
                 "Standard".to_string(),
                 SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: Some(workspace_path),
                     ..Default::default()
                 },
@@ -19765,5 +22648,18 @@ mod tests {
                 .await,
             None
         );
+    }
+    #[test]
+    fn model_pool_admission_fences_pool_and_selection_revision() {
+        let mut session = Session::new("Pool".into(), "Standard".into(), SessionConfig::default());
+        session.config.model_binding_policy = SessionModelBindingPolicy::Pool;
+        session.config.model_pool_id = Some("p".into());
+        let facts = super::TurnAdmissionSessionFacts::from_session(&session);
+        assert!(facts.matches(&session));
+        session.config.model_pool_id = Some("q".into());
+        assert!(!facts.matches(&session));
+        session.config.model_pool_id = Some("p".into());
+        session.config.model_pool_selection_revision = 1;
+        assert!(!facts.matches(&session));
     }
 }

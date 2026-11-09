@@ -82,6 +82,15 @@ Plugin Source 和完整 domain feature 集合一起带回 Agent Runtime。产品
 编译”的 owner 返回类型化错误。`agent-runtime` 基线计划只选择 `Basic` 与 `AgentControl`；
 它不是隐式 Delivery Profile，也不得从当前二进制已编译的 feature union 反推产品能力。
 
+图像查看与分析由 `tools-image-analysis` 独立选择；`tools-image-generation` 承载生成工具、
+配置驱动的 AI client 和生图协议适配。检查图片的窄消费者不应因此启用生成请求。完整产品和
+需要生图的 CLI、ACP、SDK Host 显式选择这两个 owner，工具 provider 与注册顺序保持稳定。
+
+Office 文件生成由 `tools-office-documents` 独立选择：它只引入 `GenOfficeFile` 与可移植的
+OOXML 引擎 `openbitfun-office-documents`（execution 层，纯内存字节，不做 IO），不扩大
+`tools-basic` 的基线闭包。工具归属 `core.basic` provider，因此完整产品以及 CLI、ACP、
+SDK Host 与生图一样显式选择该 owner。
+
 ### 3.3 Workspace dependency 只提供共同底座
 
 - workspace 声明负责版本和真正跨产品共享的最小 feature；
@@ -219,6 +228,7 @@ CI 负责 workspace 级检查、真实产品 feature 组合、跨平台、完整
 
 ### 7.1 Hosted CI 关键路径与缓存
 
+- 日常 Rust/CLI 验证保留 Linux、Windows 和 macOS 三个平台，macOS 固定使用标准 Intel macOS 15 runner（`macos-15-intel`），避免默认标签的架构迁移和 ARM64 托管资源池分配失败阻塞 OS 契约验证。CLI 与 Rust 使用相同平台矩阵，缓存键区分 Intel。这提供 macOS x64 原生测试证据，不代表 Apple Silicon 运行验证；ARM64/x64 发布目标仍由发布 workflow 的矩阵拥有。
 - 验证 job 只依赖自身的编译期前置条件。Tauri `check`/`test` 只要求配置中的前端和资源目录存在时，Rust job 自行创建空目录，不等待或传递可发布前端产物；真实静态资源仍由前端构建和产品打包 owner 负责。
 - Rust/CLI 影响分类必须保守且 fail-closed：只有活动路径全部位于 `src/web-ui/**` 时才允许跳过 Rust 与 CLI matrix；仓库根目录/`docs/**` 的 Markdown 和 `png/**` 可作为已知中性伴随路径。其他嵌套 Markdown 可能是 `include_str!`/`include_bytes!` 输入，workflow 不得宽泛忽略全部 Markdown。空变更、非法或不可用 diff range、Rust/build 输入、CI 脚本、其他产品 surface 和所有未识别路径都必须运行完整验证，不能依赖易漏维护的“已知 Rust 目录”名单。PR 使用 base/head 的 merge-base range，只分类 PR 自身改动；`main` push 使用事件 before/head 的 direct range，保留 force-push 或回退提交的实际影响。
 - “纯 Web”前提必须是可执行边界：影响分类 job 在计算 diff 前，从 Git 跟踪文件列表扫描全仓 `.rs`（包括 workspace 外 Installer 和根 build script）。除逐行精确登记的既有测试 fixture 外，非注释 Rust 源码不得出现 `web-ui` 路径 token；因此 `include_dir!`、编译嵌入、分段 `PathBuf::join` 和间接路径变量都会在分类前失败。Frontend job 同时显式运行边界 contract tests 和真实 repository boundary check；跨 surface 的命令注册和调用分别由 owner 测试看护。新增类似源码读取时应修复所有权，而不是给影响分类器追加隐式例外。
@@ -250,7 +260,7 @@ cargo check -p <product> --timings
 
 ## 独立数据迁移工具的依赖边界
 
-Data Migrator 是独立发布的本地离线工具，不依赖 Core、Product Assembly、Desktop 或 Web UI。
+Data Tools 是独立发布的本地离线工具，不依赖 Core、Product Assembly、Desktop 或 Web UI。
 主应用不检测、启动或捆绑迁移器。两者在同一源码工作区复用稳定的数据格式与存储实现：
 
 - contracts/config-contracts：配置 DTO、默认值、版本校验及到共享模型 DTO 的纯转换；Core 原路径保留转发，ConfigProvider 仍在 Core。
@@ -262,4 +272,4 @@ Data Migrator 是独立发布的本地离线工具，不依赖 Core、Product As
 WorkspaceInfo/WorkspaceIdentity 的运行操作由 Core 的 runtime extension traits 保留，稳定记录无需导入这些能力。
 原 Core 存储入口保留错误映射；可选 legacy-migration facade 保留旧导入路径，但不再由 product-full 启用。
 远程四种场景不提供迁移工具的执行入口；仅转换本机保存的连接记录，不连接远端。
-使用与发行契约以 [独立迁移器说明](../../src/apps/data-migrator/README.zh-CN.md) 为准。
+使用与发行契约以 [独立数据工具说明](../../src/apps/data-tools/README.zh-CN.md) 为准。

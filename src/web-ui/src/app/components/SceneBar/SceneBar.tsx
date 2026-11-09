@@ -5,14 +5,14 @@
  * Session tabs show only the referenced session title.
  */
 
-import React, { useCallback, useRef, useState, useEffect } from 'react';
+import React, { useCallback, useState, useEffect, useId, useMemo, useSyncExternalStore } from 'react';
 import { Pin, CircleAlert } from 'lucide-react';
 import { useSceneStore } from '../../stores/sceneStore';
 import { useContextMenuStore } from '@/shared/context-menu-system/store/ContextMenuStore';
 import { ContextType } from '@/shared/context-menu-system/types/context.types';
 import type { MenuItem } from '@/shared/context-menu-system/types/menu.types';
 
-import { Icon, TabGroup, type TabGroupItem } from '@openbitfun/ui';
+import { Icon, OverflowText, TabGroup, type TabGroupItem } from '@openbitfun/ui';
 import { useSceneTabNavigation } from './useSceneTabNavigation';
 import { useSceneManager } from '../../hooks/useSceneManager';
 import { useSessionTabLabels } from '../../hooks/useSessionTabLabels';
@@ -21,9 +21,13 @@ import { isSceneTabClosable } from '../../scenes/registry';
 import { useContentResourceStore } from '../../workbench/contentResourceStore';
 import { dropSessionTabOnWorkbench, isSessionTabDrag, type WorkbenchTabDropTarget } from '../../workbench/canvasTabTransfer';
 import { useAgentCanvasStore } from '../panels/content-canvas/stores';
-import { onSurfaceActivated } from '@/infrastructure/peer-device/deviceSurface';
+import { getActiveSurfaceId, isLocalSurface, onSurfaceActivated } from '@/infrastructure/peer-device/deviceSurface';
+import { resolveDeviceNameFrom, useDeviceDirectory } from '@/infrastructure/account/deviceDirectory';
 import { useI18n } from '@/infrastructure/i18n/hooks/useI18n';
-import type { SceneTabId } from './types';
+import { dropSceneTab, isSceneTabDrag, writeSceneTabDrag, endSceneTabDrag } from '../../workbench/sceneTabTransfer';
+import type { WorkbenchPane } from '../../workbench/scenePaneModel';
+import { observeTabDragLifecycle } from '../../workbench/tabDragLifecycle';
+import type { SceneTab, SceneTabId } from './types';
 import { beginConversationTransfer, endConversationTransfer, isConversationTransfer, dropConversationInWorkbench } from '../../services/conversationDockTransfer';
 import './SceneBar.scss';
 
@@ -34,12 +38,60 @@ function getSceneIdFromTabTarget(target: EventTarget | null): SceneTabId | undef
   return tab?.dataset.openbitfunValue as SceneTabId | undefined;
 }
 
+interface TabDeviceGroup {
+  /** Position among the groups; keys the group's label element. */
+  order: number;
+  name: string;
+  /** The rendered device: its scenes, not only its sessions, sit in this group. */
+  current: boolean;
+}
+
+/**
+ * Tabs ordered so each device's tabs sit together, with the group each first
+ * tab opens. A tab without a session belongs to the rendered device. Groups
+ * keep the order their device first appears in, tabs keep theirs within it,
+ * and a window whose tabs share one device has no groups at all.
+ */
+function useTabDeviceGroups(tabs: readonly SceneTab[]): {
+  tabs: readonly SceneTab[];
+  groupStarts: ReadonlyMap<SceneTabId, TabDeviceGroup>;
+} {
+  const directory = useDeviceDirectory();
+  const activeSurfaceId = useSyncExternalStore(onSurfaceActivated, getActiveSurfaceId, getActiveSurfaceId);
+  return useMemo(() => {
+    const bySurface = new Map<string, SceneTab[]>();
+    for (const tab of tabs) {
+      const surfaceId = tab.session?.surfaceId ?? activeSurfaceId;
+      const group = bySurface.get(surfaceId);
+      if (group) group.push(tab);
+      else bySurface.set(surfaceId, [tab]);
+    }
+    const groupStarts = new Map<SceneTabId, TabDeviceGroup>();
+    if (bySurface.size < 2) return { tabs, groupStarts };
+    const ordered: SceneTab[] = [];
+    for (const [surfaceId, group] of bySurface) {
+      const deviceId = isLocalSurface(surfaceId) ? directory.localId : surfaceId;
+      groupStarts.set(group[0].id, {
+        order: groupStarts.size,
+        name: deviceId ? resolveDeviceNameFrom(directory.devices, deviceId) : surfaceId,
+        current: surfaceId === activeSurfaceId,
+      });
+      ordered.push(...group);
+    }
+    return { tabs: ordered, groupStarts };
+  }, [activeSurfaceId, directory.devices, directory.localId, tabs]);
+}
+
 interface SceneBarProps {
   className?: string;
+  pane?: WorkbenchPane;
+  showDropHint?: boolean;
 }
 
 const SceneBar: React.FC<SceneBarProps> = ({
   className = '',
+  pane = 'primary',
+  showDropHint = true,
 }) => {
   const {
     openTabs,
@@ -49,13 +101,15 @@ const SceneBar: React.FC<SceneBarProps> = ({
     tabDefs,
     activateScene,
     closeScene,
-  } = useSceneManager();
+  } = useSceneManager(pane);
   const sessionLabels = useSessionTabLabels(openTabs);
+  const { tabs: shownTabs, groupStarts } = useTabDeviceGroups(openTabs);
+  const groupLabelId = useId();
   const resources = useContentResourceStore(state => state.resources);
   const selectedTabId = pendingTabId ?? activeTabId;
   const { t } = useI18n('common');
   const { t: tComponents } = useI18n('components');
-  const draggingTab = useRef<SceneTabId | null>(null);
+  const [offeredSceneTab, setOfferedSceneTab] = useState(false);
   const [offeredCanvasTabId, setOfferedCanvasTabId] = useState<string | null>(null);
   const draggingCanvasTabId = useAgentCanvasStore(state => {
     const group = state.draggingFromGroupId === 'primary' ? state.primaryGroup
@@ -64,7 +118,8 @@ const SceneBar: React.FC<SceneBarProps> = ({
   });
   const [canvasDrop, setCanvasDrop] = useState<{ target?: WorkbenchTabDropTarget } | null>(null);
   const canAcceptCanvasTab = Boolean(offeredCanvasTabId && offeredCanvasTabId === draggingCanvasTabId);
-  const activeCanvasDrop = canAcceptCanvasTab ? canvasDrop : null;
+  const canAcceptTab = canAcceptCanvasTab || offeredSceneTab;
+  const activeCanvasDrop = canAcceptTab ? canvasDrop : null;
   const sceneBarClassName = `openbitfun-scene-bar ${className}`.trim();
   const {
     tabRegionRef,
@@ -76,8 +131,25 @@ const SceneBar: React.FC<SceneBarProps> = ({
   } = useSceneTabNavigation({
     activeTabId: selectedTabId,
     navigationMotion,
-    openTabIds: openTabs.map(tab => tab.id),
+    openTabIds: shownTabs.map(tab => tab.id),
   });
+
+  /**
+   * A hovered tab grows to reveal its close action. Near the scroll end that
+   * growth lands past the visible edge, so bring the grown tab fully in view
+   * once it has grown (or at once when the growth is not animated).
+   */
+  const revealGrownTab = useCallback((item: HTMLElement) => {
+    const scroller = tabsRef.current;
+    if (!scroller || !item.matches(':hover')) return;
+    // The visible edge is the scroller's, or the forward arrow's when it shows.
+    const arrow = scroller.parentElement?.querySelector<HTMLElement>('[data-openbitfun-part="scrollNext"]:not(:disabled)');
+    const edge = Math.min(scroller.getBoundingClientRect().right, arrow?.getBoundingClientRect().left ?? Infinity);
+    const overflow = item.getBoundingClientRect().right - edge;
+    if (overflow <= 0) return;
+    const reduced = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    scroller.scrollBy({ left: Math.ceil(overflow) + 2, behavior: reduced ? 'auto' : 'smooth' });
+  }, [tabsRef]);
 
   const handleTabValueChange = useCallback((value: string) => {
     activateScene(value as SceneTabId);
@@ -87,23 +159,20 @@ const SceneBar: React.FC<SceneBarProps> = ({
     // The source has written its transfer format and committed its drag state
     // before dragstart bubbles here. Advertise the destination immediately.
     const offerDrop = (event: DragEvent) => {
+      setOfferedSceneTab(Boolean(event.dataTransfer && isSceneTabDrag(event.dataTransfer)));
       setOfferedCanvasTabId(event.dataTransfer && isSessionTabDrag(event.dataTransfer)
         ? useAgentCanvasStore.getState().draggingTabId : null);
       setCanvasDrop(null);
     };
     const clearDrop = () => {
       setOfferedCanvasTabId(null);
+      setOfferedSceneTab(false);
       setCanvasDrop(null);
     };
-    window.addEventListener('dragstart', offerDrop);
-    // Other drop targets may stop bubbling. Completion always ends this offer.
-    window.addEventListener('dragend', clearDrop, true);
-    window.addEventListener('drop', clearDrop, true);
+    const stopDragListener = observeTabDragLifecycle(offerDrop, clearDrop);
     const stopSurfaceListener = onSurfaceActivated(clearDrop);
     return () => {
-      window.removeEventListener('dragstart', offerDrop);
-      window.removeEventListener('dragend', clearDrop, true);
-      window.removeEventListener('drop', clearDrop, true);
+      stopDragListener();
       stopSurfaceListener();
     };
   }, []);
@@ -115,7 +184,7 @@ const SceneBar: React.FC<SceneBarProps> = ({
       const rect = item.getBoundingClientRect();
       return { tabId, placement: event.clientX < rect.left + rect.width / 2 ? 'before' : 'after' };
     }
-    const last = openTabs[openTabs.length - 1];
+    const last = shownTabs[shownTabs.length - 1];
     return last ? { tabId: last.id, placement: 'after' } : undefined;
   };
 
@@ -180,7 +249,11 @@ const SceneBar: React.FC<SceneBarProps> = ({
     });
   };
 
-  const tabItems = openTabs.reduce<TabGroupItem[]>((items, tab) => {
+    // Each tab names its device through the label that opens its group.
+  let groupLabel: string | undefined;
+  const tabItems = shownTabs.reduce<TabGroupItem[]>((items, tab) => {
+    const group = groupStarts.get(tab.id);
+    if (group) groupLabel = `${groupLabelId}-${group.order}`;
     const def = tabDefs.find(candidate => candidate.id === tab.id);
     if (!def) return items;
 
@@ -193,6 +266,7 @@ const SceneBar: React.FC<SceneBarProps> = ({
     items.push({
       value: tab.id,
       label: displayLabel,
+      tabProps: groupLabel ? { 'aria-describedby': groupLabel } : undefined,
       labelSuffix: sessionLabel?.number || tab.pinned || (tab.contentId && (resources[tab.contentId]?.isDirty || resources[tab.contentId]?.fileMissing)) ? <>
         {sessionLabel?.number && <SessionTitleNumber number={sessionLabel.number} />}
         {tab.pinned && <Pin size={12} aria-label={tComponents('tabs.unpin')} />}
@@ -206,7 +280,6 @@ const SceneBar: React.FC<SceneBarProps> = ({
         <button
           type="button"
           aria-label={closeLabel}
-          title={closeLabel}
           data-motion="none"
           data-scene-bar-part="closeTab"
           data-scene-id={tab.id}
@@ -226,11 +299,13 @@ const SceneBar: React.FC<SceneBarProps> = ({
   return (
     <div data-openbitfun-component="scene-bar" data-openbitfun-part="root"
       className={sceneBarClassName}
-      data-canvas-drop-state={canAcceptCanvasTab ? (activeCanvasDrop ? 'active' : 'available') : undefined}
+      data-workbench-pane={pane}
+      data-canvas-drop-state={canAcceptTab ? (activeCanvasDrop ? 'active' : 'available') : undefined}
       data-canvas-drop-target={activeCanvasDrop ? 'true' : undefined}
       onDragOver={event => {
-        if (isConversationTransfer(event.dataTransfer)) { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; return; }
-        if (!isSessionTabDrag(event.dataTransfer)) return;
+        if (isConversationTransfer(event.dataTransfer) && !isSceneTabDrag(event.dataTransfer)) { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; return; }
+        if (isSceneTabDrag(event.dataTransfer)) setOfferedSceneTab(true);
+        if (!isSessionTabDrag(event.dataTransfer) && !isSceneTabDrag(event.dataTransfer)) return;
         event.preventDefault();
         event.stopPropagation();
         event.dataTransfer.dropEffect = 'move';
@@ -244,11 +319,12 @@ const SceneBar: React.FC<SceneBarProps> = ({
         if (!(event.relatedTarget instanceof Node) || !event.currentTarget.contains(event.relatedTarget)) setCanvasDrop(null);
       }}
       onDrop={event => {
+        if (isSceneTabDrag(event.dataTransfer)) { event.preventDefault(); event.stopPropagation(); void dropSceneTab(event.dataTransfer, pane, getCanvasDropTarget(event)); return; }
         if (isConversationTransfer(event.dataTransfer)) { event.preventDefault(); dropConversationInWorkbench(event.dataTransfer); return; }
         if (!isSessionTabDrag(event.dataTransfer)) return;
         event.preventDefault();
         event.stopPropagation();
-        dropSessionTabOnWorkbench(event.dataTransfer, getCanvasDropTarget(event));
+        dropSessionTabOnWorkbench(event.dataTransfer, getCanvasDropTarget(event), pane);
         setCanvasDrop(null);
       }}
     >
@@ -284,15 +360,44 @@ const SceneBar: React.FC<SceneBarProps> = ({
             const tab = openTabs.find(candidate => candidate.id === tabId);
             const resource = tab?.contentId ? resources[tab.contentId] : undefined;
             const title = resource?.target.kind === 'file' ? [resource.scope.surfaceId, resource.scope.remoteConnectionId, resource.target.path].filter(Boolean).join(' · ') : undefined;
-            return <div className="openbitfun-scene-bar__item" draggable title={title}
+            const group = groupStarts.get(tabId);
+            const itemNode = <div className="openbitfun-scene-bar__item" draggable title={title}
               data-scene-tab-id={tabId}
+              data-pending={pendingTabId === tabId || undefined}
               data-canvas-drop-position={activeCanvasDrop?.target?.tabId === tabId ? activeCanvasDrop.target.placement : undefined}
+              onClick={event => {
+                // TabGroup falls back to its first item when the controlled
+                // value is empty. In the shell idle state that fallback must
+                // not swallow clicks on a retained background tab.
+                if (selectedTabId !== null) return;
+                if (event.target instanceof Element
+                  && event.target.closest('[data-scene-bar-part="closeTab"]')) return;
+                activateScene(tabId);
+              }}
               onContextMenu={event => handleContextMenu(event, tabId)}
-              onDragStart={event => { draggingTab.current = tabId; event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('application/x-openbitfun-scene', tabId); if (tab?.session) beginConversationTransfer(event.dataTransfer, tab.session, tabId); }}
-              onDragEnd={() => { draggingTab.current = null; endConversationTransfer(); }}
-              onDragOver={event => { if (draggingTab.current && draggingTab.current !== tabId) { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; } }}
-              onDrop={event => { if (!draggingTab.current) return; event.preventDefault(); useSceneStore.getState().reorderScene(draggingTab.current, tabId, event.clientX >= event.currentTarget.getBoundingClientRect().x + event.currentTarget.getBoundingClientRect().width / 2 ? 'after' : 'before'); draggingTab.current = null; }}
+              onPointerEnter={event => {
+                const item = event.currentTarget;
+                requestAnimationFrame(() => revealGrownTab(item));
+              }}
+              onTransitionEnd={event => {
+                if (event.propertyName === 'padding-inline-end') revealGrownTab(event.currentTarget);
+              }}
+              onDragStart={event => { writeSceneTabDrag(event.dataTransfer, tabId); if (tab?.session) beginConversationTransfer(event.dataTransfer, tab.session, tabId); }}
+              onDragEnd={() => { endConversationTransfer(); endSceneTabDrag(); }}
             >{node}</div>;
+            if (!group) return itemNode;
+            // Named once, ahead of the device's tabs; the tabs carry the name
+            // to assistive tech through aria-describedby.
+            return <>
+              <span className="openbitfun-scene-bar__device-group" role="presentation"
+                id={`${groupLabelId}-${group.order}`}
+                data-current={group.current || undefined}
+                data-first={group.order === 0 || undefined}
+                data-openbitfun-component="scene-bar" data-openbitfun-part="tabDevice">
+                <OverflowText className="openbitfun-scene-bar__device-group-name">{group.name}</OverflowText>
+              </span>
+              {itemNode}
+            </>;
           }}
           size="sm"
           value={selectedTabId ?? undefined}
@@ -321,12 +426,12 @@ const SceneBar: React.FC<SceneBarProps> = ({
           </button>
         )}
       </div>
-      {canAcceptCanvasTab && (
+      {showDropHint && canAcceptTab && (
         <div className="openbitfun-scene-bar__drop-hint" role="status"
           data-openbitfun-component="scene-bar" data-openbitfun-part="dropHint">
           {/* Both labels reserve the same slot, keeping drop geometry stable. */}
-          <span aria-hidden={Boolean(activeCanvasDrop)}>{tComponents('workbench.dragToPopOut')}</span>
-          <span aria-hidden={!activeCanvasDrop}>{tComponents('workbench.releaseToPopOut')}</span>
+          <span aria-hidden={Boolean(activeCanvasDrop)}>{tComponents(offeredSceneTab ? 'canvas.dragTabHere' : 'workbench.dragToPopOut')}</span>
+          <span aria-hidden={!activeCanvasDrop}>{tComponents(offeredSceneTab ? 'canvas.dragTabHere' : 'workbench.releaseToPopOut')}</span>
         </div>
       )}
     </div>

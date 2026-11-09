@@ -29,10 +29,7 @@ import { elapsedMs, nowMs } from '@/shared/utils/timing';
 import { isSamePath } from '@/shared/utils/pathUtils';
 import { resourcePathKey } from '@/shared/utils/resourcePath';
 import { api } from '@/infrastructure/api/service-api/ApiClient';
-import {
-  isPeerDeviceModeActive,
-  PEER_MODE_FILE_SYNC_POLL_MS,
-} from '@/infrastructure/peer-device/peerModeFlag';
+import { startEditorFileSyncPolling } from '../utils/fileSyncPolling';
 import {
   diskContentMatchesEditorForExternalSync,
   diskVersionFromMetadata,
@@ -124,9 +121,6 @@ const NAVIGATION_RECOVERY_MAX_ATTEMPTS = 6;
 const NAVIGATION_RECOVERY_TIMEOUT_MS = 1500;
 const NAVIGATION_POST_JUMP_SETTLE_MS = 80;
 const NAVIGATION_RETRY_THROTTLE_MS = 40;
-
-/** Poll disk metadata for open file; only while tab is active (see isActiveTab). */
-const FILE_SYNC_POLL_INTERVAL_MS = 1000;
 
 interface PendingNavigationRequest {
   key: string;
@@ -682,12 +676,12 @@ const CodeEditor: React.FC<CodeEditorProps> = ({
         }
         
         let createFontSize = DEFAULT_EDITOR_FONT_SIZE;
-        let createFontFamily = resolveEditorFontFamily(editorConfigRuntimeRef.current.font_family);
+        let createFontFamilyOption = editorConfigRuntimeRef.current.font_family;
         let createFontWeight = editorConfigRuntimeRef.current.font_weight || DEFAULT_EDITOR_FONT_WEIGHT;
         let createLineHeight = 0;
         const applyFontConfig = (c: Partial<EditorConfigType>) => {
           createFontSize = c.font_size ?? DEFAULT_EDITOR_FONT_SIZE;
-          createFontFamily = resolveEditorFontFamily(c.font_family);
+          createFontFamilyOption = c.font_family;
           createFontWeight = c.font_weight || createFontWeight;
           createLineHeight = c.line_height ? Math.round(createFontSize * c.line_height) : 0;
         };
@@ -703,6 +697,12 @@ const CodeEditor: React.FC<CodeEditorProps> = ({
         
         const monacoRuntime = await monacoInitManager.initialize();
         if (cancelled) return;
+
+        // Resolve typography together after async configuration/library loading,
+        // before model/view writes. Reading it on both sides of those writes
+        // repeatedly flushed the entire workbench during first editor creation.
+        const createFontFamily = resolveEditorFontFamily(createFontFamilyOption);
+        const createInlayFontFamily = resolveEditorFontFamily();
 
         model = monacoModelManager.getOrCreateModel(
           filePath,
@@ -779,7 +779,7 @@ const CodeEditor: React.FC<CodeEditorProps> = ({
           inlayHints: {
             enabled: initialLargeFileMode ? 'off' : 'on',
             fontSize: DEFAULT_EDITOR_INLAY_FONT_SIZE,
-            fontFamily: resolveEditorFontFamily(),
+            fontFamily: createInlayFontFamily,
             padding: false
           },
 
@@ -1973,37 +1973,10 @@ const CodeEditor: React.FC<CodeEditorProps> = ({
       return;
     }
 
-    const tick = () => {
-      void checkFileModification();
-    };
-    const pollOffsetMs = getPollOffsetMs(filePath);
-    const pollIntervalMs = isPeerDeviceModeActive()
-      ? PEER_MODE_FILE_SYNC_POLL_MS
-      : FILE_SYNC_POLL_INTERVAL_MS;
-    let intervalId: number | null = null;
-    const timeoutId = window.setTimeout(() => {
-      tick();
-      intervalId = window.setInterval(tick, pollIntervalMs + pollOffsetMs);
-    }, 250 + pollOffsetMs);
-
-    const onPeerModeChanged = () => {
-      if (intervalId !== null) {
-        window.clearInterval(intervalId);
-      }
-      const nextIntervalMs = isPeerDeviceModeActive()
-        ? PEER_MODE_FILE_SYNC_POLL_MS
-        : FILE_SYNC_POLL_INTERVAL_MS;
-      intervalId = window.setInterval(tick, nextIntervalMs + pollOffsetMs);
-    };
-    window.addEventListener('peer-mode:changed', onPeerModeChanged);
-
-    return () => {
-      window.clearTimeout(timeoutId);
-      if (intervalId !== null) {
-        window.clearInterval(intervalId);
-      }
-      window.removeEventListener('peer-mode:changed', onPeerModeChanged);
-    };
+    return startEditorFileSyncPolling(
+      () => { void checkFileModification(); },
+      getPollOffsetMs(filePath),
+    );
   }, [checkFileModification, filePath, isActiveTab, isMemoryContent]);
 
   useEffect(() => {

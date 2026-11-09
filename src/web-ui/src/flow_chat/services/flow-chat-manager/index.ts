@@ -7,6 +7,7 @@ export {
   immediateSaveDialogTurn,
   cleanupSaveState,
   saveDialogTurnToDisk,
+  saveDialogTurnConfirmed,
   saveAllInProgressTurns,
   convertDialogTurnToBackendFormat,
   updateSessionMetadata,
@@ -34,12 +35,14 @@ export {
   createChatSession,
   hydrateSessionHistoryForDetail,
   preloadHistoricalSessionForOpen,
+  prewarmHistoricalSession,
   switchChatSession,
   deleteChatSession,
   archiveChatSession,
   renameChatSessionTitle,
   reloadSessionTitle,
   forkChatSession,
+  duplicateChatSession,
 } from './SessionModule';
 
 export {

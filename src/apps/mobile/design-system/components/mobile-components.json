@@ -66,10 +66,10 @@
     },
     "message_bubble": {
       "purpose": "Presents one user or assistant message in the conversation timeline.",
-      "anatomy": ["message_text", "role_surface", "hairline_border"],
+      "anatomy": ["message_text", "role_surface", "hairline_border", "message_timestamp"],
       "states": ["user", "assistant"],
       "tokens": ["body_large", "message_bubble_max_width", "message_bubble_horizontal_padding", "message_bubble_vertical_padding", "message_bubble_radius", "message_spacing", "timeline_top_padding"],
-      "platformNotes": "The maximum width is the 276-unit compact HarmonyOS baseline; wide layouts may use a separate responsive policy."
+      "platformNotes": "The maximum width is the 276-unit compact HarmonyOS baseline; wide layouts may use a separate responsive policy. Show each available host message time below its content in localized short date/time with muted label-small text, right aligned for users and left aligned for assistants. Omit unavailable or invalid legacy timestamps. Ordinary failed tool calls share the neutral collapsed activity presentation; their actual failure details remain expandable. Questions, approvals and failed replies retain their attention states."
     },
     "conversation_overlay": {
       "purpose": "Lets the transcript own the whole pane while the header and composer stay reachable above it.",
@@ -98,6 +98,13 @@
       "states": ["empty", "draft", "focused", "streaming", "disconnected", "with_attachments"],
       "tokens": ["composer_action_size", "composer_collapsed_height", "composer_expanded_height", "composer_collapsed_radius", "composer_expanded_radius"],
       "platformNotes": "Keyboard, dictation, and attachment pickers remain native adapters. The focused two-row form stays compact and exists to expose message context controls; multiline content and attachments may grow it further. The trailing action is the single filled action for Send, Dictate, or Stop."
+    },
+    "prompt_suggestion": {
+      "purpose": "Offer the host's next-input suggestion above the remote conversation composer.",
+      "anatomy": ["suggestion_text", "full_width_touch_target"],
+      "states": ["available", "draft_hidden", "busy_hidden", "disconnected_hidden", "retired"],
+      "tokens": ["body_medium", "muted", "control_touch_size", "conversation_overlay_side_inset"],
+      "platformNotes": "Compact and wide layouts use a quiet, leading-aligned button with wrapping text and a minimum 48-unit touch target. Show only for the latest completed turn when the draft is empty and the session is idle and connected. Tapping copies the exact text into the native editor and focuses it without sending. New turns, session changes and host stream gaps retire the hint. Suggestions stay outside persisted transcripts; older hosts need no fallback request."
     },
     "composer_model_selector": {
       "purpose": "Changes the model for the message being composed without leaving the conversation or creation flow.",
@@ -261,6 +268,33 @@
         "content_on_action"
       ],
       "platformNotes": "Reference: desktop ChatInputApprovalBand and @openbitfun/ui raised Card, neutral resource Card, fill reject Button and primary allow Button. Preserve desktop 12-unit card radius/padding and 8-unit gaps, with 36-unit mobile actions. Resource content scrolls within the band; actions do not stretch across the card. JSON editing remains a quiet, collapsed mobile-web capability. status_warning ports desktop amber.550 for the short shield glyph: neither success/danger nor the blue file-link accent communicates pending approval."
+    },
+    "message_queue": {
+      "purpose": "Manage the execution host’s pending messages without leaving the composer.",
+      "anatomy": [
+        "count_disclosure",
+        "drag_handle",
+        "preview_and_attachments",
+        "send_now",
+        "actions_menu",
+        "inset_separator"
+      ],
+      "states": [
+        "queued",
+        "blocked",
+        "steering_pending",
+        "reordering",
+        "offline",
+        "legacy_host"
+      ],
+      "tokens": [
+        "content_gutter",
+        "control_touch_size",
+        "ink",
+        "muted",
+        "line"
+      ],
+      "platformNotes": "No enclosing border. Each 48pt row starts with a hairline inset by 8pt on both sides. The last row has no bottom separator and touches the composer without an extra gap. Attachments follow text. Native drag handles and accessible Move up/Move down actions commit through the host queue revision; incoming host changes cancel the gesture. Never present a local-only order as execution order."
     }
   }
 }

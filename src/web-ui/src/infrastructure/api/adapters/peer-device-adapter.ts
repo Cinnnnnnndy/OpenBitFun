@@ -2,6 +2,8 @@ import { DEFAULT_RPC_TIMEOUT_MS } from '../../../../../shared/relay-transport/Rp
 import { translateAgentIdentityCommand, translateAgentIdentityFields, translateAgentIdentityResponse } from '../../../../../shared/agent-harness/wire';
 import { ITransportAdapter, type TransportRequestTiming } from './base';
 import { TauriTransportAdapter } from './tauri-adapter';
+import { getDeviceOpenIntent, useDeviceOpenIntent } from '@/infrastructure/peer-device/deviceOpenIntent';
+import { classifyPeerHostRefusal } from '@/infrastructure/peer-device/peerHostRefusal';
 import {
   SurfaceChangedError,
   getActiveSurfaceScope,
@@ -11,6 +13,7 @@ import {
 } from '@/infrastructure/peer-device/deviceSurface';
 import { PEER_CONTROLLER_LOCAL_COMMANDS } from '@/infrastructure/api/generated/remoteSurface';
 import { createLogger } from '@/shared/utils/logger';
+import { sshConnectionIdPortScope } from '@/shared/utils/sshConnectionIdentity';
 import { elapsedMs, nowMs } from '@/shared/utils/timing';
 
 const log = createLogger('PeerDeviceTransport');
@@ -40,6 +43,7 @@ const HIGH_PRIORITY_COMMANDS = new Set([
   'restore_session_with_turns',
   'restore_session',
   'load_session_turn_window',
+  'load_session_trajectory',
   'load_session_turns',
   'list_persisted_sessions',
   'list_persisted_sessions_page',
@@ -58,6 +62,8 @@ const HIGH_PRIORITY_COMMANDS = new Set([
   'get_current_workspace',
   'worktree_list_projects',
   'open_workspace',
+  // A session open activates its workspace; it must not wait behind data reads.
+  'set_active_workspace',
   'get_workspace_info',
   'reload_config',
   'get_config',
@@ -66,12 +72,20 @@ const HIGH_PRIORITY_COMMANDS = new Set([
   'get_available_modes',
   'get_agent_profile_config',
   'start_dialog_turn',
+  'ensure_coordinator_session',
+  'get_session_model_target',
+  'update_session_model',
+  'update_session_model_target',
+  'manage_dialog_queue',
   'cancel_dialog_turn',
+  'computer_use_control_stop',
   // Per-tool interrupt (Terminal cards) is interactive and time-sensitive: a
   // long-running shell command keeps producing side effects until the cancel
   // reaches the host. It must take the reserved high-priority slot, not queue
   // behind normal reads/mutations. See PR #2428 review #4.
   'cancel_tool',
+  'computer_use_control_stop',
+  'computer_use_share_control',
   // Question activity must reach the owner before its unattended deadline.
   'start_user_question_interaction',
   'submit_user_answers',
@@ -96,11 +110,13 @@ const HIGH_PRIORITY_COMMANDS = new Set([
 ]);
 
 const RETRYABLE_READ_COMMANDS = new Set([
+  'get_workspace_icon',
   'initialize_workspace_startup_state',
   'restore_session_view',
   'load_session_event_backfill',
   'restore_session_with_turns',
   'load_session_turn_window',
+  'load_session_trajectory',
   'load_session_turns',
   'list_persisted_sessions',
   'list_persisted_sessions_page',
@@ -162,12 +178,16 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 }
 
 function requiresMiniAppAgentContextFilesV1(params: unknown): boolean {
+  return hasMiniAppAgentPayload(params, ['contextFiles', 'context_files']);
+}
+
+function hasMiniAppAgentPayload(params: unknown, keys: string[]): boolean {
   const outer = asRecord(params);
   if (!outer) {
     return false;
   }
   const request = asRecord(outer.request) ?? outer;
-  for (const key of ['contextFiles', 'context_files']) {
+  for (const key of keys) {
     if (!Object.prototype.hasOwnProperty.call(request, key)) {
       continue;
     }
@@ -200,6 +220,18 @@ export function isPeerRetryableIdempotentMutation(
 
 export type PeerInvokePriority = 'high' | 'normal' | 'low';
 
+/**
+ * How long a cross-device open may hold background requests. A slow host must
+ * not starve them: past this, they share the link again.
+ */
+const DEVICE_OPEN_LOW_PRIORITY_HOLD_MS = 8_000;
+
+/** Milliseconds the running open may still hold background requests, or 0. */
+function deviceOpenHoldRemaining(): number {
+  const intent = getDeviceOpenIntent();
+  return intent ? Math.max(0, intent.startedAt + DEVICE_OPEN_LOW_PRIORITY_HOLD_MS - (typeof performance !== 'undefined' ? performance.now() : Date.now())) : 0;
+}
+
 const LOW_PRIORITY_EXACT = new Set([
   'get_file_metadata',
   'read_file_content',
@@ -220,6 +252,7 @@ const LOW_PRIORITY_EXACT = new Set([
   'notify_cron_host_ready',
   'list_miniapps',
   'miniapp_worker_list_running',
+  'computer_use_control_status',
 ]);
 
 export function peerInvokePriorityFor(command: string): PeerInvokePriority {
@@ -270,6 +303,28 @@ const IDEMPOTENT_MUTATION_RPC_POLICY: PeerRpcPolicy = {
   retryKind: 'idempotent-mutation',
 };
 
+/**
+ * Browser Control setup waits on browser-owned consent on the host: up to one
+ * minute for the Remote debugging toggle and up to 90 seconds for the
+ * connection approval prompt. Updated hosts allow 180 s for these commands;
+ * the controller waits slightly longer so the host's own outcome arrives
+ * first. An older host still answers with its 120 s timeout error.
+ */
+export const PEER_BROWSER_CONTROL_SETUP_TIMEOUT_MS = 185_000;
+
+const BROWSER_CONTROL_SETUP_COMMANDS = new Set([
+  'browser_control_launch',
+  'browser_control_enable_default_cdp',
+  'browser_control_restart_with_cdp',
+]);
+
+const BROWSER_CONTROL_SETUP_RPC_POLICY: PeerRpcPolicy = {
+  timeoutMs: PEER_BROWSER_CONTROL_SETUP_TIMEOUT_MS,
+  maxRetries: 0,
+  retryKind: 'none',
+};
+
+
 type DeviceRpcFn = (
   targetDeviceId: string,
   commandJson: string,
@@ -291,9 +346,21 @@ export interface PeerDeviceTransportHooks {
   supportsTokenUsageStatistics?: boolean;
   /** Enables MiniApp Agent runs with immutable virtual context files. */
   supportsMiniAppAgentContextFilesV1?: boolean;
+  /** Enables MiniApp Agent turns carrying inline image attachments. */
+  supportsMiniAppAgentImagesV1?: boolean;
   supportsWslWorkspacesV1?: boolean;
+  supportsSshNoneAuthV1?: boolean;
+  supportsSshPortScopedIdentityV1?: boolean;
+  supportsWholeSessionCopyV1?: boolean;
+  supportsGenUiLibrariesV1?: boolean;
+  supportsModelRoutingV1?: boolean;
+  supportsModelPoolSelectionV1?: boolean;
+  supportsMagpieDiscoveryV1?: boolean;
+  supportsBtwModelPoolSelectionV1?: boolean;
+  supportsComputerUseSharingV1?: boolean;
   /** Enables the versioned typed ProductControl HostInvoke contract. */
   supportsProductControlV1?: boolean;
+  supportsRemoteConnectControlV1?: boolean;
 }
 
 interface HostInvokeResultEnvelope {
@@ -392,6 +459,8 @@ export class PeerDeviceTransportAdapter implements ITransportAdapter {
   };
   /** Every request whose caller promise has not settled — queued or in flight. */
   private readonly pending = new Set<QueuedPeerRequest>();
+  private readonly refusedCommands = new Map<string, PeerProductCommandError>();
+  private capabilityGeneration = 0;
 
   constructor(
     private readonly targetDeviceId: string,
@@ -426,11 +495,24 @@ export class PeerDeviceTransportAdapter implements ITransportAdapter {
       | 'supportsTargetedSessionRollback'
       | 'supportsTokenUsageStatistics'
       | 'supportsMiniAppAgentContextFilesV1'
+      | 'supportsMiniAppAgentImagesV1'
       | 'supportsWslWorkspacesV1'
+      | 'supportsSshNoneAuthV1'
+      | 'supportsSshPortScopedIdentityV1'
+      | 'supportsWholeSessionCopyV1'
+      | 'supportsGenUiLibrariesV1'
+      | 'supportsModelRoutingV1'
+      | 'supportsModelPoolSelectionV1'
+      | 'supportsMagpieDiscoveryV1'
+      | 'supportsBtwModelPoolSelectionV1'
+      | 'supportsComputerUseSharingV1'
       | 'supportsProductControlV1'
+      | 'supportsRemoteConnectControlV1'
     >,
   ): void {
     this.hooks = { ...this.hooks, ...capabilities };
+    this.capabilityGeneration += 1;
+    this.refusedCommands.clear();
   }
 
   /**
@@ -490,6 +572,41 @@ export class PeerDeviceTransportAdapter implements ITransportAdapter {
 
     this.assertRenderedTransport(action);
 
+    if ((action === 'get_model_routing_status' || (action === 'update_session_model' && params?.request?.routingMode !== undefined))
+      && this.hooks.supportsModelRoutingV1 !== true) {
+      throw new PeerProductCommandError('model_routing_v1_unsupported: The connected Peer host does not support smart routing');
+    }
+
+    if (action === 'probe_magpie_gateway' && this.hooks.supportsMagpieDiscoveryV1 !== true) {
+      throw new PeerProductCommandError('magpie_discovery_v1_unsupported: This host does not support Magpie discovery');
+    }
+
+    if (['retry_model_pool_member', 'get_model_pools', 'save_model_pool', 'delete_model_pool', 'get_model_pool_status',
+      'get_session_model_target', 'update_session_model_target'].includes(action)
+      && this.hooks.supportsModelPoolSelectionV1 !== true) {
+      throw new Error('This host does not support model_pool_selection_v1');
+    }
+    if (action === 'btw_ask_stream' && params?.request?.initialModelTarget
+      && (this.hooks.supportsModelPoolSelectionV1 !== true
+        || this.hooks.supportsBtwModelPoolSelectionV1 !== true)) {
+      throw new Error('This host does not support btw_model_pool_selection_v1');
+    }
+    if (action === 'copy_session' && this.hooks.supportsWholeSessionCopyV1 !== true) {
+      throw new PeerProductCommandError(
+        'whole_session_copy_v1_unsupported: The connected Peer host does not support whole-session copying',
+      );
+    }
+    const productRequest = params?.request;
+    if (action === 'product_control_invoke' && productRequest?.capabilityId === 'setting.tools.execution'
+      && productRequest?.optionId === 'genui-library' && this.hooks.supportsGenUiLibrariesV1 !== true) {
+      throw new Error('This peer does not advertise gen_ui_libraries_v1; component library settings are unsupported');
+    }
+    const configRequest = (params as { request?: { path?: string; paths?: string[] } } | undefined)?.request;
+    if (['get_config', 'get_configs', 'set_config', 'reset_config'].includes(action)
+      && (configRequest?.path === 'ai.generative_ui_library' || configRequest?.paths?.includes('ai.generative_ui_library'))
+      && this.hooks.supportsGenUiLibrariesV1 !== true) {
+      throw new Error('This peer does not advertise gen_ui_libraries_v1; component library settings are unsupported');
+    }
     if (
       action === 'rollback_session_to_turn' &&
       this.hooks.supportsTargetedSessionRollback !== true
@@ -508,6 +625,13 @@ export class PeerDeviceTransportAdapter implements ITransportAdapter {
       );
     }
 
+    if ((action.startsWith('computer_use_share_') || action === 'computer_use_request_permission')
+      && this.hooks.supportsComputerUseSharingV1 !== true) {
+      throw new PeerProductCommandError(
+        'computer_use_sharing_v1_unsupported: The connected Peer host does not support native App sharing; update the executing Desktop host',
+      );
+    }
+
     const wslConfig = (params as { config?: { wsl?: unknown } } | undefined)?.config?.wsl;
     if (
       (action === 'ssh_list_wsl_distributions' || (action.startsWith('ssh_') && wslConfig != null)) &&
@@ -515,6 +639,35 @@ export class PeerDeviceTransportAdapter implements ITransportAdapter {
     ) {
       throw new PeerProductCommandError(
         'wsl_workspaces_v1_unsupported: The connected Peer host does not support native WSL workspaces',
+      );
+    }
+
+    const sshAuthType = (params as { config?: { auth?: { type?: unknown } } } | undefined)?.config?.auth?.type;
+    if (action.startsWith('ssh_') && sshAuthType === 'None' && this.hooks.supportsSshNoneAuthV1 !== true) {
+      throw new PeerProductCommandError(
+        'ssh_none_auth_v1_unsupported: The connected Peer host does not support SSH connections without authentication; update the executing Desktop host',
+      );
+    }
+
+    const sshConfigId = (params as { config?: { id?: unknown } } | undefined)?.config?.id;
+    if (
+      action.startsWith('ssh_') &&
+      typeof sshConfigId === 'string' &&
+      sshConnectionIdPortScope(sshConfigId) !== undefined &&
+      this.hooks.supportsSshPortScopedIdentityV1 !== true
+    ) {
+      throw new PeerProductCommandError(
+        'ssh_port_scoped_identity_v1_unsupported: The connected Peer host does not keep SSH profiles that differ only by port separate; update the executing Desktop host',
+      );
+    }
+
+    if (
+      action === 'miniapp_agent_run' &&
+      hasMiniAppAgentPayload(params, ['imageContexts', 'image_contexts']) &&
+      this.hooks.supportsMiniAppAgentImagesV1 !== true
+    ) {
+      throw new PeerProductCommandError(
+        'miniapp_agent_images_v1_unsupported: The connected Peer host does not support MiniApp image attachments; update the executing Desktop host',
       );
     }
 
@@ -534,6 +687,17 @@ export class PeerDeviceTransportAdapter implements ITransportAdapter {
     ) {
       throw new PeerProductCommandError(
         'product_control_v1_unsupported: The connected Peer host does not support the unified ProductControl contract',
+      );
+    }
+
+    if (
+      action === 'product_control_invoke'
+      && params?.request?.action === 'execute'
+      && params?.request?.capabilityId === 'feature.remote-connect'
+      && this.hooks.supportsRemoteConnectControlV1 !== true
+    ) {
+      throw new PeerProductCommandError(
+        'remote_connect_control_v1_unsupported: Update the executing Peer host to manage Remote Connect bots and Mobile Web',
       );
     }
 
@@ -713,7 +877,33 @@ export class PeerDeviceTransportAdapter implements ITransportAdapter {
   private dequeueNext(): QueuedPeerRequest | undefined {
     // Order the current dispatch burst without a second in-flight limit.
     // Slow data requests cannot hold control calls behind adapter-owned slots.
-    return this.queues.high.shift() ?? this.queues.normal.shift() ?? this.queues.low.shift();
+    const next = this.queues.high.shift() ?? this.queues.normal.shift();
+    if (next) return next;
+    // While a cross-device open runs, background work (git, search, file
+    // tree, watchers, mini apps) waits for it instead of sharing the link with
+    // the session being opened. It is released when the open settles.
+    const hold = this.queues.low.length > 0 ? deviceOpenHoldRemaining() : 0;
+    if (hold > 0) {
+      this.resumeLowAfterOpen(hold);
+      return undefined;
+    }
+    return this.queues.low.shift();
+  }
+
+  private lowResumeArmed = false;
+
+  private resumeLowAfterOpen(hold: number): void {
+    if (this.lowResumeArmed) return;
+    this.lowResumeArmed = true;
+    const release: Array<() => void> = [];
+    const resume = () => {
+      for (const dispose of release.splice(0)) dispose();
+      this.lowResumeArmed = false;
+      this.pump();
+    };
+    const timer = setTimeout(resume, hold);
+    release.push(() => clearTimeout(timer));
+    release.push(useDeviceOpenIntent.subscribe(state => { if (!state.intent) resume(); }));
   }
 
   private async invokePeerCommand<T extends PeerDeviceCommandResponse>(
@@ -786,18 +976,23 @@ export class PeerDeviceTransportAdapter implements ITransportAdapter {
     issuedBindingEpoch: number,
   ): Promise<T> {
     const invokeStartedAt = nowMs();
+    const refusal = this.refusedCommands.get(action);
+    if (refusal) throw refusal;
+    const capabilityGeneration = this.capabilityGeneration;
     const priority = peerInvokePriorityFor(action);
     const commandJson = JSON.stringify({
       cmd: 'host_invoke',
       command: action,
       args: translateAgentIdentityCommand(action, params ?? {}, 'legacy'),
     });
-    const rpcPolicy = isPeerRetryableReadCommand(action)
-      ? READ_RPC_POLICY
-      : this.hooks.supportsIdempotentDialogSubmit === true &&
-          isPeerRetryableIdempotentMutation(action, params)
-        ? IDEMPOTENT_MUTATION_RPC_POLICY
-        : MUTATION_RPC_POLICY;
+    const rpcPolicy = BROWSER_CONTROL_SETUP_COMMANDS.has(action)
+      ? BROWSER_CONTROL_SETUP_RPC_POLICY
+      : isPeerRetryableReadCommand(action)
+        ? READ_RPC_POLICY
+        : this.hooks.supportsIdempotentDialogSubmit === true &&
+            isPeerRetryableIdempotentMutation(action, params)
+          ? IDEMPOTENT_MUTATION_RPC_POLICY
+          : MUTATION_RPC_POLICY;
 
     try {
       const raw = await this.invokeDeviceRpc(
@@ -819,9 +1014,15 @@ export class PeerDeviceTransportAdapter implements ITransportAdapter {
       if (envelope.resp === 'host_invoke_result') {
         if (!envelope.ok) {
           // Product failure on the peer — do not count as transport loss.
-          throw new PeerProductCommandError(
+          const error = new PeerProductCommandError(
             envelope.error || `Peer command '${action}' failed`,
           );
+          // Registry refusals describe the entire command on this host. A
+          // resource, permission or transport failure never enters this cache.
+          if (capabilityGeneration === this.capabilityGeneration && classifyPeerHostRefusal(error)) {
+            this.refusedCommands.set(action, error);
+          }
+          throw error;
         }
         this.hooks.onHostInvokeSuccess?.();
         return translateAgentIdentityResponse(action, envelope.value, params, 'canonical') as T;

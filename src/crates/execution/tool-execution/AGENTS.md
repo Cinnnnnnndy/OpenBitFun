@@ -4,7 +4,7 @@ Scope: this guide applies to `src/crates/execution/tool-execution`.
 
 `tool-runtime` owns low-level reusable tool execution helpers such as filesystem
 and search utilities, provider-neutral pipeline planning/retry/token policy,
-ExecCommand presentation/control facts, Computer Use loop/retry policies,
+ExecCommand presentation/control facts, Computer Use evidence/read-retry policies,
 prompt-safe tool context facts/custom-data materialization and extension merge,
 background exec-output capture state, and provider-neutral Web tool result
 processing. It is not the product tool registry, permission model, or
@@ -26,7 +26,10 @@ agent-facing tool surface.
   Native and workspace-stream Grep share the Rust matcher and output reducer;
   optional target `rg` or batched system `grep` supplies conservative literal
   candidates only, after behavior probes. Complex/case-folded regex stays in the
-  shared matcher; never translate it to a weaker shell regex. `tokio-util/io-util`
+  shared matcher; never translate it to a weaker shell regex. Interactive callers
+  may pass a proven fixed-string hint (`content_search_candidate_literal`), which
+  also allows a case-folded target `rg` or recursive `grep` candidate step; the hint
+  must stay a conservative superset of what the shared matcher accepts. `tokio-util/io-util`
   bridges provider read streams into the existing blocking matcher, with
   cancellation closing pending readers.
 - Glob and ignore matching compile POSIX patterns to byte regexes without host
@@ -52,9 +55,12 @@ agent-facing tool surface.
   output buffers, cursors, lifecycle metadata, assistant response text, and
   provider-neutral completion shapes; concrete local/remote process managers
   stay in services or core adapters.
-- Computer Use helpers here may own provider-neutral loop detection, screenshot
-  hash, verification, and retry policy. Host APIs, permissions, captures, OCR,
-  accessibility, and OS input remain in host adapters.
+- Computer Use helpers own bounded action evidence, full-buffer screenshot
+  fingerprints and read-only retry policy. Repeated action names or unchanged
+  pixels do not prove a loop; hash changes do not verify task completion. Errors
+  cannot prove that mutation input was never submitted, so they must not authorize
+  automatic input replay. Host APIs, permissions, captures, OCR, accessibility,
+  and OS input remain in host adapters.
 - Provider-neutral contracts belong in `tool-contracts` (`openbitfun-agent-tools`);
   product provider grouping belongs in `tool-provider-groups`
   (`openbitfun-tool-packs`).
@@ -67,6 +73,7 @@ agent-facing tool surface.
 
 ```bash
 cargo test -p tool-runtime
+cargo test -p tool-runtime --no-default-features --lib computer_use
 cargo test -p tool-runtime --features shell-analysis --lib shell_analysis
 cargo test -p tool-runtime --lib fs::read_file::tests::
 cargo test -p tool-runtime --no-default-features --lib search::

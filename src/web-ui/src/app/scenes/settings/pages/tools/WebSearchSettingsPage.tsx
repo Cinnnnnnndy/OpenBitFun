@@ -17,7 +17,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 const log = createLogger('WebSearchSettings');
 
-type ProviderId = 'exa_mcp_free' | 'exa_search_api' | 'tavily' | 'openbitfun_search_http';
+type ProviderId = 'exa_mcp_free' | 'exa_search_api' | 'tavily' | 'deepseek' | 'keenable' | 'openbitfun_search_http';
 type HttpAuthMode = 'none' | 'bearer' | 'header';
 
 interface CredentialProviderConfig extends Record<string, unknown> {
@@ -40,6 +40,8 @@ interface WebSearchConfig extends Record<string, unknown> {
   providers: {
     exa_search_api: CredentialProviderConfig;
     tavily: CredentialProviderConfig;
+    deepseek: CredentialProviderConfig;
+    keenable: CredentialProviderConfig;
     openbitfun_search_http: OpenBitFunHttpConfig;
     [key: string]: unknown;
   };
@@ -50,6 +52,8 @@ const DEFAULT_CONFIG: WebSearchConfig = {
   providers: {
     exa_search_api: { credentialId: 'exa-search-api' },
     tavily: { credentialId: 'tavily-search-api' },
+    deepseek: { credentialId: 'deepseek-search-api' },
+    keenable: { credentialId: 'keenable-search-api' },
     openbitfun_search_http: {
       endpoint: '',
       auth: {
@@ -119,6 +123,12 @@ function normalizeConfig(value: unknown): WebSearchConfig {
   const rawHttp = rawProviders.openbitfun_search_http && typeof rawProviders.openbitfun_search_http === 'object'
     ? rawProviders.openbitfun_search_http as Partial<OpenBitFunHttpConfig>
     : {};
+  const rawDeepSeek = rawProviders.deepseek && typeof rawProviders.deepseek === 'object'
+    ? rawProviders.deepseek as Partial<CredentialProviderConfig>
+    : {};
+  const rawKeenable = rawProviders.keenable && typeof rawProviders.keenable === 'object'
+    ? rawProviders.keenable as Partial<CredentialProviderConfig>
+    : {};
   const rawAuth = rawHttp.auth && typeof rawHttp.auth === 'object'
     ? rawHttp.auth as Partial<OpenBitFunHttpAuthConfig>
     : {};
@@ -136,6 +146,14 @@ function normalizeConfig(value: unknown): WebSearchConfig {
       tavily: {
         ...DEFAULT_CONFIG.providers.tavily,
         ...rawTavily,
+      },
+      deepseek: {
+        ...DEFAULT_CONFIG.providers.deepseek,
+        ...rawDeepSeek,
+      },
+      keenable: {
+        ...DEFAULT_CONFIG.providers.keenable,
+        ...rawKeenable,
       },
       openbitfun_search_http: {
         ...DEFAULT_CONFIG.providers.openbitfun_search_http,
@@ -184,6 +202,16 @@ const WebSearchSettingsPage: React.FC = () => {
       description: t('providerDescriptions.tavily'),
     },
     {
+      value: 'deepseek',
+      label: t('providers.deepseek'),
+      description: t('providerDescriptions.deepseek'),
+    },
+    {
+      value: 'keenable',
+      label: t('providers.keenable'),
+      description: t('providerDescriptions.keenable'),
+    },
+    {
       value: 'openbitfun_search_http',
       label: t('providers.openbitfunSearchHttp'),
       description: t('providerDescriptions.openbitfunSearchHttp'),
@@ -203,7 +231,11 @@ const WebSearchSettingsPage: React.FC = () => {
   );
   const credentialRequired = selectedProvider === 'exa_search_api'
     || selectedProvider === 'tavily'
+    || selectedProvider === 'deepseek'
     || (selectedProvider === 'openbitfun_search_http' && !['', 'none'].includes(httpConfig.auth.mode));
+  // Keenable searches without a key; a saved key only raises its rate limits.
+  const credentialOptional = selectedProvider === 'keenable';
+  const credentialSupported = credentialRequired || credentialOptional;
 
   const refreshCredentialStatus = useCallback(async (provider: string, required: boolean) => {
     const requestId = ++credentialStatusRequestIdRef.current;
@@ -255,10 +287,10 @@ const WebSearchSettingsPage: React.FC = () => {
   }, [loadConfiguration]);
 
   useEffect(() => {
-    void refreshCredentialStatus(selectedProvider, credentialRequired);
+    void refreshCredentialStatus(selectedProvider, credentialSupported);
     setCredential('');
     setDraftMessage(null);
-  }, [credentialRequired, refreshCredentialStatus, selectedProvider]);
+  }, [credentialSupported, refreshCredentialStatus, selectedProvider]);
 
   const saveConfiguration = useCallback(async (showSuccess: boolean) => {
     await configAPI.setConfig('ai.web_search', config);
@@ -276,7 +308,7 @@ const WebSearchSettingsPage: React.FC = () => {
     setSaving(true);
     try {
       await saveConfiguration(true);
-      await refreshCredentialStatus(selectedProvider, credentialRequired);
+      await refreshCredentialStatus(selectedProvider, credentialSupported);
       return true;
     } catch (error) {
       log.error('Failed to save WebSearch settings', error);
@@ -286,7 +318,7 @@ const WebSearchSettingsPage: React.FC = () => {
       mutationBusyRef.current = false;
       setSaving(false);
     }
-  }, [credentialRequired, refreshCredentialStatus, saveConfiguration, selectedProvider, t]);
+  }, [credentialSupported, refreshCredentialStatus, saveConfiguration, selectedProvider, t]);
 
   const handleSaveCredential = useCallback(async (): Promise<boolean> => {
     if (!credential.trim()) {
@@ -389,7 +421,7 @@ const WebSearchSettingsPage: React.FC = () => {
   if (loading) {
     return (
       <ConfigPageLayout>
-        <ConfigPageHeader title={t('title')} subtitle={t('subtitle')} />
+        <ConfigPageHeader title={t('title')} />
         <ConfigPageContent><ConfigLoadingState label={t('messages.loading')} rows={5} /></ConfigPageContent>
       </ConfigPageLayout>
     );
@@ -398,7 +430,7 @@ const WebSearchSettingsPage: React.FC = () => {
   if (loadFailed) {
     return (
       <ConfigPageLayout data-openbitfun-component="config" data-openbitfun-part="root">
-        <ConfigPageHeader title={t('title')} subtitle={t('subtitle')} />
+        <ConfigPageHeader title={t('title')} />
         <ConfigPageContent>
           <ConfigRetryState
             message={t('messages.loadFailed')}
@@ -415,7 +447,6 @@ const WebSearchSettingsPage: React.FC = () => {
     <ConfigPageLayout data-openbitfun-component="config" data-openbitfun-part="root">
       <ConfigPageHeader
         title={t('title')}
-        subtitle={t('subtitle')}
       />
       <ConfigPageContent>
         <ConfigMessage message={operationMessage} />
@@ -437,7 +468,6 @@ const WebSearchSettingsPage: React.FC = () => {
         />
         <ConfigPageSection
           title={t('sections.provider.title')}
-          description={t('sections.provider.description')}
         >
           <ConfigPageRow
             label={t('fields.provider.label')}
@@ -474,7 +504,6 @@ const WebSearchSettingsPage: React.FC = () => {
         {selectedProvider === 'openbitfun_search_http' ? (
           <ConfigPageSection
             title={t('sections.http.title')}
-            description={t('sections.http.description')}
           >
             <ConfigPageRow label={t('fields.endpoint.label')} description={t('fields.endpoint.description')}>
               <Input
@@ -541,11 +570,15 @@ const WebSearchSettingsPage: React.FC = () => {
           </ConfigPageSection>
         ) : null}
 
-        {credentialRequired ? (
-          <ConfigPageSection title={t('sections.credential.title')} description={t('sections.credential.description')}>
+        {credentialSupported ? (
+          <ConfigPageSection title={t('sections.credential.title')}>
             <ConfigPageRow label={t('fields.credentialStatus.label')} balanced>
               <div className="web-search-settings__credential-status">
-                <span>{credentialConfigured ? t('status.configured') : t('status.missing')}</span>
+                <span>
+                  {credentialConfigured
+                    ? t('status.configured')
+                    : credentialOptional ? t('status.optionalMissing') : t('status.missing')}
+                </span>
                 <Button size="sm" variant="outline" disabled={!credentialConfigured || mutationBusy} onClick={() => void handleClearCredential()}>
                   {t('actions.clearCredential')}
                 </Button>
@@ -570,7 +603,6 @@ const WebSearchSettingsPage: React.FC = () => {
         {selectedProvider === 'openbitfun_search_http' ? (
           <ConfigPageSection
             title={t('sections.protocol.title')}
-            description={t('sections.protocol.description')}
             extra={(
               <Tooltip content={t('actions.copyProtocol')} placement="bottom">
                 <IconButton

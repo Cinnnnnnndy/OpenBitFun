@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
+  prewarm: vi.fn(),
   flowChatState: {
     activeSessionId: null as string | null,
     sessions: new Map<string, unknown>(),
@@ -34,11 +35,12 @@ vi.mock('@/app/stores/sceneStore', () => ({
 vi.mock('../store/FlowChatStore', () => ({
   flowChatStore: {
     getState: () => mocks.flowChatState,
+    hasUnpromotedSeed: () => false,
   },
 }));
 
 vi.mock('./FlowChatManager', () => ({
-  flowChatManager: { switchChatSession: mocks.switchChatSession },
+  flowChatManager: { switchChatSession: mocks.switchChatSession, prewarmHistoricalSession: mocks.prewarm },
 }));
 
 vi.mock('./storeSync', () => ({
@@ -73,6 +75,14 @@ describe('openMainSession resource activation', () => {
     await openMainSession('active');
 
     expect(syncSessionToModernStore).toHaveBeenCalledWith('active');
+    expect(mocks.sceneState.openScene).toHaveBeenCalledWith('session');
+  });
+
+  it('refreshes a cached source when it is explicitly opened again', async () => {
+    mocks.flowChatState.activeSessionId = 'source';
+    mocks.flowChatState.sessions.set('source', { sessionId: 'source', historyState: 'ready', isHistorical: false, externalHistory: { mode: 'follow' } });
+    await openMainSession('source');
+    expect(mocks.switchChatSession).toHaveBeenCalledOnce();
     expect(mocks.sceneState.openScene).toHaveBeenCalledWith('session');
   });
 
@@ -219,6 +229,9 @@ describe('openMainSession resource activation', () => {
     await Promise.all([first, second]);
 
     expect(mocks.setActiveWorkspace.mock.calls.map(([id]) => id)).toEqual(['a', 'b']);
+    // The history read starts with the workspace switch, not after it.
+    expect(mocks.prewarm).toHaveBeenCalledWith('a');
+    expect(mocks.prewarm.mock.invocationCallOrder[0]).toBeLessThan(mocks.setActiveWorkspace.mock.invocationCallOrder[0]);
     expect(mocks.switchChatSession.mock.calls.map(([id]) => id)).toEqual(['b']);
     expect(mocks.workspaceState.activeWorkspaceId).toBe('b');
     expect(mocks.sceneState.openScene).toHaveBeenCalledTimes(1);

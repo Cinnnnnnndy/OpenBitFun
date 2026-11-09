@@ -91,6 +91,9 @@ pub struct ToolExecutionContext {
     pub agent_type: String,
     pub workspace: Option<WorkspaceBinding>,
     pub primary_model_facts: PrimaryModelFacts,
+    /// Exact producing client; auxiliary tool review must retain account and
+    /// reasoning configuration instead of resolving the model again.
+    pub model_client: Option<Arc<crate::infrastructure::ai::AIClient>>,
     pub context_vars: HashMap<String, String>,
     pub subagent_parent_info: Option<SubagentParentInfo>,
     pub permission_delegation: Option<PermissionDelegationContext>,
@@ -192,5 +195,9 @@ pub struct ToolExecutionResult {
     /// Runtime target used for validation, permissions, hooks, and execution.
     pub effective_tool_name: String,
     pub result: crate::agentic::core::ToolResult,
+    /// Deferred definitions loaded while executing a PTC gateway call.
+    /// These are projected onto the outer RunCode message so a later round
+    /// can reuse them without turning the state into a session-global cache.
+    pub ptc_loaded_deferred_tool_specs: Vec<openbitfun_agent_tools::LoadedDeferredToolSpec>,
     pub execution_time_ms: u64,
 }

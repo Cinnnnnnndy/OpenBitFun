@@ -52,6 +52,8 @@ const coreSource = fs.readFileSync(path.join(__dirname, '../../entry/src/main/et
 const coreJs = ts.transpileModule(coreSource, {compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText;
 const coreExports = {};
 new Function('require','exports',coreJs)(name => name.endsWith('RemoteUiState') ? {RemoteUiState:{emptyActiveTurn:()=>({}),emptyModelCatalog:()=>({})}} :
+  name.endsWith('SubagentBranchExpansionState') ?
+    {SubagentBranchExpansionState:class{isExpanded(){return false;}toggle(){return false;}}} :
   {ChatTimelineRevisionTracker:class{reset(){return 0;}},ChatTimelineRowStore:class{clear(){}}},coreExports);
 function submitComposer(core, session, text, images) {
   const submission=core.prepareComposerSubmission(session,text,images); submission.commit(); return () => submission.rollback();
@@ -62,6 +64,20 @@ function composer() {
   core.setChatInput('  Original  '); core.setSelectedImages([{id:'sent-image'}]);
   return core;
 }
+test('prompt hints never overwrite a draft and retire on submit, selection change and reset', () => {
+  const core = composer();
+  core.promptSuggestion = '  Run the tests  ';
+  assert.equal(core.chatInput, '  Original  ');
+  core.setChatInput(core.promptSuggestion);
+  assert.equal(core.chatInput, '  Run the tests  ');
+  submitComposer(core, 'session', core.chatInput, []);
+  assert.equal(core.promptSuggestion, '');
+  core.promptSuggestion = 'Old session';
+  core.setActiveSession({sessionId: 'other'});
+  assert.equal(core.promptSuggestion, '');
+  core.promptSuggestion = 'Old target'; core.reset();
+  assert.equal(core.promptSuggestion, '');
+});
 test('submission owns an exact text/attachment snapshot and failure restores it once', () => {
   const core=composer(); const restore=submitComposer(core,'session','Original',[{id:'sent-image'}]);
   assert.equal(core.chatInput,''); assert.deepEqual(core.selectedImages,[]);

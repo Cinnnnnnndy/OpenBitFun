@@ -1,4 +1,4 @@
-**English** · [中文](README.zh-CN.md)
+**English** · [中文](README.zh-CN.md) · [日本語](README.ja.md)
 
 <div align="center">
 
@@ -12,7 +12,7 @@ OpenBitFun is a highly customizable, open-source agent workspace that keeps work
 
 **If this is the kind of agent workspace you want, ⭐ Star OpenBitFun and help more people discover it.**
 
-[Download Desktop](https://openbitfun.com/download) · [Mobile Releases](https://github.com/GCWing/OpenBitFun/releases?q=mobile-&expanded=true) · [Mini App Marketplace](https://market.openbitfun.com/miniapp/) · [Contribute](./CONTRIBUTING.md)
+[Download Desktop](https://openbitfun.com/download) · [Mobile Releases](https://github.com/GCWing/OpenBitFun/releases?q=mobile-&expanded=true) · [Mini App Marketplace](https://market.openbitfun.com/miniapp/) · [Join the community](#join-the-community) · [Contribute](./CONTRIBUTING.md)
 
 [![Website](https://img.shields.io/badge/Website-openbitfun.com-0b7285?style=flat-square)](https://openbitfun.com/)
 [![Core code: MIT](https://img.shields.io/badge/core_code-MIT-yellow?style=flat-square)](./LICENSE)
@@ -24,19 +24,19 @@ OpenBitFun is a highly customizable, open-source agent workspace that keeps work
 
 ---
 
-### OpenBitFun 1.0.0 is here
-
-OpenBitFun 1.0.0 brings a redesigned interface, four Agent Harness modes for different
-kinds of work, and major upgrades to cross-device collaboration and remote control, so
-tasks move smoothly across desktop, mobile, and browser.
-
-**Migration note:** OpenBitFun 1.0.0 is not data-compatible with legacy 0.2.x releases. To migrate legacy data,
-use the [OpenBitFun Data Migrator](src/apps/data-migrator/README.md), currently available
-for stable releases 0.2.17–0.2.19.
+<div align="center">
+  <video src="https://github.com/user-attachments/assets/ff1780fa-d248-40f1-9582-82e0de3d2f46" controls width="800"></video>
+</div>
 
 ---
 
-![The OpenBitFun desktop interface](./png/openbitfun-desktop.png)
+<p align="center">
+  <img src="./png/openbitfun-desktop.png" alt="The OpenBitFun desktop home screen" width="49%" />
+  <img src="./png/openbitfun-desktop-session.png" alt="The OpenBitFun desktop multi-agent session" width="49%" />
+  <br />
+  <img src="./png/openbitfun-desktop-settings.png" alt="The OpenBitFun desktop settings screen" width="49%" />
+  <img src="./png/openbitfun-desktop-task-board.png" alt="The OpenBitFun desktop task board" width="49%" />
+</p>
 
 ## Four modes for the way you work
 
@@ -51,22 +51,26 @@ for stable releases 0.2.17–0.2.19.
 | **Ultimate** | **Complex tasks.** Dig into demanding problems, divide the work among agents, and bring their results together. |
 | **Creative** | **Creation and customization.** Build Mini Apps or extend OpenBitFun's interface and capabilities to make the workspace your own. |
 
-## Your agent, across devices
+## Switch computers. Control from your phone.
 
-**Switch devices. Keep the task moving.** Start at your desktop, pick up the conversation on your phone, or use a browser to check progress, add instructions, and respond to approval requests. Work continues on the device running the task, wherever you connect from.
+**Switch the device, switch the entire workspace.** Choose another connected computer in the desktop app, and the interface switches to that device's sessions, workspaces, files, and task status. Move between your home computer, office computer, and server from the same app.
+
+**Your phone is a remote controller.** Send instructions, check progress, and respond to approval requests from your phone or browser. Tasks run on the selected host and keep going when you switch views or disconnect the controller.
+
+**The official Relay is ready to use; no server deployment is required.** Sign in on your devices with the same OpenBitFun account, using GitHub or an email verification code where supported. Same-network connections are also available. See the [connection FAQ](./src/apps/relay-server/FAQ.md) for login, internet access, and self-hosting requirements.
 
 **On mobile, switch between layouts for one, two, or three screens.** Focus on the conversation with a single screen, then unfold your phone to view conversations and files side by side. The interface adapts as the screen layout changes.
 
-**We're also building ways to connect from watches and glasses.** The device extension protocol lets us bring task updates and simple interactions to more wearables, extending collaboration from your desk to your wrist and beyond.
-
-![OpenBitFun across a laptop, phone, watch, and glasses](./png/openbitfun-multi-device.png)
+![Switching between connected computers and remotely controlling the selected device from a phone](./png/openbitfun-multi-device.png)
 
 <details>
 <summary>Connection and deployment details</summary>
 
-Use SSH to work on a remote host, through a jump host, or inside a container, with files, commands, and agent execution in the target environment. The desktop app and CLI share core execution capabilities; mobile clients and messaging bots offer more ways to control tasks.
+Use SSH to work on a remote host, through a jump host, or inside a container. File access, terminals, and workspace commands target that environment; the Agent Runtime stays on the OpenBitFun host. The desktop app and CLI share core execution capabilities; mobile clients and messaging bots offer more ways to control tasks.
 
-Account login, synchronization, and control between devices on the same account run through a [Relay server you deploy](./src/apps/relay-server/README.md). See [Remote Connect](./docs/interactive-capabilities/capabilities/feature.remote-connect.md) and [remote workspaces](./docs/features/remote-workspaces.md) for connection options.
+Same-account device control uses the official Relay by default. Desktop can also run a local Relay for same-network mobile control. Both paths use the online OpenBitFun identity service for sign-in; LAN mode is not an offline-login option. A private Relay requires a matching client build: see the [deployment guide](./src/apps/relay-server/README.md#for-community-developers-and-forks).
+
+Device-to-device payloads are encrypted end to end with keys generated on the devices. Sessions and files are read from the owning online device on demand; the Relay still handles account, device, and routing metadata. This does not cover traffic to model providers, messaging bots, or published Pages. See the [privacy boundaries](./src/apps/relay-server/FAQ.md#what-can-the-services-see), [Remote Connect](./docs/interactive-capabilities/capabilities/feature.remote-connect.md), and [remote workspaces](./docs/features/remote-workspaces.md).
 
 </details>
 
@@ -128,6 +132,10 @@ Share your use cases and experience, contribute agents, Skills, Mini Apps, or sk
 
 Get the Windows, macOS, or Linux package from the [official download page](https://openbitfun.com/download). Install it, configure a model, and open a workspace to get started. See the [user guide](https://playbook.openbitfun.com) for usage instructions and [download verification](./docs/verify-downloads.md) for package signature checks.
 
+**Migration note:** OpenBitFun 1.0.0 is not data-compatible with legacy 0.2.x releases. To migrate legacy data,
+use the [OpenBitFun Data Tools](src/apps/data-tools/README.md), currently available
+for stable releases 0.2.17–0.2.19.
+
 To run from source, install [Node.js](https://nodejs.org/) 22.12+, [pnpm](https://pnpm.io/) 10.15.0, the [Rust toolchain](https://rustup.rs/), and the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/). Clone the repository, then run:
 
 ```bash
@@ -140,3 +148,18 @@ Desktop development supports frontend hot reload and automatic Rust rebuilds. Se
 </details>
 
 Core code is licensed under the [MIT License](./LICENSE). Third-party dependencies and assets retain their own licenses. Thanks to the open-source authors and contributors who make this work possible. To report a vulnerability, see the [security policy](./SECURITY.md).
+
+## Join the community
+
+Scan the QR code with WeChat to add us and request to join the OpenBitFun community group.
+
+<img src="./png/openbitfun-community-wechat.png" alt="WeChat QR code for joining the OpenBitFun community" width="360" />
+
+## Star History
+
+<a href="https://www.star-history.com/?repos=gcwing%2Fopenbitfun&amp;type=date&amp;legend=top-left">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=gcwing/openbitfun&amp;type=date&amp;legend=top-left&amp;theme=dark" />
+    <img alt="OpenBitFun Star History Chart" src="https://api.star-history.com/chart?repos=gcwing/openbitfun&amp;type=date&amp;legend=top-left" />
+  </picture>
+</a>

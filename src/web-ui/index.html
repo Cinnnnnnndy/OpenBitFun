@@ -99,7 +99,12 @@
         }
         root.setAttribute('data-contrast', 'standard');
         root.setAttribute('data-density', 'compact');
-        var bg = root.style.backgroundColor || 'var(--openbitfun-color-surface-chrome)';
+        // The shell owns the window frame background when the desktop bootstrap
+        // advertises a client-side frame; painting it here would cover the
+        // transparent corners.
+        var bg = root.getAttribute('data-openbitfun-native-frame') === 'client'
+          ? 'transparent'
+          : (root.style.backgroundColor || 'var(--openbitfun-color-surface-chrome)');
         root.style.backgroundColor = bg;
         function paintBody() {
           if (document.body) document.body.style.backgroundColor = bg;
@@ -149,6 +154,25 @@
         height: 100%;
       }
 
+      /* WebKitGTK keeps the GTK frame square on Wayland, so the shell owns the
+         frame radius and stands on a transparent window. */
+      html[data-openbitfun-native-frame='client'],
+      html[data-openbitfun-native-frame='client'] body {
+        background-color: transparent;
+      }
+
+      html[data-openbitfun-native-frame='client'] #root,
+      html[data-openbitfun-native-frame='client'] #openbitfun-startup-overlay {
+        border-radius: 12px;
+      }
+
+      /* The startup overlay paints its own translucent sheet; keep the same frame
+         shape and stop it from dimming the desktop behind the window. */
+      html[data-openbitfun-native-frame='client'] .splash-screen {
+        border-radius: 12px;
+        background: var(--openbitfun-color-surface-chrome);
+      }
+
       #openbitfun-startup-overlay {
         position: fixed;
         inset: 0;
@@ -159,6 +183,21 @@
          Preserve layout so startup readiness and measurements still complete. */
       #root:has(+ #openbitfun-startup-overlay:not(.openbitfun-startup-overlay--exiting)) {
         visibility: hidden;
+      }
+
+      /* The startup mark owns the visible pixels until the handoff completes. */
+      #root:has(+ #openbitfun-startup-overlay) [data-startup-logo-target],
+      #root:has(+ #openbitfun-startup-overlay) [data-startup-reveal] {
+        opacity: 0;
+      }
+
+      #root:has(+ .openbitfun-startup-overlay--exiting) [data-startup-reveal] {
+        animation: openbitfun-startup-content-enter 0.2s ease-out both;
+      }
+
+      #root:has(+ .openbitfun-startup-overlay--handoff) [data-startup-reveal] {
+        animation-duration: 0.24s;
+        animation-delay: 0.18s;
       }
 
       .openbitfun-sr-only {
@@ -197,7 +236,23 @@
       }
 
       #openbitfun-startup-overlay.openbitfun-startup-overlay--exiting {
-        animation: openbitfun-startup-overlay-exit 0.24s ease-in-out both;
+        animation: openbitfun-startup-overlay-exit 0.2s ease-in-out both;
+      }
+
+      #openbitfun-startup-overlay.openbitfun-startup-overlay--handoff {
+        animation: none;
+      }
+
+      #openbitfun-startup-overlay.openbitfun-startup-overlay--interrupted {
+        animation: openbitfun-startup-overlay-exit 0.12s ease-out both;
+      }
+
+      .openbitfun-startup-overlay--handoff .splash-screen {
+        animation: openbitfun-startup-overlay-exit 0.32s ease-in-out both;
+      }
+
+      .openbitfun-startup-overlay--handoff .splash-screen__message {
+        animation: openbitfun-startup-overlay-exit 0.08s ease-out both;
       }
 
       .window-controls.openbitfun-startup-window-controls {
@@ -309,7 +364,18 @@
         }
       }
 
+      @keyframes openbitfun-startup-content-enter {
+        from { opacity: 0; }
+        to { opacity: 1; }
+      }
+
       @media (prefers-reduced-motion: reduce) {
+        #openbitfun-startup-overlay.openbitfun-startup-overlay--exiting,
+        #root:has(+ .openbitfun-startup-overlay--exiting) [data-startup-reveal] {
+          animation-duration: 0.12s;
+          animation-delay: 0s;
+        }
+
         .splash-screen__logo-wrap {
           animation: none;
         }
@@ -320,11 +386,13 @@
         }
       }
 
-      .openbitfun-pet-preload-body {
+      .openbitfun-pet-preload-body,
+      .openbitfun-desktop-card-preload-body {
         background: transparent !important;
       }
 
-      .openbitfun-pet-preload-body #root {
+      .openbitfun-pet-preload-body #root,
+      .openbitfun-desktop-card-preload-body #root {
         background: transparent;
       }
 
@@ -404,6 +472,7 @@
       (function () {
         var params = new URLSearchParams(window.location.search);
         var isPetWindow = params.get('openbitfunWindow') === 'agent-companion';
+        var isDesktopCardWindow = params.get('openbitfunWindow') === 'desktop-card';
         var messages = window.__OPENBITFUN_RESOLVE_BOOTSTRAP_MESSAGES__();
         var locale = window.__OPENBITFUN_RESOLVE_BOOTSTRAP_LOCALE__();
         var startupOverlay = document.getElementById('openbitfun-startup-overlay');
@@ -418,6 +487,12 @@
             var petStatus = root.querySelector('.openbitfun-sr-only');
             if (petStatus) petStatus.textContent = messages.petLoading;
           }
+          return;
+        }
+
+        if (isDesktopCardWindow) {
+          document.body.classList.add('openbitfun-desktop-card-preload-body');
+          if (startupOverlay) startupOverlay.remove();
           return;
         }
 

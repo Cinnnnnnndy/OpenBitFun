@@ -3,11 +3,13 @@ import {
   archiveChatSession,
   createChatSession,
   deleteChatSession,
+  duplicateChatSession,
   ensureBackendSession,
   forkChatSession,
   hydrateSessionHistoryForDetail,
   pendingHistoryLoadKey,
   preloadHistoricalSessionForOpen,
+  prewarmHistoricalSession,
   reloadSessionTitle,
   retryCreateBackendSession,
   resolveAgentTypeForSessionCreation,
@@ -27,16 +29,20 @@ import {
 import type { Session } from '../../types/flow-chat';
 import type { ReviewTeamRunManifest } from '@/shared/services/reviewTeamService';
 import { workspaceManager } from '@/infrastructure/services/business/workspaceManager';
+import { notificationService } from '../../../shared/notification-system';
 
 const agentApiMocks = vi.hoisted(() => ({
   ensureCoordinatorSession: vi.fn(),
   createSession: vi.fn(),
   getAvailableModes: vi.fn(),
+  updateSessionPermissionMode: vi.fn(),
 }));
 
 const configApiMocks = vi.hoisted(() => ({
   getConfig: vi.fn(),
 }));
+const projectDefaults = vi.hoisted(() => ({ read: vi.fn(async (_id: string) => ({ supported: true, defaults: {} as { mode?: string } })) }));
+vi.mock('@/infrastructure/config/services/ProjectDefaultsService', () => ({ readProjectDefaults: projectDefaults.read }));
 
 const configManagerMocks = vi.hoisted(() => ({
   getConfigs: vi.fn(),
@@ -45,6 +51,7 @@ const configManagerMocks = vi.hoisted(() => ({
 const sessionApiMocks = vi.hoisted(() => ({
   archiveSession: vi.fn(),
   forkSession: vi.fn(),
+  duplicateSession: vi.fn(),
   loadSessionMetadata: vi.fn(),
 }));
 
@@ -74,7 +81,11 @@ vi.mock('@/infrastructure/api/service-api/ConfigAPI', () => ({
 }));
 
 vi.mock('@/infrastructure/config/services/ConfigManager', () => ({
-  configManager: configManagerMocks,
+  configManager: { ...configManagerMocks, getOptionalConfig: async (path: string) => {
+    const values = await configManagerMocks.getConfigs([path]);
+    if (path === 'ai.agent_model_defaults') return values?.[path] ?? { mode: 'primary' };
+    return values?.[path] ?? { mode: { kind: 'model', model_ref: 'primary' }, subagents: { default: { kind: 'model', model_ref: 'fast' }, builtin: {}, fork: { kind: 'inherit' } } };
+  } },
 }));
 
 vi.mock('@/infrastructure/api/service-api/SessionAPI', () => ({
@@ -222,6 +233,8 @@ function createContext(
       state = { ...state, activeSessionId: sessionId };
     }),
     loadSessionHistory: vi.fn(),
+    ensureSessionFullHistory: vi.fn(async () => true),
+    ensurePersistedSessionMetadata: vi.fn(async () => true),
     getCascadeSessionIds: vi.fn((sessionId: string) => (
       options?.getCascadeSessionIdsImpl?.(sessionId) ?? [sessionId]
     )),
@@ -285,6 +298,7 @@ function createContext(
 }
 
 describe('resolveAgentTypeForSessionCreation', () => {
+  beforeEach(() => { projectDefaults.read.mockResolvedValue({ supported: true, defaults: {} }); });
   afterEach(() => {
     vi.clearAllMocks();
   });
@@ -300,6 +314,30 @@ describe('resolveAgentTypeForSessionCreation', () => {
     ]);
 
     await expect(resolveAgentTypeForSessionCreation(undefined, null)).resolves.toBe('PlannerPlus');
+  });
+
+  it('uses the owning project mode before the global preference and preserves explicit choices', async () => {
+    projectDefaults.read.mockResolvedValue({ supported: true, defaults: { mode: 'Ultimate' } });
+    agentApiMocks.getAvailableModes.mockResolvedValue([{ id: 'Standard' }, { id: 'Ultimate' }]);
+    const workspace = { id: 'ssh-project', workspaceKind: 'remote' } as any;
+    await expect(resolveAgentTypeForSessionCreation(undefined, workspace)).resolves.toBe('Ultimate');
+    expect(projectDefaults.read).toHaveBeenCalledWith('ssh-project');
+    await expect(resolveAgentTypeForSessionCreation('Standard', workspace)).resolves.toBe('Standard');
+  });
+
+  it('issues the default-mode reads together and keeps the project mode when the global read fails', async () => {
+    const project = createDeferred<{ supported: boolean; defaults: { mode?: string } }>();
+    const reader = vi.fn(() => project.promise);
+    configApiMocks.getConfig.mockRejectedValue(new Error('preference unavailable'));
+    agentApiMocks.getAvailableModes.mockResolvedValue([{ id: 'Standard' }, { id: 'Ultimate' }]);
+    const resolved = resolveAgentTypeForSessionCreation(undefined, { id: 'project' } as any, reader);
+    await Promise.resolve();
+    expect(reader).toHaveBeenCalledTimes(1);
+    expect(configApiMocks.getConfig).toHaveBeenCalledTimes(1);
+    expect(agentApiMocks.getAvailableModes).toHaveBeenCalledTimes(1);
+    expect(projectDefaults.read).not.toHaveBeenCalled();
+    project.resolve({ supported: true, defaults: { mode: 'Ultimate' } });
+    await expect(resolved).resolves.toBe('Ultimate');
   });
 
   it('does not override any explicit mode, including the Standard Harness id', async () => {
@@ -443,11 +481,11 @@ describe('createChatSession', () => {
 
   it('projects the runtime-resolved model for a newly created session', async () => {
     configManagerMocks.getConfigs.mockImplementation(async (paths: string[]) => {
-      if (paths.length === 1 && paths[0] === 'ai.agent_model_defaults') {
-        return { 'ai.agent_model_defaults': { mode: 'model-b' } };
+      if (paths.length === 1 && paths[0] === 'ai.agent_model_selections') {
+        return { 'ai.agent_model_selections': { mode: { kind: 'model', model_ref: 'model-b' }, subagents: { default: { kind: 'model', model_ref: 'fast' }, builtin: {}, fork: { kind: 'inherit' } } } };
       }
       return {
-        'ai.agent_model_defaults': { mode: 'model-b' },
+        'ai.agent_model_selections': { mode: { kind: 'model', model_ref: 'model-b' }, subagents: { default: { kind: 'model', model_ref: 'fast' }, builtin: {}, fork: { kind: 'inherit' } } },
         'ai.models': [{ id: 'model-b', enabled: true, context_window: 64000 }],
         'ai.default_models': { primary: 'model-b' },
       };
@@ -464,7 +502,7 @@ describe('createChatSession', () => {
 
     expect(agentApiMocks.createSession).toHaveBeenCalledWith(expect.objectContaining({
       config: expect.objectContaining({
-        modelName: undefined,
+        modelName: 'model-b',
       }),
     }));
     expect(flowChatStore.createSession).toHaveBeenCalledWith(
@@ -483,7 +521,7 @@ describe('createChatSession', () => {
 
   it('preserves an explicit session model instead of applying the mode default', async () => {
     configManagerMocks.getConfigs.mockResolvedValue({
-      'ai.agent_model_defaults': { mode: 'model-b' },
+      'ai.agent_model_selections': { mode: { kind: 'model', model_ref: 'model-b' }, subagents: { default: { kind: 'model', model_ref: 'fast' }, builtin: {}, fork: { kind: 'inherit' } } },
       'ai.models': [
         { id: 'model-a', enabled: true, context_window: 32000 },
         { id: 'model-b', enabled: true, context_window: 64000 },
@@ -579,8 +617,49 @@ describe('createChatSession', () => {
 });
 
 describe('forkChatSession', () => {
+  beforeEach(() => { activateSurface(LOCAL_SURFACE_ID); });
   afterEach(() => {
+    activateSurface(LOCAL_SURFACE_ID);
     vi.clearAllMocks();
+  });
+
+  it('uses the host fork mode when a legacy external source still carries primary', async () => {
+    const source = createSession({
+      sessionId: 'legacy-source', mode: 'primary', config: { agentType: 'primary', modelName: 'primary' },
+      externalHistory: { mode: 'follow' },
+    });
+    const { context, flowChatStore } = createContext(source);
+    sessionApiMocks.forkSession.mockResolvedValueOnce({ sessionId: 'branch', sessionName: 'Branch', agentType: 'Standard' });
+
+    await forkChatSession(context, source.sessionId, 'viewed-turn');
+
+    expect(flowChatStore.getState().sessions.get('branch')).toMatchObject({
+      mode: 'Standard', config: { agentType: 'Standard' },
+    });
+    expect(flowChatStore.createSession.mock.calls[0][1]).toMatchObject({ agentType: 'Standard', modelName: 'primary' });
+    expect(source.mode).toBe('primary');
+  });
+
+  it('retains the selected source mode when an older host omits the fork mode', async () => {
+    const source = createSession({ sessionId: 'source', mode: 'Minimal', config: { agentType: 'Minimal' } });
+    const { context, flowChatStore } = createContext(source);
+    sessionApiMocks.forkSession.mockResolvedValueOnce({ sessionId: 'branch', sessionName: 'Branch' });
+
+    await forkChatSession(context, source.sessionId, 'viewed-turn');
+
+    expect(flowChatStore.getState().sessions.get('branch')).toMatchObject({
+      mode: 'Minimal', config: { agentType: 'Minimal' },
+    });
+  });
+
+  it('applies a source composer permission selection only to the created native branch', async () => {
+    const source = createSession({ sessionId: 'source', externalHistory: { mode: 'follow' }, externalContinuationPermissionMode: 'auto_approve' });
+    const { context } = createContext(source);
+    sessionApiMocks.forkSession.mockResolvedValueOnce({ sessionId: 'branch', sessionName: 'Branch' });
+    await forkChatSession(context, 'source', 'viewed-turn');
+    expect(agentApiMocks.updateSessionPermissionMode).toHaveBeenCalledExactlyOnceWith({
+      sessionId: 'branch', mode: 'auto_approve', workspaceId: 'workspace-1', workspacePath: source.workspacePath,
+    });
   });
 
   it('keeps the source SSH identity through fork creation and history restore', async () => {
@@ -618,6 +697,119 @@ describe('forkChatSession', () => {
       remoteSshHost: 'source-host',
     });
     expect(flowChatStore.loadSessionHistory).toHaveBeenCalledWith('remote-fork', { deferFullHistoryUntilActive: true });
+  });
+
+  it('does not project a fork into a device selected while the host is responding', async () => {
+    const source = createSession({ sessionId: 'source' });
+    const { context, flowChatStore } = createContext(source);
+    sessionApiMocks.forkSession.mockImplementationOnce(async () => {
+      activateSurface('peer-during-fork');
+      return { sessionId: 'new-fork', sessionName: 'New fork', agentType: 'Standard' };
+    });
+    await expect(forkChatSession(context, source.sessionId, 'turn-1')).rejects.toThrow();
+    expect(flowChatStore.createSession).not.toHaveBeenCalled();
+    expect(flowChatStore.loadSessionHistory).not.toHaveBeenCalled();
+  });
+});
+
+describe('duplicateChatSession', () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('copies the source session without switching away from the active session', async () => {
+    const source = createSession({ sessionId: 'copy-source', title: 'Source' });
+    const other = createSession({ sessionId: 'other-session' });
+    const { context, flowChatStore } = createContext(source, {
+      additionalSessions: [other],
+      activeSessionId: other.sessionId,
+    });
+    sessionApiMocks.duplicateSession.mockResolvedValueOnce({
+      sessionId: 'copy-1',
+      sessionName: 'Source (1)',
+      agentType: 'Standard',
+    });
+
+    await expect(duplicateChatSession(context, source.sessionId)).resolves.toEqual({
+      sessionId: 'copy-1',
+      sessionName: 'Source (1)',
+      metadataProjected: true,
+    });
+
+    // The host resolves the copy boundary: no turn id leaves the controller.
+    expect(sessionApiMocks.duplicateSession).toHaveBeenCalledWith('copy-source', 'workspace-1');
+    // The copy is projected from its authoritative metadata record, so the
+    // navigation list can show it without the controller loading its history.
+    expect(flowChatStore.ensurePersistedSessionMetadata).toHaveBeenCalledWith('copy-1', 'workspace-1');
+    expect(flowChatStore.loadSessionHistory).not.toHaveBeenCalled();
+    // Delete/archive do not move the user either: the copy must not activate.
+    expect(flowChatStore.switchSession).not.toHaveBeenCalled();
+    expect(flowChatStore.getState().activeSessionId).toBe('other-session');
+    expect(flowChatStore.getState().sessions.has('copy-source')).toBe(true);
+  });
+
+  it.each(['missing', 'timeout'])('preserves copy success after a metadata %s', async failure => {
+    const source = createSession({ sessionId: 'copy-source', persistedTurnCount: 3 });
+    const { context, flowChatStore } = createContext(source);
+    sessionApiMocks.duplicateSession.mockResolvedValueOnce({
+      sessionId: 'copy-1', sessionName: 'Source (1)', agentType: 'Standard',
+    });
+    if (failure === 'missing') {
+      flowChatStore.ensurePersistedSessionMetadata.mockResolvedValueOnce(false);
+    } else {
+      flowChatStore.ensurePersistedSessionMetadata.mockRejectedValueOnce(new Error('metadata timed out'));
+    }
+    await expect(duplicateChatSession(context, source.sessionId)).resolves.toEqual({
+      sessionId: 'copy-1', sessionName: 'Source (1)', metadataProjected: false,
+    });
+    expect(sessionApiMocks.duplicateSession).toHaveBeenCalledTimes(1);
+    expect(flowChatStore.switchSession).not.toHaveBeenCalled();
+  });
+
+  it('does not read copied metadata on a device selected after the copy started', async () => {
+    const source = createSession({ sessionId: 'copy-source' });
+    const { context, flowChatStore } = createContext(source);
+    const pending = createDeferred<{ sessionId: string; sessionName: string; agentType: string }>();
+    sessionApiMocks.duplicateSession.mockReturnValueOnce(pending.promise);
+    const copy = duplicateChatSession(context, source.sessionId);
+    activateSurface('peer-other');
+    pending.resolve({ sessionId: 'copy-1', sessionName: 'Source (1)', agentType: 'Standard' });
+    await expect(copy).rejects.toMatchObject({ name: 'SurfaceChangedError' });
+    expect(flowChatStore.ensurePersistedSessionMetadata).not.toHaveBeenCalled();
+    activateSurface(LOCAL_SURFACE_ID);
+  });
+
+  it.each([
+    { historyState: 'new' as const },
+    { persistedTurnCount: 0 },
+  ])('rejects a known empty session before sending the copy mutation', async overrides => {
+    const source = createSession({ sessionId: 'copy-source', ...overrides });
+    const { context } = createContext(source);
+    await expect(duplicateChatSession(context, source.sessionId))
+      .rejects.toThrow('common:nav.sessions.duplicateEmpty');
+    expect(sessionApiMocks.duplicateSession).not.toHaveBeenCalled();
+  });
+
+  it('refuses a detached dispatch session before asking the host', async () => {
+    const dispatched = createSession({
+      sessionId: 'dispatch-source',
+      config: { agentType: 'Standard', dispatchJobId: 'job-1' },
+    });
+    const { context } = createContext(dispatched);
+
+    await expect(duplicateChatSession(context, dispatched.sessionId))
+      .rejects.toThrow('Copying a detached dispatch session is not supported');
+
+    expect(sessionApiMocks.duplicateSession).not.toHaveBeenCalled();
+  });
+
+  it('reports a missing session instead of calling the host', async () => {
+    const { context } = createContext(createSession({ sessionId: 'copy-source' }));
+
+    await expect(duplicateChatSession(context, 'missing-session'))
+      .rejects.toThrow('Session does not exist: missing-session');
+
+    expect(sessionApiMocks.duplicateSession).not.toHaveBeenCalled();
   });
 });
 
@@ -671,6 +863,45 @@ describe('SessionModule historical session coordination', () => {
     clearHistorySessionOpenTransition();
     vi.useRealTimers();
     vi.clearAllMocks();
+  });
+
+  it('refreshes a ready source once per open and does not touch, fork or periodically reload it', async () => {
+    const source = createSession({ isHistorical: false, historyState: 'ready', externalHistory: { mode: 'follow' } });
+    const { context, flowChatStore } = createContext(source);
+    await switchChatSession(context, source.sessionId);
+    expect(flowChatStore.loadSessionHistory).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(flowChatStore.loadSessionHistory).toHaveBeenCalledTimes(1);
+    expect(persistenceMocks.touchSessionActivity).not.toHaveBeenCalled();
+    expect(sessionApiMocks.forkSession).not.toHaveBeenCalled();
+    expect(agentApiMocks.ensureCoordinatorSession).not.toHaveBeenCalled();
+    await switchChatSession(context, source.sessionId);
+    expect(flowChatStore.loadSessionHistory).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not preload an unopened source even when another history read is pending', async () => {
+    const source = createSession({ externalHistory: { mode: 'follow' } });
+    const { context, flowChatStore } = createContext(source);
+    context.pendingHistoryLoads.set(pendingHistoryLoadKey('other'), new Promise(() => {}));
+    preloadHistoricalSessionForOpen(context, source.sessionId);
+    expect(flowChatStore.loadSessionHistory).not.toHaveBeenCalled();
+  });
+
+  it('retains an unreadable source and exposes its unavailable state after the first open fails', async () => {
+    const source = createSession({ externalHistory: { mode: 'follow' } });
+    const { context, flowChatStore } = createContext(source);
+    const failure = new Error('Original source is unavailable');
+    flowChatStore.loadSessionHistory.mockRejectedValueOnce(failure);
+    flowChatStore.ensurePersistedSessionMetadata.mockImplementationOnce(async () => {
+      source.externalHistory!.sourceStatus = 'unavailable';
+      return true;
+    });
+    await switchChatSession(context, source.sessionId);
+    expect(flowChatStore.getState().activeSessionId).toBe(source.sessionId);
+    expect(flowChatStore.ensurePersistedSessionMetadata).toHaveBeenCalledWith(source.sessionId, 'workspace-1', true);
+    expect(flowChatStore.getState().sessions.get(source.sessionId)?.externalHistory?.sourceStatus).toBe('unavailable');
+    expect(notificationService.warning).toHaveBeenCalledWith('flow-chat:externalHistory.unavailableWithoutCache', { duration: 3000 });
+    expect(flowChatStore.loadSessionHistory).toHaveBeenCalledTimes(1);
   });
 
   it('hydrates a metadata-only historical session before switching to avoid an empty loading page', async () => {
@@ -794,6 +1025,50 @@ describe('SessionModule historical session coordination', () => {
     await load.promise;
   });
 
+  it('completes a ready partial session after switching back to its in-memory tail', async () => {
+    const session = createSession({
+      isHistorical: false,
+      historyState: 'ready',
+      isPartial: true,
+      dialogTurns: [{
+        id: 'turn-tail',
+        userMessage: { id: 'user-turn-tail', content: 'Latest prompt', timestamp: 1 },
+        modelRounds: [{ items: [{ type: 'text', text: 'Latest answer' }] }],
+        status: 'completed',
+      } as any],
+      loadedTurnCount: 1,
+      totalTurnCount: 20,
+    });
+    const { context, flowChatStore } = createContext(session, { activeSessionId: 'other-session' });
+    persistenceMocks.touchSessionActivity.mockResolvedValue(undefined);
+
+    await switchChatSession(context, session.sessionId);
+
+    expect(flowChatStore.switchSession).toHaveBeenCalledWith(session.sessionId);
+    expect(flowChatStore.ensureSessionFullHistory).toHaveBeenCalledWith(
+      session.sessionId,
+      'session-switch',
+    );
+  });
+
+  it.each(['local', 'peer'])('retains a paged %s tail on reopen without downloading the whole conversation', async surface => {
+    activateSurface(surface);
+    const session = createSession({
+      isHistorical: false, historyState: 'ready', isPartial: true,
+      dialogTurns: [{ id: 'tail', userMessage: { id: 'user-tail', content: 'Latest', timestamp: 1 },
+        modelRounds: [{ items: [{ type: 'text', text: 'Answer' }] }], status: 'completed' } as any],
+      loadedTurnCount: 1, totalTurnCount: 100,
+    });
+    if (surface === 'local') session.turnCatalog = {
+      sessionId: session.sessionId, revision: 'catalog', totalTurnCount: 100, entries: [],
+    } as any;
+    const { context, flowChatStore } = createContext(session, { activeSessionId: 'other' });
+    await switchChatSession(context, session.sessionId);
+    expect(flowChatStore.switchSession).toHaveBeenCalledWith(session.sessionId);
+    expect(flowChatStore.ensureSessionFullHistory).not.toHaveBeenCalled();
+    expect(flowChatStore.loadSessionHistory).not.toHaveBeenCalled();
+  });
+
   it('touches only the latest active session during rapid switches', async () => {
     const firstSession = createSession({
       sessionId: 'history-1',
@@ -901,6 +1176,23 @@ describe('SessionModule historical session coordination', () => {
 
     load.resolve();
     await load.promise;
+  });
+
+  it('upgrades an active-only preload when a local prewarm must retain its inactive tail', async () => {
+    const firstLoad = createDeferred<void>();
+    const { context, flowChatStore } = createContext(createSession());
+    context.pendingHistoryLoads.set(pendingHistoryLoadKey('history-other'), Promise.resolve());
+    flowChatStore.loadSessionHistory.mockReturnValueOnce(firstLoad.promise);
+    preloadHistoricalSessionForOpen(context, 'history-1');
+    prewarmHistoricalSession(context, 'history-1');
+    expect(flowChatStore.loadSessionHistory).toHaveBeenCalledTimes(1);
+    firstLoad.resolve();
+    await firstLoad.promise;
+    await vi.waitFor(() => expect(flowChatStore.loadSessionHistory).toHaveBeenCalledTimes(2));
+    expect(flowChatStore.loadSessionHistory).toHaveBeenLastCalledWith('history-1', {
+      includeInternal: undefined, deferFullHistoryUntilActive: true, retainInactiveTail: true,
+    });
+    expect(flowChatStore.switchSession).not.toHaveBeenCalled();
   });
 
   it('deduplicates concurrent detail hydration and includes internal child output', async () => {
@@ -1391,6 +1683,42 @@ describe('SessionModule historical session coordination', () => {
     expect(persistenceMocks.cleanupSessionBuffers).toHaveBeenCalledWith(context, 'active-1');
   });
 
+  it.each(['source', 'branch'])('archives only the selected %s and keeps the independent conversation active', async target => {
+    const source = createSession({ sessionId: 'source', externalHistory: { mode: 'follow' } });
+    const branch = createSession({ sessionId: 'branch', externalBranchOf: { sessionId: 'source', ecosystemId: 'codex', sourceSessionId: 'original', contentVersion: 'viewed' } });
+    const other = target === 'source' ? branch : source;
+    const { context, flowChatStore } = createContext(source, { additionalSessions: [branch], activeSessionId: other.sessionId });
+    await archiveChatSession(context, target);
+    expect(sessionApiMocks.archiveSession).toHaveBeenCalledExactlyOnceWith(target, 'workspace-1');
+    expect(flowChatStore.getState().sessions.get(other.sessionId)).toBe(other);
+    expect(flowChatStore.getState().activeSessionId).toBe(other.sessionId);
+    expect(flowChatStore.getState().sessions.has(target)).toBe(false);
+  });
+
+  it('retains the session and its runtime state when archive fails', async () => {
+    const session = createSession();
+    const { context, flowChatStore, processingManager } = createContext(session, { activeSessionId: session.sessionId });
+    sessionApiMocks.archiveSession.mockRejectedValueOnce(new Error('Host offline'));
+    await expect(archiveChatSession(context, session.sessionId)).rejects.toThrow('Host offline');
+    expect(flowChatStore.getState().sessions.get(session.sessionId)).toBe(session);
+    expect(flowChatStore.getState().activeSessionId).toBe(session.sessionId);
+    expect(flowChatStore.removeSession).not.toHaveBeenCalled();
+    expect(processingManager.clearSessionStatus).not.toHaveBeenCalled();
+  });
+
+  it('abandons archive cleanup after a device change', async () => {
+    const session = createSession();
+    const { context, flowChatStore, processingManager } = createContext(session);
+    const pending = createDeferred<void>();
+    sessionApiMocks.archiveSession.mockReturnValueOnce(pending.promise);
+    const archive = archiveChatSession(context, session.sessionId);
+    activateSurface('peer-archive-test');
+    pending.resolve();
+    await expect(archive).rejects.toMatchObject({ isSurfaceChangedError: true });
+    expect(flowChatStore.removeSession).not.toHaveBeenCalled();
+    expect(processingManager.clearSessionStatus).not.toHaveBeenCalled();
+  });
+
   it('reuses pending historical hydration before ensuring the backend session', async () => {
     const pendingHydrate = createDeferred<void>();
     const { context, flowChatStore } = createContext(createSession());
@@ -1578,13 +1906,14 @@ describe('SessionModule historical session coordination', () => {
     });
   });
 
-  it('restores view-restored subagent sessions as internal coordinator sessions before send', async () => {
+  it.each(['subagent', 'miniapp'] as const)('restores view-restored %s sessions as internal coordinator sessions before send', async sessionKind => {
     const { context } = createContext(createSession({
       isHistorical: false,
       historyState: 'ready',
       contextRestoreState: 'pending',
       dialogTurns: [{ id: 'turn-1' } as any],
-      sessionKind: 'subagent',
+      sessionKind,
+      agentBackedTransient: sessionKind === 'miniapp',
       parentSessionId: 'parent-1',
       subagentType: 'GeneralPurpose',
     } as any));

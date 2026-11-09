@@ -37,6 +37,7 @@ async fn build_transient_client(
     );
 
     let mut ai_config: openbitfun_core::util::types::AIConfig = model_config
+        .clone()
         .try_into()
         .map_err(|e| format!("Failed to convert configuration: {}", e))?;
     let skip_ssl_verify = ai_config.skip_ssl_verify;
@@ -60,7 +61,7 @@ async fn build_transient_client(
     .await
     .map_err(|e| format!("Failed to resolve subscription auth: {}", e))?;
 
-    Ok(
+    let client =
         openbitfun_core::infrastructure::ai::client_factory::apply_subscription_request_profile(
             &auth,
             openbitfun_core::infrastructure::ai::AIClient::new_with_runtime_options(
@@ -68,7 +69,13 @@ async fn build_transient_client(
                 proxy_config,
                 stream_options,
             ),
-        ),
+        );
+    Ok(
+        openbitfun_core::infrastructure::ai::client_factory::apply_model_default_reasoning(
+            client,
+            &model_config,
+        )
+        .await,
     )
 }
 
@@ -113,6 +120,11 @@ pub(crate) async fn test_ai_config_connection(args: &Value) -> Result<Value, Str
     let config: AIModelConfig =
         serde_json::from_value(request.get("config").cloned().ok_or("Missing config")?)
             .map_err(|error| format!("Invalid model configuration: {error}"))?;
+    if let Some(result) = openbitfun_core::agentic::execution::round_model_routing::configuration::test_configured_router_connection(&config)
+        .await.map_err(|error| error.to_string())?
+    {
+        return serde_json::to_value(result).map_err(|error| error.to_string());
+    }
     let image_input = config
         .capabilities
         .iter()
@@ -144,6 +156,34 @@ mod tests {
     use super::*;
     use openbitfun_core::service::config::{types::AIModelConfig, GlobalConfig};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    #[tokio::test]
+    async fn unsaved_connection_probe_client_keeps_the_model_reasoning_default() {
+        let model = AIModelConfig {
+            id: "unregistered-draft".into(),
+            provider: "openai".into(),
+            model_name: "unsaved-reasoning-model".into(),
+            base_url: "http://127.0.0.1:1/v1".into(),
+            reasoning: Some(openbitfun_core_types::ReasoningConfig {
+                default_preset: Some("medium".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let original = serde_json::to_value(&model).unwrap();
+        let client = build_transient_client(model.clone(), &GlobalConfig::default())
+            .await
+            .unwrap();
+        assert_eq!(client.config.model, "unsaved-reasoning-model");
+        assert_eq!(
+            client
+                .model_reasoning_preset()
+                .map(|preset| preset.id.as_str()),
+            Some("medium")
+        );
+        assert!(client.selected_reasoning_preset().is_none());
+        assert_eq!(serde_json::to_value(&model).unwrap(), original);
+    }
 
     #[tokio::test]
     async fn unsaved_openai_compatible_provider_discovers_model_ids_on_host() {
@@ -186,4 +226,21 @@ mod tests {
         assert_eq!(wire[0]["id"], "fixture-chat");
         server.await.unwrap();
     }
+}
+
+/// Discovery uses this host's network and proxy configuration.
+pub(crate) async fn probe_magpie_gateway(args: &Value) -> Result<Value, String> {
+    let request = serde_json::from_value(crate::peer_host::args::request_value(args).clone())
+        .map_err(|_| "Invalid Magpie discovery request".to_string())?;
+    let config: openbitfun_core::service::config::GlobalConfig =
+        openbitfun_core::service::config::get_global_config_service()
+            .await
+            .map_err(|_| "Failed to read proxy configuration".to_string())?
+            .get_config(None)
+            .await
+            .map_err(|_| "Failed to read proxy configuration".to_string())?;
+    serde_json::to_value(
+        openbitfun_core::infrastructure::ai::magpie::probe(request, Some(config.ai.proxy)).await,
+    )
+    .map_err(|error| error.to_string())
 }

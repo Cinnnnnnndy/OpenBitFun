@@ -219,6 +219,43 @@ Usage notes:
         })
     }
 
+    fn output_schema(&self) -> Value {
+        json!({
+            "oneOf": [
+                {
+                    "type": "object",
+                    "properties": {
+                        "questions": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "question": {"type": "string"},
+                                    "header": {"type": "string"}
+                                },
+                                "required": ["question", "header"],
+                                "additionalProperties": false
+                            }
+                        },
+                        "answers": {"type": "object"},
+                        "status": {"const": "answered"}
+                    },
+                    "required": ["questions", "answers", "status"],
+                    "additionalProperties": false
+                },
+                {
+                    "type": "object",
+                    "properties": {
+                        "questions_count": {"type": "integer"},
+                        "status": {"enum": ["cancelled", "timeout"]}
+                    },
+                    "required": ["questions_count", "status"],
+                    "additionalProperties": false
+                }
+            ]
+        })
+    }
+
     fn is_readonly(&self) -> bool {
         true
     }
@@ -398,6 +435,7 @@ mod tests {
             workspace: None,
             loaded_deferred_tool_specs: Vec::new(),
             primary_model_facts: tool_runtime::context::PrimaryModelFacts::default(),
+            model_client: None,
             custom_data,
             computer_use_host: None,
             runtime_tool_restrictions: Default::default(),

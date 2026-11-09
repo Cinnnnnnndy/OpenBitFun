@@ -19,7 +19,6 @@ pub mod execution;
 pub mod tools;
 
 // Coordination module
-pub mod context_profile;
 pub mod coordination;
 pub mod deep_review;
 pub mod deep_review_policy;
@@ -33,6 +32,8 @@ pub mod round_preempt;
 
 // Image analysis module
 pub mod image_analysis;
+#[cfg(feature = "tools-image-generation")]
+pub mod image_generation;
 pub(crate) mod keyed_lock;
 pub mod memories;
 pub(crate) mod permission_policy;
@@ -55,7 +56,6 @@ mod util;
 pub mod insights;
 
 pub use agents::*;
-pub use context_profile::*;
 pub use coordination::*;
 pub use core::*;
 pub use events::{queue, router, types as event_types};

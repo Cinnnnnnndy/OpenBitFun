@@ -1,3 +1,4 @@
+import type { SessionLastTurn } from '@/shared/types/session-history';
 import { requireSessionOwningWorkspaceId } from '../../utils/sessionOrdering';
 /**
  * Persistence module
@@ -6,7 +7,7 @@ import { requireSessionOwningWorkspaceId } from '../../utils/sessionOrdering';
 
 import { createLogger } from '@/shared/utils/logger';
 import type { UiSessionMetadataField } from '@/infrastructure/api/service-api/SessionAPI';
-import { getActiveSurfaceScope } from '@/infrastructure/peer-device/deviceSurface';
+import { getActiveSurfaceScope, isLocalSurface } from '@/infrastructure/peer-device/deviceSurface';
 import type { FlowChatContext, DialogTurn } from './types';
 import { buildSessionMetadata } from '../../utils/sessionMetadata';
 import { settleInterruptedDialogTurn } from '../../utils/dialogTurnStability';
@@ -16,6 +17,7 @@ import {
 } from '../../utils/toolInvocationIdentity';
 import { resolveSessionDriverId } from '../../session-drivers/resolve';
 import { resolveStorageTurnIndex } from '../../utils/flowChatTurnIdentity';
+import { sessionActivityStore } from '../../store/sessionActivityStore';
 
 const log = createLogger('PersistenceModule');
 const COALESCED_IMMEDIATE_SAVE_DELAY_MS = 500;
@@ -61,27 +63,34 @@ function clearSaveTimer(context: FlowChatContext, key: string): void {
 async function runSerialDialogTurnSave(
   context: FlowChatContext,
   sessionId: string,
-  turnId: string
+  turnId: string,
+  strict = false
 ): Promise<void> {
+  const scope = getActiveSurfaceScope();
   const key = `${sessionId}:${turnId}`;
   const existingTask = context.turnSaveInFlight.get(key);
   if (existingTask) {
     context.turnSavePending.add(key);
-    await existingTask;
+    await existingTask.catch(error => { if (strict) throw error; });
+    if (strict) scope.assertCurrent();
+    if (strict) await runSerialDialogTurnSave(context, sessionId, turnId, true);
     return;
   }
 
-  const task = (async () => {
+  const task = Promise.resolve().then(async () => {
     try {
       do {
         context.turnSavePending.delete(key);
-        await performSaveDialogTurnToDisk(context, sessionId, turnId);
+        if (strict) scope.assertCurrent();
+        await performSaveDialogTurnToDisk(context, sessionId, turnId, strict);
       } while (context.turnSavePending.has(key));
     } finally {
-      context.turnSaveInFlight.delete(key);
-      context.turnSavePending.delete(key);
+      if (context.turnSaveInFlight.get(key) === task) {
+        context.turnSaveInFlight.delete(key);
+        context.turnSavePending.delete(key);
+      }
     }
-  })();
+  });
 
   context.turnSaveInFlight.set(key, task);
   await task;
@@ -280,30 +289,44 @@ export async function saveDialogTurnToDisk(
   await runSerialDialogTurnSave(context, sessionId, turnId);
 }
 
+/** Await a real durable write; unsupported owners and IO failures reject. */
+export async function saveDialogTurnConfirmed(context: FlowChatContext, sessionId: string, turnId: string): Promise<void> {
+  clearSaveTimer(context, sessionId + ':' + turnId);
+  await runSerialDialogTurnSave(context, sessionId, turnId, true);
+}
+
 async function performSaveDialogTurnToDisk(
   context: FlowChatContext,
   sessionId: string,
-  turnId: string
+  turnId: string,
+  strict = false
 ): Promise<void> {
+  const scope = getActiveSurfaceScope();
+  const skip = (reason: string) => { if (strict) throw new Error(reason); };
   try {
     const { sessionAPI } = await import('@/infrastructure/api/service-api/SessionAPI');
 
+    scope.assertCurrent();
     const session = context.flowChatStore.getState().sessions.get(sessionId);
     if (!session) {
+      skip('GenUI session is unavailable');
       log.debug('Session not found, skipping save', { sessionId, turnId });
       return;
     }
     if (isTransientSession(session) || isObserverOnlyDispatchSession(sessionId, session)) {
+      skip('This session does not support controller-owned state persistence');
       return;
     }
 
     
     const dialogTurn = session.dialogTurns.find(turn => turn.id === turnId);
     if (!dialogTurn) {
+      skip('GenUI source turn is unavailable');
       log.debug('Dialog turn not found, skipping save', { sessionId, turnId });
       return;
     }
     if (dialogTurn.recovery) {
+      skip('Runtime-owned recovered turns do not support GenUI state updates');
       // The Runtime owns the durable snapshot and generation CAS for an
       // interrupted/recovered turn. A frontend whole-turn save can otherwise
       // overwrite newly appended rounds or restore stale recovery metadata.
@@ -318,6 +341,7 @@ async function performSaveDialogTurnToDisk(
 
     const turnIndex = resolveStorageTurnIndex(session, dialogTurn);
     if (turnIndex === undefined) {
+      skip('GenUI source turn has no durable storage identity');
       context.deferredStorageIdentitySaves?.add(`${sessionId}:${turnId}`);
       log.debug('Dialog turn has no storage identity, deferring save', { sessionId, turnId });
       return;
@@ -327,10 +351,13 @@ async function performSaveDialogTurnToDisk(
       turnData,
       requireSessionOwningWorkspaceId(session));
     
+    scope.assertCurrent();
     await updateSessionMetadata(context, sessionId);
+    scope.assertCurrent();
     
   } catch (error) {
     log.error('Failed to save dialog turn', { sessionId, turnId, error });
+    if (strict) throw error;
   }
 }
 
@@ -437,6 +464,9 @@ export function convertDialogTurnToBackendFormat(dialogTurn: DialogTurn, turnInd
         roundGroupId: round.roundGroupId,
         timestamp: round.startTime,
         renderHints: round.renderHints,
+        modelConfigId: round.modelConfigId,
+        effectiveModelName: round.effectiveModelName,
+        routing: round.routing,
         textItems: round.items
           .map((item, index) => ({ item, index }))
           .filter(({ item }) => item.type === 'text')
@@ -509,6 +539,11 @@ export function convertDialogTurnToBackendFormat(dialogTurn: DialogTurn, turnInd
           }),
         startTime: round.startTime,
         endTime: round.endTime,
+        durationMs: round.durationMs,
+        firstChunkMs: round.firstChunkMs,
+        firstVisibleOutputMs: round.firstVisibleOutputMs,
+        streamDurationMs: round.streamDurationMs,
+        ttftMs: round.ttftMs,
         attemptCount: round.attemptCount,
         attemptDiagnostics: round.attemptDiagnostics,
         status: round.status || 'completed',
@@ -548,8 +583,12 @@ export async function updateSessionMetadata(
   context: FlowChatContext,
   sessionId: string,
   fields?: UiSessionMetadataField[],
+  options?: { unreadReceipt?: SessionLastTurn },
 ): Promise<void> {
   const scope = getActiveSurfaceScope();
+  // Runtime checkpoints already update host activity and counts. A peer
+  // controller writes presentation metadata only for an explicit UI change.
+  if (!fields && !isLocalSurface(scope.surfaceId)) return;
   try {
     const { sessionAPI } = await import('@/infrastructure/api/service-api/SessionAPI');
     if (!scope.isCurrent()) return;
@@ -572,6 +611,19 @@ export async function updateSessionMetadata(
     if (!scope.isCurrent()) return;
 
     const metadata = buildSessionMetadata(session, existingMetadata);
+    if (fields?.includes('unreadCompletion')) {
+      const activity = sessionActivityStore.get(sessionId)?.summary;
+      // lastTurn is a receipt guard in a UI patch, not a write to the host's
+      // execution summary. A newer quiet run must not change its target.
+      // The host accepts an acknowledgement only for its own record of the
+      // result, so that receipt wins over one rebuilt from (possibly unloaded)
+      // turns.
+      const receipt = options?.unreadReceipt ?? activity?.unreadTurn;
+      if (receipt) {
+        metadata.lastTurn = receipt;
+        metadata.customMetadata = { ...(metadata.customMetadata ?? {}), unreadCompletionTarget: receipt };
+      }
+    }
 
     await sessionAPI.saveSessionMetadata(
       metadata,

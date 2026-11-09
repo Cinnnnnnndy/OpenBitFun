@@ -6,8 +6,6 @@
 
 #[cfg(feature = "workspace-runtime")]
 pub(crate) mod bootstrap; // Workspace persona bootstrap helpers
-#[cfg(feature = "canvas-runtime")]
-pub mod canvas; // Canvas service compatibility facade
 pub mod config; // Config management
 #[cfg(feature = "agent-runtime")]
 pub(crate) mod coordination_persistence;
@@ -66,8 +64,6 @@ pub use terminal_core as terminal;
 // Re-export main components.
 #[cfg(feature = "workspace-runtime")]
 pub use bootstrap::reset_workspace_persona_files_to_default;
-#[cfg(feature = "canvas-runtime")]
-pub use canvas::{CanvasMemoryStore, CanvasService};
 pub use config::{ConfigManager, ConfigProvider, ConfigService};
 #[cfg(all(feature = "agent-runtime", feature = "scheduled-jobs"))]
 pub use cron::{
@@ -80,9 +76,10 @@ pub use diff::{
 };
 #[cfg(feature = "file-watch")]
 pub use file_watch::{
-    get_global_file_watch_service, get_watched_paths, initialize_file_watch_service,
-    start_file_watch, stop_file_watch, FileWatchEvent, FileWatchEventKind, FileWatchService,
-    FileWatcherConfig,
+    get_file_watch_status, get_global_file_watch_service, get_watched_paths,
+    initialize_file_watch_service, retry_file_watch, start_file_watch, stop_file_watch,
+    FileWatchEvent, FileWatchEventKind, FileWatchFailure, FileWatchFailureCode, FileWatchService,
+    FileWatchStatus, FileWatcherConfig, FILE_WATCH_STATUS_CHANGED_EVENT,
 };
 #[cfg(feature = "filesystem")]
 pub use filesystem::{DirectoryStats, FileSystemService, FileSystemServiceFactory};

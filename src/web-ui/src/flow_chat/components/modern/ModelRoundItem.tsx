@@ -50,7 +50,6 @@ import type { TranscriptExportScope } from '../../utils/dialogTranscriptExport';
 import { buildTranscriptExportLabels } from '../../utils/transcriptExportLabels';
 import { getAppearanceOverlayHost } from '@/infrastructure/appearance/runtime/AppearanceOverlayHost';
 import { useAnchoredPopoverPosition } from '@/shared/utils/useAnchoredPopoverPosition';
-import { canvasArtifactReferenceFromToolItem } from '../../utils/canvasArtifactPresentation';
 import { areModelRoundItemPropsEqual, type ModelRoundItemProps } from './modelRoundItemMemo';
 import './ModelRoundItem.scss';
 
@@ -371,8 +370,9 @@ export const ModelRoundItem = React.memo<ModelRoundItemProps>(
     turnStartedAt,
     turnEndedAt,
     turnDurationMs,
+    turnOutputDurationMs,
+    turnTtftMs,
     turnTokenUsage,
-    canvasArtifactItems = [],
     expandedThinkingItemIds = [],
   }) => {
     const { t } = useTranslation('flow-chat');
@@ -392,7 +392,7 @@ export const ModelRoundItem = React.memo<ModelRoundItemProps>(
       open: isCopyMenuOpen,
       anchorRef: copyButtonRef,
       popoverRef: copyMenuRef,
-      preferredPlacement: 'top',
+      preferredPlacement: 'bottom',
       alignment: 'end',
       gap: 4,
     });
@@ -470,16 +470,13 @@ export const ModelRoundItem = React.memo<ModelRoundItemProps>(
     const disableExploreGrouping = isModelRoundGroupingDisabled(round);
     const groupedItems = useMemo(() => {
       if (projectedGroups) return projectedGroups;
-      const visibleItems = isTurnComplete
-        ? sortedItems.filter(item => !canvasArtifactReferenceFromToolItem(item))
-        : sortedItems;
       return buildModelRoundItemGroups({
-        items: visibleItems,
+        items: sortedItems,
         isStreaming: round.isStreaming,
         disableExploreGrouping,
         isCollapsibleTool,
       });
-    }, [disableExploreGrouping, isTurnComplete, projectedGroups, round.isStreaming, sortedItems]);
+    }, [disableExploreGrouping, projectedGroups, round.isStreaming, sortedItems]);
 
     const groupSummary = useMemo(
       () => renderTraceEnabled ? summarizeModelRoundItemGroups(groupedItems) : null,
@@ -551,9 +548,6 @@ export const ModelRoundItem = React.memo<ModelRoundItemProps>(
     );
 
     const completedAt = turnEndedAt ?? round.endTime;
-    const usageDurationMs = turnDurationMs ??
-      (typeof turnStartedAt === 'number' && typeof completedAt === 'number'
-        ? Math.max(0, completedAt - turnStartedAt) : undefined);
     const effectiveDurationMs = turnDurationMs ??
       (typeof turnStartedAt === 'number' && typeof completedAt === 'number'
         ? Math.max(0, completedAt - turnStartedAt)
@@ -602,6 +596,12 @@ export const ModelRoundItem = React.memo<ModelRoundItemProps>(
         data-effective-model-name={round.effectiveModelName || ''}
         data-streaming={isVisuallyStreaming ? 'true' : 'false'}
       >
+        {(!blockPart || blockPart === 'header') && round.routing && <div className="model-round-item__meta" data-testid="model-round-routing">
+          <Tooltip content={t('modelSelector.routing.latency', { ms: round.routing.latencyMs })}>
+            <span>{t(round.routing.fallbackReason ? 'modelSelector.routing.fallback' : round.routing.route === 'economy'
+              ? 'modelSelector.economyModel' : 'modelSelector.primaryModel')} · {round.effectiveModelName}</span>
+          </Tooltip>
+        </div>}
         {(!blockPart || blockPart === 'header') && round.renderHints?.continuedAfterInterruption && (
           <div className="model-round-item__continuation">{t('modelRound.continued')}</div>
         )}
@@ -731,29 +731,10 @@ export const ModelRoundItem = React.memo<ModelRoundItemProps>(
           isFinalSection: isLastRound,
         })}
 
-        {canvasArtifactItems.length > 0 && (
-          <div
-            className="model-round-item__canvas-attachments"
-            data-openbitfun-product-component="model-round-item"
-            data-openbitfun-product-part="canvasAttachments"
-          >
-            {canvasArtifactItems.map((item, index) => (
-              <FlowItemRenderer
-                key={`canvas-attachment:${item.id}`}
-                item={item}
-                turnId={turnId}
-                roundId={round.id}
-                isLastItem={index === canvasArtifactItems.length - 1}
-                expandedThinkingItemIds={expandedThinkingItemIds}
-              />
-            ))}
-          </div>
-        )}
-
         {shouldReserveFooter && (
           <TurnFooter turnId={turnId} isLatestTurn={isLatestTurn} ready={shouldRevealFooter}>
             <div className="model-round-item__usage">
-              <TurnUsageMetrics usage={turnTokenUsage} durationMs={usageDurationMs} focusable={shouldRevealFooter} />
+              <TurnUsageMetrics usage={turnTokenUsage} durationMs={turnOutputDurationMs} ttftMs={turnTtftMs} focusable={shouldRevealFooter} />
             </div>
             <div className="model-round-item__completion">
               {durationMetaItem && (
@@ -806,7 +787,7 @@ export const ModelRoundItem = React.memo<ModelRoundItemProps>(
                         ref={copyMenuRef}
                         className="model-round-item__copy-menu"
                         data-testid="model-round-copy-menu"
-                        data-openbitfun-placement={copyMenuLayout?.placement ?? 'top'}
+                        data-openbitfun-placement={copyMenuLayout?.placement ?? 'bottom'}
                         style={{
                           top: `${copyMenuLayout?.top ?? 0}px`,
                           left: `${copyMenuLayout?.left ?? 0}px`,

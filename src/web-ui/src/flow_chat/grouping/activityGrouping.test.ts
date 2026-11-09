@@ -24,6 +24,20 @@ function groups(rows: VirtualItem[]) {
 }
 
 describe('execution activity grouping', () => {
+  it('keeps inline group identities independent of their position in a projected list', () => {
+    const first = tool('read', 'Read');
+    const second = tool('run', 'ExecCommand');
+    const row = model('round', [first, tool('boundary', 'AskUserQuestion'), second]);
+    const firstGroup = { type: 'explore' as const, items: [first], isLast: false };
+    const secondGroup = { type: 'explore' as const, items: [second], isLast: false };
+    const before = getModelRoundFlowGroups(row.data, [firstGroup])[0];
+    const after = getModelRoundFlowGroups(row.data, [secondGroup])[0];
+    expect(after.allItems).toEqual([second]);
+    expect(after.groupId).not.toBe(before.groupId);
+    expect(getModelRoundFlowGroups(row.data, [firstGroup])[0]).toBe(before);
+    expect(getModelRoundFlowGroups(row.data, [secondGroup])[0]).toBe(after);
+  });
+
   it.each(['ExecCommand', 'WriteStdin', 'ExecControl', 'Bash'])('collects %s with exploration without any mode hints', toolName => {
     for (const call of [tool('shell', toolName),
       tool('deferred', 'CallDeferredTool', { tool_name: toolName, args: {} })]) {
@@ -138,11 +152,13 @@ describe('execution activity grouping', () => {
     for (const boundary of [approval, approvalFlag,
       tool('write', 'Write'), tool('edit', 'Edit'), tool('delete', 'Delete'),
       tool('agent', 'AgentSpawn'), tool('wait', 'AgentWait'), tool('question', 'AskUserQuestion'),
-      tool('code', 'RunCode'), tool('terminal', 'ControlHub', { domain: 'terminal', action: 'kill' }),
+      tool('terminal', 'ControlHub', { domain: 'terminal', action: 'kill' }),
     ]) {
       expect(buildFlowItemGroups({ items: [tool('before'), boundary, tool('after')] }).map(group => group.type))
         .toEqual(['explore', 'critical', 'explore']);
     }
+    expect(buildFlowItemGroups({ items: [tool('before'), tool('code', 'RunCode'), tool('after')] }))
+      .toMatchObject([{ type: 'explore', items: [{ id: 'before' }, { id: 'code' }, { id: 'after' }] }]);
     expect(isShellActivity(tool('deferred', 'CallDeferredTool', { tool_name: 'ExecCommand', args: { command: 'pwd' } }))).toBe(true);
     expect(isShellActivity(approval)).toBe(false);
     expect(isShellActivity(approvalFlag)).toBe(false);

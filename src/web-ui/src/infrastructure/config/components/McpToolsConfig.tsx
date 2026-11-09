@@ -4,7 +4,7 @@
  * Uses settings/mcp-tools for page title/subtitle, settings/mcp for the MCP section.
  */
 
-import {
+import { captureConfirmationAnchor,
   Button,
   Icon,
   IconButton,
@@ -1063,13 +1063,14 @@ const McpToolsConfig: React.FC = () => {
     }
   };
 
-  const handleDeleteServer = async (server: MCPServerInfo) => {
+  const handleDeleteServer = async (server: MCPServerInfo, trigger?: HTMLElement) => {
     const capabilityEpoch = currentCapabilityEpoch();
     if (capabilityEpoch === null) return;
     const confirmed = await confirmDanger(
       tMcp('actions.delete'),
       tMcp('messages.deleteConfirm'),
       {
+        anchor: captureConfirmationAnchor(trigger),
         confirmText: tMcp('actions.delete'),
         cancelText: tMcp('actions.cancel'),
       },
@@ -1367,7 +1368,7 @@ const McpToolsConfig: React.FC = () => {
         <Tooltip content={tMcp('actions.delete')}>
           <IconButton
             size="sm"
-            onClick={() => handleDeleteServer(server)}
+            onClick={event => handleDeleteServer(server, event.currentTarget)}
             disabled={lifecyclePending}
             data-testid="mcp-server-delete"
             aria-label={tMcp('actions.delete')}
@@ -1534,13 +1535,11 @@ const McpToolsConfig: React.FC = () => {
     <ConfigPageLayout className="openbitfun-mcp-tools" data-openbitfun-component="mcp-tools-config" data-openbitfun-part="root" data-openbitfun-view={showJsonEditor ? 'json' : 'list'}>
       <ConfigPageHeader
         title={tPage('title')}
-        subtitle={desktopConfigAvailable ? tPage('subtitle') : tMcp('subtitleReadOnly')}
       />
 
       <ConfigPageContent data-openbitfun-component="mcp-tools-config" data-openbitfun-part="content">
         <ConfigPageSection
           title={showJsonEditor ? tMcp('jsonEditor.title') : tMcp('section.serverList.title')}
-          description={showJsonEditor ? tMcp('jsonEditor.description') : tMcp('section.serverList.description')}
           extra={desktopConfigAvailable ? mcpSectionExtra : undefined}
         >
           {!desktopConfigAvailable && (

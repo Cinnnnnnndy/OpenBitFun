@@ -24,6 +24,7 @@ import type {
   SessionCascadeRemoval,
   SessionCreationSeed,
   SessionDriver,
+  CompactSessionResult,
   SessionDriverNavigationStatusSource,
   SessionDriverOwnershipSource,
   StartTurnInput,
@@ -320,6 +321,7 @@ export const dispatchSessionDriver: SessionDriver = {
   ownershipSource: dispatchOwnershipSource,
 
   async createSession(context: FlowChatContext, seed: SessionCreationSeed): Promise<string> {
+    if (seed.config.modelPoolId) throw new Error(i18nService.t('flow-chat:modelSelector.pools.surfaceUnsupported'));
     const {
       surfaceScope,
       config,
@@ -499,7 +501,7 @@ export const dispatchSessionDriver: SessionDriver = {
     return response.cancelled;
   },
 
-  async compactSession(context: FlowChatContext, sessionId: string): Promise<void> {
+  async compactSession(context: FlowChatContext, sessionId: string, turnId?: string): Promise<CompactSessionResult> {
     const session = context.flowChatStore.getState().sessions.get(sessionId);
     const jobId = session?.config.dispatchJobId;
     if (!jobId) {
@@ -521,7 +523,8 @@ export const dispatchSessionDriver: SessionDriver = {
       'compact',
       undefined,
       () =>
-        globalThis.crypto?.randomUUID?.()
+        turnId
+        ?? globalThis.crypto?.randomUUID?.()
         ?? `dispatch-compact-${Date.now()}-${Math.random().toString(36).slice(2)}`,
     );
     try {
@@ -540,6 +543,7 @@ export const dispatchSessionDriver: SessionDriver = {
       releaseSubmissionRetry(COMPACT_RETRY_SCOPE, sessionId, retry.id);
     }
     requestDispatchJobRefresh(jobId);
+    return { accepted: true, turnId: retry.id };
   },
 
   async runUsageReport(
@@ -684,6 +688,7 @@ export const dispatchSessionDriver: SessionDriver = {
       options,
     } = input;
 
+    if (readySession.config.modelPoolId) throw new Error(i18nService.t('flow-chat:modelSelector.pools.surfaceUnsupported'));
     const targetRequest = readySession.config.dispatchTargetRequest;
     const jobId = readySession.config.dispatchJobId;
     const approvalPolicy = readySession.config.dispatchApprovalPolicy;

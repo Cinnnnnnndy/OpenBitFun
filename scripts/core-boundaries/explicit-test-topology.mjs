@@ -164,6 +164,11 @@ export const runtimePortsIntegrationTestTargets = [
     requiredFeatures: ['script-tool-runtime'],
   },
   {
+    name: 'ptc_tool_port_contracts',
+    path: 'tests/ptc_tool_port_contracts.rs',
+    requiredFeatures: ['ptc-runtime'],
+  },
+  {
     name: 'session_store_contracts',
     path: 'tests/session_store_contracts.rs',
     requiredFeatures: ['workspace-ports'],
@@ -175,7 +180,6 @@ export const productDomainsIntegrationTestTargets = [
     name: 'product_domain_contracts',
     path: 'tests/product_domain_contracts.rs',
     leaves: [
-      'tests/product_domain_contracts/canvas_contracts.rs',
       'tests/product_domain_contracts/tool_permission_contracts.rs',
     ],
     forbidRequiredFeatures: true,

@@ -1,9 +1,13 @@
 # Mobile web remote control
 
-Open a desktop invitation and sign in with the desktop's GitHub account. The
-browser remembers this login: refreshing, opening another tab with the same
-invitation, or reopening the browser does not require another GitHub login while
+Open a host invitation and sign in with the host's OpenBitFun account, using the
+same GitHub or email-code login method. The browser remembers this login: refreshing, opening another tab with the same
+invitation, or reopening the browser does not require another sign-in while
 the Relay token remains valid.
+
+The official Relay needs no user deployment. Desktop also supports same-network
+invitations; both paths need internet access for sign-in. See the
+[Relay FAQ](../apps/relay-server/FAQ.md) for connection and privacy boundaries.
 
 ## Account and connection scope
 
@@ -88,6 +92,11 @@ the phone, or leaving the session does not stop host-side dispatch.
   still render steering inline within the active turn. The turn-scoped SDK
   steering API used by CLI/Dispatch retains its inline contract; this handoff
   belongs to host queue promotion.
+- **Reorder** uses the drag handle or Move up/down in **More**.
+  Arrow keys do not change the queue order. The host confirms the new execution order before
+  the list changes. A concurrent update cancels a drag and asks you to retry
+  against the refreshed list. Older queue hosts without `supportsReorder`
+  retain Send now and Remove, with a clear sorting-unavailable message.
 - **Remove from queue** only removes an unstarted message. It never stops the
   active turn. An operation that lost a race with dispatch is rejected.
 - A failed turn or unconsumed steering retains the message as blocked on the
@@ -109,3 +118,18 @@ Verification: `pnpm --dir src/mobile-web run test:host-queue` covers ambiguous
 retries and a real Chromium page close/reopen with IndexedDB. The browser tests
 use simulated host/relay data and disposable profiles; they are not evidence of
 a physical phone or an SSH workspace test.
+
+### Project icons
+
+Recent-project and compact sidebar rows display the owning host's project icon when it
+advertises `workspace_icon_read_v1`. Built-in project categories use the same Lucide artwork
+as Desktop, including life/hobby categories. Theme changes select the light/dark image locally;
+a legacy single image serves both themes, and a missing variant falls back to the available
+image without rewriting host metadata. Missing or unknown glyph IDs fall back to the folder/server shape without
+altering host settings. Older hosts retain their existing default icons. Images
+are fetched through authenticated RemoteCommand requests by workspace ID, never by a
+controller-local file path. Reconnect/catalog refresh reloads the host projection; target
+epochs prevent a late response from another device replacing the current icon. Icon editing
+is available in the Desktop controller; mobile/IM editing requests receive an explicit
+unsupported response. A failed image read preserves host settings and displays a fallback
+with an unavailable hint.

@@ -8,11 +8,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { InteractionMotion } from '@/shared/utils/motionPreference';
 import type { SceneTab, SceneTabId } from './types';
 import SceneBar from './SceneBar';
-import { useSceneStore } from '../../stores/sceneStore';
+import { useSceneStore, resetSceneStoreForTest } from '../../stores/sceneStore';
 import { useContentResourceStore } from '../../workbench/contentResourceStore';
 import { writeSessionTabDrag } from '../../workbench/canvasTabTransfer';
 import { clearAgentCanvasForPeerSwitch, switchAgentCanvasScope, useAgentCanvasStore } from '../panels/content-canvas/stores';
 import { activateSurface } from '@/infrastructure/peer-device/deviceSurface';
+import { useDeviceDirectory } from '@/infrastructure/account/deviceDirectory';
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -53,7 +54,9 @@ vi.mock('../../hooks/useSceneManager', () => ({
 }));
 
 vi.mock('../../hooks/useSessionTabLabels', () => ({
-  useSessionTabLabels: () => ({ session: { title: sceneHarness.state.sessionTitle ?? '' } }),
+  useSessionTabLabels: (tabs: SceneTab[]) => Object.fromEntries(tabs.map(tab => [tab.id,
+    { title: tab.id === 'session' ? sceneHarness.state.sessionTitle ?? '' : tab.session?.sessionId ?? '' },
+  ])),
 }));
 
 vi.mock('@/infrastructure/i18n/hooks/useI18n', () => ({
@@ -91,23 +94,86 @@ describe('SceneBar overflow navigation', () => {
     sceneHarness.state.pendingTabId = null;
     sceneHarness.state.navigationMotion = 'instant';
     sceneHarness.state.sessionTitle = undefined;
-    for (const tab of sceneHarness.state.openTabs) delete tab.session;
+    for (const tab of sceneHarness.state.openTabs) { delete tab.session; delete tab.sessionHistory; }
     sceneHarness.activateScene.mockReset();
     sceneHarness.closeScene.mockReset();
     clearAgentCanvasForPeerSwitch();
     useContentResourceStore.setState({ resources: {} });
-    useSceneStore.getState().resetForPeerSwitch();
+    resetSceneStoreForTest();
   });
 
   afterEach(() => {
     act(() => root.unmount());
     container.remove();
     activateSurface('local');
+    vi.restoreAllMocks();
   });
 
   function renderSceneBar() {
     act(() => root.render(<SceneBar />));
   }
+
+  it('activates a session tab on click', () => {
+    sceneHarness.state.activeTabId = 'git';
+    renderSceneBar();
+    const trigger = container.querySelector<HTMLButtonElement>('[role="tab"][data-openbitfun-value="session"]')!;
+    act(() => trigger.click());
+    expect(sceneHarness.activateScene).toHaveBeenCalledWith('session');
+    expect(trigger.hasAttribute('aria-haspopup')).toBe(false);
+    expect(container.querySelector('[data-openbitfun-part="tabDevice"]')).toBeNull();
+  });
+
+  it('brings a grown last tab fully into view so its close action stays reachable', () => {
+    renderSceneBar();
+    const scroller = container.querySelector<HTMLElement>('[data-scene-bar-part="tabs"]')!;
+    const item = container.querySelector<HTMLElement>('[data-scene-tab-id="git"]')!;
+    const close = item.querySelector('[data-scene-bar-part="closeTab"]');
+    expect(close?.hasAttribute('title')).toBe(false);
+    scroller.scrollBy = vi.fn();
+    vi.spyOn(scroller, 'getBoundingClientRect').mockReturnValue({ right: 400 } as DOMRect);
+    vi.spyOn(item, 'getBoundingClientRect').mockReturnValue({ right: 430 } as DOMRect);
+    const hovered = vi.spyOn(item, 'matches').mockReturnValue(false);
+    const grown = () => {
+      const event = new Event('transitionend', { bubbles: true });
+      Object.defineProperty(event, 'propertyName', { value: 'padding-inline-end' });
+      act(() => { item.firstElementChild!.dispatchEvent(event); });
+    };
+    grown();
+    expect(scroller.scrollBy).not.toHaveBeenCalled();
+    hovered.mockReturnValue(true);
+    grown();
+    expect(scroller.scrollBy).toHaveBeenCalledWith(expect.objectContaining({ left: 32 }));
+  });
+
+  it('groups tabs by device and names each device once', () => {
+    const [session, settings, terminal] = sceneHarness.state.openTabs;
+    session.session = { surfaceId: 'peer-tab-device', workspaceKey: 'workspace-a', sessionId: 'remote' };
+    terminal.session = { surfaceId: 'peer-tab-device', workspaceKey: 'workspace-a', sessionId: 'remote-2' };
+    settings.session = { surfaceId: 'local', workspaceKey: 'workspace-b', sessionId: 'here' };
+    useDeviceDirectory.setState({
+      devices: [
+        { device_id: 'peer-tab-device', device_name: 'Studio' } as never,
+        { device_id: 'me', device_name: 'MacBook' } as never,
+      ],
+      localId: 'me',
+    });
+    try {
+      renderSceneBar();
+      const labels = Array.from(container.querySelectorAll('[data-openbitfun-part="tabDevice"]'));
+      expect(labels.map(label => label.textContent)).toEqual(['Studio', 'MacBook']);
+      expect(labels[1].hasAttribute('data-current')).toBe(true);
+      // Studio's tabs are adjacent; the scene tab joins the rendered device.
+      const order = Array.from(container.querySelectorAll('[role="tab"]'))
+        .map(tab => tab.getAttribute('data-openbitfun-value'));
+      expect(order).toEqual(['session', 'terminal', 'settings', 'git']);
+      const describedBy = (value: string) => container
+        .querySelector(`[role="tab"][data-openbitfun-value="${value}"]`)?.getAttribute('aria-describedby');
+      expect(describedBy('terminal')).toBe(labels[0].id);
+      expect(describedBy('git')).toBe(labels[1].id);
+    } finally {
+      useDeviceDirectory.setState({ devices: [], localId: null });
+    }
+  });
 
   function startSessionTabDrag() {
     const store = useAgentCanvasStore.getState();
@@ -156,14 +222,17 @@ describe('SceneBar overflow navigation', () => {
     expect(useAgentCanvasStore.getState().primaryGroup.tabs).toHaveLength(1);
   });
 
-  it('clears its offer when another drop target stops event bubbling', () => {
+  it('clears its offer after another drop target stops event bubbling', async () => {
     renderSceneBar();
     let transfer!: DataTransfer;
     act(() => { transfer = startSessionTabDrag(); });
     const elsewhere = document.createElement('div');
     document.body.appendChild(elsewhere);
     elsewhere.addEventListener('drop', event => event.stopPropagation());
-    act(() => elsewhere.dispatchEvent(dragEvent('drop', transfer)));
+    await act(async () => {
+      elsewhere.dispatchEvent(dragEvent('drop', transfer));
+      await new Promise(resolve => setTimeout(resolve, 0));
+    });
     expect(container.querySelector('[data-openbitfun-part="dropHint"]')).toBeNull();
     expect(useAgentCanvasStore.getState().primaryGroup.tabs).toHaveLength(1);
     expect(useContentResourceStore.getState().resources).toEqual({});
@@ -327,6 +396,25 @@ describe('SceneBar overflow navigation', () => {
     expect(sceneHarness.activateScene).toHaveBeenCalledWith('settings');
   });
 
+  it('activates a retained background tab from the idle shell state', () => {
+    const previousTabs = sceneHarness.state.openTabs;
+    sceneHarness.state.activeTabId = null;
+    sceneHarness.state.openTabs = [
+      { id: 'settings', lastUsed: 1 },
+      { id: 'terminal', lastUsed: 2 },
+    ];
+    try {
+      renderSceneBar();
+
+      const settings = container.querySelector<HTMLButtonElement>('[role="tab"][data-openbitfun-value="settings"]')!;
+      act(() => settings.click());
+
+      expect(sceneHarness.activateScene).toHaveBeenCalledWith('settings');
+    } finally {
+      sceneHarness.state.openTabs = previousTabs;
+    }
+  });
+
   it('exposes overflow controls and translates a vertical wheel into horizontal movement', () => {
     renderSceneBar();
     const region = container.querySelector<HTMLElement>('[data-openbitfun-component="scene-bar"][data-openbitfun-part="tabs"]')!;
@@ -365,8 +453,11 @@ describe('SceneBar overflow navigation', () => {
     const gitTab = container.querySelector<HTMLElement>('[role="tab"][data-openbitfun-value="git"]')!;
     const gitItem = gitTab.closest<HTMLElement>('[data-openbitfun-part="item"]')!;
     setOverflowMetrics(tabs, region);
-    Object.defineProperty(gitItem, 'offsetLeft', { configurable: true, value: 420 });
-    Object.defineProperty(gitItem, 'offsetWidth', { configurable: true, value: 100 });
+    expect(gitItem.parentElement?.dataset.sceneTabId).toBe('git');
+    // The real positioned wrapper owns offsetLeft; it is zero for the inner item.
+    Object.defineProperty(gitItem, 'offsetLeft', { configurable: true, value: 0 });
+    vi.spyOn(tabs, 'getBoundingClientRect').mockReturnValue({ left: 100, width: 180 } as DOMRect);
+    vi.spyOn(gitItem, 'getBoundingClientRect').mockReturnValue({ left: 520, width: 100 } as DOMRect);
     const scrollTo = vi.fn(({ left }: ScrollToOptions) => {
       tabs.scrollLeft = left ?? tabs.scrollLeft;
     });

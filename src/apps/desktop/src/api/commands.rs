@@ -10,9 +10,10 @@ use crate::api::path_target::{
 };
 use crate::api::search_api::{
     build_content_search_request, group_search_results, prepare_content_search_runner,
-    remote_content_search_refusal, remote_content_search_refusal_message,
+    remote_content_search_refusal_message, remote_content_search_target,
     search_file_contents_via_workspace_search, search_metadata_from_content_result,
-    should_use_workspace_search, SearchMetadataResponse,
+    search_remote_contents, should_use_workspace_search, RemoteContentSearchQuery,
+    SearchMetadataResponse,
 };
 use crate::api::workspace_activation::spawn_workspace_background_warmup;
 use crate::startup_trace::DesktopStartupTrace;
@@ -475,6 +476,14 @@ pub struct ListAIModelsByConfigRequest {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct TestImageGenerationServiceRequest {
+    /// Draft service, not necessarily saved yet.
+    pub service: openbitfun_core::service::config::types::ImageServiceConfig,
+    /// Optional subject override for the check prompt.
+    pub prompt: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct UpdateAppStatusRequest {
     pub status: String,
     pub message: Option<String>,
@@ -516,6 +525,12 @@ pub struct ListAgentCompanionPetsRequest {
     pub include_external: bool,
     #[serde(default)]
     pub builtin_import_version: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LoadAgentCompanionPetSpritesheetRequest {
+    pub spritesheet_path: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -1102,6 +1117,7 @@ async fn create_transient_ai_client_for_config(
     );
 
     let mut ai_config: openbitfun_core::util::types::AIConfig = model_config
+        .clone()
         .try_into()
         .map_err(|e| format!("Failed to convert configuration: {}", e))?;
     let skip_ssl_verify = ai_config.skip_ssl_verify;
@@ -1125,7 +1141,7 @@ async fn create_transient_ai_client_for_config(
     .await
     .map_err(|e| format!("Failed to resolve subscription auth: {}", e))?;
 
-    Ok(
+    let client =
         openbitfun_core::infrastructure::ai::client_factory::apply_subscription_request_profile(
             &auth,
             openbitfun_core::infrastructure::ai::AIClient::new_with_runtime_options(
@@ -1133,7 +1149,13 @@ async fn create_transient_ai_client_for_config(
                 proxy_config,
                 stream_options,
             ),
-        ),
+        );
+    Ok(
+        openbitfun_core::infrastructure::ai::client_factory::apply_model_default_reasoning(
+            client,
+            &model_config,
+        )
+        .await,
     )
 }
 
@@ -1143,6 +1165,13 @@ pub async fn test_ai_config_connection(
     request: TestAIConfigConnectionRequest,
 ) -> Result<openbitfun_core::util::types::ConnectionTestResult, String> {
     let model_name = request.config.name.clone();
+    if let Some(result) = openbitfun_core::agentic::execution::round_model_routing::configuration::test_configured_router_connection(&request.config)
+        .await.map_err(|error| error.to_string())?
+    {
+        info!("Router model connection test completed: model={}, success={}, response_time={}ms",
+            model_name, result.success, result.response_time_ms);
+        return Ok(result);
+    }
     let supports_image_input = request.config.capabilities.iter().any(|cap| {
         matches!(
             cap,
@@ -1230,6 +1259,35 @@ pub async fn test_ai_config_connection(
             Err(format!("Connection test failed: {}", e))
         }
     }
+}
+
+/// Runs one real generation against an image service draft so the settings page
+/// can confirm the dialect, credentials and endpoint actually work together.
+#[tauri::command]
+pub async fn test_image_generation_service(
+    request: TestImageGenerationServiceRequest,
+) -> Result<openbitfun_core::agentic::image_generation::ImageServiceTestOutcome, String> {
+    const DEFAULT_PROMPT: &str =
+        "A cute minimalist mascot icon with a rounded-rectangle body, two small friendly oval eyes, and a short top antenna ending in a round joystick knob. Use a playful, harmonious color palette selected randomly for each generation, with no fixed colors. Centered composition, clean uncluttered background, polished product illustration.";
+
+    let prompt = request
+        .prompt
+        .as_deref()
+        .map(str::trim)
+        .filter(|prompt| !prompt.is_empty())
+        .unwrap_or(DEFAULT_PROMPT);
+    let dialect = request.service.dialect;
+    let service_id = request.service.id.clone();
+
+    let outcome =
+        openbitfun_core::agentic::image_generation::test_service(&request.service, prompt).await;
+
+    info!(
+        "Image generation service test completed: service={}, dialect={:?}, success={}, elapsed={}ms",
+        service_id, dialect, outcome.success, outcome.elapsed_ms
+    );
+
+    Ok(outcome)
 }
 
 #[tauri::command]
@@ -1346,7 +1404,7 @@ pub async fn open_remote_workspace(
     request: OpenRemoteWorkspaceRequest,
 ) -> Result<WorkspaceInfoDto, String> {
     use openbitfun_core::service::remote_ssh::normalize_remote_workspace_path;
-    use openbitfun_core::service::remote_ssh::workspace_state::remote_workspace_stable_id;
+    use openbitfun_core::service::remote_ssh::workspace_state::remote_workspace_stable_id_for_connection;
     use openbitfun_core::service::workspace::{
         remote_workspace_connection_conflict_message, RemoteConnectionRebind,
         WorkspaceCreateOptions,
@@ -1415,7 +1473,11 @@ pub async fn open_remote_workspace(
         request.connection_name.clone()
     });
 
-    let stable_workspace_id = remote_workspace_stable_id(&ssh_host, &remote_path);
+    let stable_workspace_id = remote_workspace_stable_id_for_connection(
+        &ssh_host,
+        Some(&request.connection_id),
+        &remote_path,
+    );
 
     let display_name = remote_path
         .split('/')
@@ -1582,6 +1644,38 @@ pub async fn set_primary_assistant_workspace(
     Ok(WorkspaceInfoDto::from_workspace_info(&workspace))
 }
 
+/// How deleting an assistant workspace record may touch its directory.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AssistantWorkspaceDirectoryPlan {
+    /// Managed layout (current or legacy): delete the directory when present.
+    DeleteDirectoryWhenPresent,
+    /// The directory does not exist: remove the registry entry only.
+    RegistryEntryOnly,
+}
+
+/// Guards `delete_assistant_workspace` against deleting arbitrary directories.
+///
+/// Existing directories outside the managed assistant roots (the current
+/// layout and the pre-rename layout left behind by the brand migration) are
+/// refused; a record whose directory is already gone resolves to a
+/// registry-only cleanup.
+fn assistant_workspace_directory_plan(
+    path: &Path,
+    is_managed_path: bool,
+) -> Result<AssistantWorkspaceDirectoryPlan, String> {
+    if is_managed_path {
+        return Ok(AssistantWorkspaceDirectoryPlan::DeleteDirectoryWhenPresent);
+    }
+    if path.exists() {
+        Err(format!(
+            "Workspace path is not a managed assistant workspace: {}",
+            path.display()
+        ))
+    } else {
+        Ok(AssistantWorkspaceDirectoryPlan::RegistryEntryOnly)
+    }
+}
+
 #[tauri::command]
 pub async fn delete_assistant_workspace(
     state: State<'_, AppState>,
@@ -1609,15 +1703,11 @@ pub async fn delete_assistant_workspace(
         return Err("Primary assistant workspace cannot be deleted".to_string());
     }
 
-    if !state
+    let is_managed_path = state
         .workspace_service
-        .is_assistant_workspace_path(&workspace_info.root_path)
-    {
-        return Err(format!(
-            "Workspace path is not a managed assistant workspace: {}",
-            workspace_info.root_path.display()
-        ));
-    }
+        .is_manageable_assistant_workspace_path(&workspace_info.root_path);
+    let directory_plan =
+        assistant_workspace_directory_plan(&workspace_info.root_path, is_managed_path)?;
 
     let is_active_workspace = state
         .workspace_service
@@ -1636,11 +1726,26 @@ pub async fn delete_assistant_workspace(
 
     let workspace_path = workspace_info.root_path.to_string_lossy().to_string();
 
-    state
-        .filesystem_service
-        .delete_directory(&workspace_path, true)
-        .await
-        .map_err(|e| format!("Failed to delete assistant workspace files: {}", e))?;
+    // Re-check presence so a directory that disappears between the guard and
+    // the deletion still resolves as a registry-only cleanup.
+    let delete_files = matches!(
+        directory_plan,
+        AssistantWorkspaceDirectoryPlan::DeleteDirectoryWhenPresent
+    ) && workspace_info.root_path.exists();
+
+    if delete_files {
+        state
+            .filesystem_service
+            .delete_directory(&workspace_path, true)
+            .await
+            .map_err(|e| format!("Failed to delete assistant workspace files: {}", e))?;
+    } else {
+        info!(
+            "Assistant workspace directory is missing; removing registry entry only: workspace_id={}, path={}",
+            request.workspace_id,
+            workspace_info.root_path.display()
+        );
+    }
 
     state
         .workspace_service
@@ -1730,6 +1835,47 @@ async fn clear_directory_contents(directory: &Path) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(test)]
+mod assistant_workspace_delete_tests {
+    use super::{assistant_workspace_directory_plan, AssistantWorkspaceDirectoryPlan};
+
+    #[test]
+    fn managed_paths_may_delete_even_when_the_directory_is_missing() {
+        let temp = tempfile::tempdir().expect("temp root");
+        let missing = temp.path().join("workspace-44e0e781");
+
+        assert_eq!(
+            assistant_workspace_directory_plan(&missing, true),
+            Ok(AssistantWorkspaceDirectoryPlan::DeleteDirectoryWhenPresent)
+        );
+    }
+
+    #[test]
+    fn unmanaged_existing_directories_are_refused() {
+        let temp = tempfile::tempdir().expect("temp root");
+        let unmanaged = temp.path().join("Documents").join("foo");
+        std::fs::create_dir_all(&unmanaged).expect("create unmanaged directory");
+
+        let error = assistant_workspace_directory_plan(&unmanaged, false)
+            .expect_err("an existing unmanaged directory must be refused");
+
+        assert!(error.starts_with("Workspace path is not a managed assistant workspace"));
+        assert!(error.contains(&unmanaged.to_string_lossy().to_string()));
+        assert!(unmanaged.exists(), "the guard must not delete anything");
+    }
+
+    #[test]
+    fn unmanaged_missing_records_resolve_to_registry_only_cleanup() {
+        let temp = tempfile::tempdir().expect("temp root");
+        let orphan = temp.path().join("missing-root").join("workspace-44e0e781");
+
+        assert_eq!(
+            assistant_workspace_directory_plan(&orphan, false),
+            Ok(AssistantWorkspaceDirectoryPlan::RegistryEntryOnly)
+        );
+    }
+}
+
 #[tauri::command]
 pub async fn reset_assistant_workspace(
     state: State<'_, AppState>,
@@ -1751,7 +1897,7 @@ pub async fn reset_assistant_workspace(
 
     if !state
         .workspace_service
-        .is_assistant_workspace_path(&workspace_info.root_path)
+        .is_manageable_assistant_workspace_path(&workspace_info.root_path)
     {
         return Err(format!(
             "Workspace path is not a managed assistant workspace: {}",
@@ -2610,6 +2756,48 @@ mod pet_package_tests {
     }
 
     #[test]
+    fn pet_spritesheet_read_is_confined_to_the_companion_directory() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("agent-companions");
+        let pet_dir = root.join("pet-abc");
+        std::fs::create_dir_all(&pet_dir).unwrap();
+        let spritesheet = pet_dir.join("spritesheet.webp");
+        std::fs::write(&spritesheet, [1u8, 2, 3]).unwrap();
+
+        assert_eq!(
+            read_agent_companion_pet_spritesheet(&root, &spritesheet).unwrap(),
+            vec![1, 2, 3]
+        );
+
+        let outside = temp.path().join("credentials.txt");
+        std::fs::write(&outside, b"secret").unwrap();
+        let error = read_agent_companion_pet_spritesheet(&root, &outside).unwrap_err();
+        assert!(
+            error.contains("outside the companion pet directory"),
+            "{error}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pet_spritesheet_read_rejects_a_symlinked_escape() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("agent-companions");
+        let pet_dir = root.join("pet-abc");
+        std::fs::create_dir_all(&pet_dir).unwrap();
+        let outside = temp.path().join("credentials.txt");
+        std::fs::write(&outside, b"secret").unwrap();
+        let link = pet_dir.join("spritesheet.webp");
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+
+        let error = read_agent_companion_pet_spritesheet(&root, &link).unwrap_err();
+        assert!(
+            error.contains("outside the companion pet directory"),
+            "{error}"
+        );
+    }
+
+    #[test]
     #[ignore = "Imports installed Codex pets into an isolated temporary directory"]
     fn installed_builtin_pets_can_be_previewed_and_imported() {
         let temp = tempfile::tempdir().unwrap();
@@ -2825,6 +3013,77 @@ pub(crate) async fn list_agent_companion_pets_impl(
     })
 }
 
+/// Upper bound for a single pet spritesheet. A spritesheet is a small sprite
+/// atlas, so a larger file is not a pet package asset and must not be buffered
+/// through the IPC channel.
+const MAX_AGENT_COMPANION_SPRITESHEET_BYTES: u64 = 16 * 1024 * 1024;
+
+/// Reads a user pet spritesheet through the host.
+///
+/// The webview used to read this file with the filesystem plugin, whose scope
+/// requires a literal leading dot on unix. Every XDG directory starts with a
+/// dot, so a Linux install could never resolve a spritesheet that lives under
+/// the app data directory; the read always failed with `forbidden path`
+/// (#3370). The host performs the read instead and keeps it confined to the
+/// managed companion directory, which is the only place a user pet package can
+/// be imported to.
+#[tauri::command]
+pub async fn load_agent_companion_pet_spritesheet(
+    state: State<'_, AppState>,
+    request: LoadAgentCompanionPetSpritesheetRequest,
+) -> Result<tauri::ipc::Response, String> {
+    let packages_root = companion_user_packages_dir(&state);
+    let spritesheet_path = request.spritesheet_path;
+    let bytes = tokio::task::spawn_blocking(move || {
+        read_agent_companion_pet_spritesheet(&packages_root, Path::new(&spritesheet_path))
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    Ok(tauri::ipc::Response::new(bytes))
+}
+
+fn read_agent_companion_pet_spritesheet(
+    packages_root: &Path,
+    spritesheet_path: &Path,
+) -> Result<Vec<u8>, String> {
+    let root = packages_root.canonicalize().map_err(|error| {
+        format!(
+            "Companion pet directory is unavailable ({}): {}",
+            packages_root.display(),
+            error
+        )
+    })?;
+    let requested = spritesheet_path.canonicalize().map_err(|error| {
+        format!(
+            "Failed to resolve {}: {}",
+            spritesheet_path.display(),
+            error
+        )
+    })?;
+    if !requested.starts_with(&root) {
+        return Err(format!(
+            "Refused to read {} outside the companion pet directory",
+            spritesheet_path.display()
+        ));
+    }
+    let metadata = std::fs::metadata(&requested)
+        .map_err(|error| format!("Failed to read {}: {}", requested.display(), error))?;
+    if !metadata.is_file() {
+        return Err(format!(
+            "Not a companion pet spritesheet file: {}",
+            requested.display()
+        ));
+    }
+    if metadata.len() > MAX_AGENT_COMPANION_SPRITESHEET_BYTES {
+        return Err(format!(
+            "Companion pet spritesheet is too large: {} bytes",
+            metadata.len()
+        ));
+    }
+    std::fs::read(&requested)
+        .map_err(|error| format!("Failed to read {}: {}", requested.display(), error))
+}
+
 #[tauri::command]
 pub async fn import_agent_companion_pet_package(
     state: State<'_, AppState>,
@@ -3004,7 +3263,7 @@ pub async fn reset_workspace_persona_files(
     };
 
     if workspace.workspace_kind != WorkspaceKind::Assistant
-        || !service.is_assistant_workspace_path(&workspace.root_path)
+        || !service.is_manageable_assistant_workspace_path(&workspace.root_path)
     {
         return Err(format!(
             "Workspace {} is not a managed assistant workspace",
@@ -4718,31 +4977,26 @@ pub async fn search_files(
         request.search_content && should_use_workspace_search(&state, &workspace).await;
     let result = if request.search_content {
         if workspace.workspace_kind == WorkspaceKind::Remote {
-            if !use_workspace_search {
-                Err(
-                    remote_content_search_refusal(&state, "search_files", &workspace)
-                        .await
-                        .unwrap_or_else(|| {
-                            remote_content_search_refusal_message(
-                                "search_files",
-                                &request.root_path,
-                                "remote workspace search is unavailable",
-                            )
-                        }),
-                )
-            } else {
-                search_file_contents_via_workspace_search(
-                    &state,
-                    &workspace,
-                    &request.pattern,
-                    request.case_sensitive,
-                    request.use_regex,
-                    request.whole_word,
-                    max_results,
-                )
-                .await
-                .map(|result| result.outcome.results)
-            }
+            let outcome = match remote_content_search_target(&state, &workspace).await {
+                Ok(target) => {
+                    search_remote_contents(
+                        target,
+                        RemoteContentSearchQuery {
+                            pattern: request.pattern.clone(),
+                            case_sensitive: request.case_sensitive,
+                            use_regex: request.use_regex,
+                            whole_word: request.whole_word,
+                            limit: max_results,
+                            cancel_flag: cancel_flag.clone(),
+                        },
+                    )
+                    .await
+                }
+                Err(error) => Err(error),
+            };
+            outcome.map(|outcome| outcome.results).map_err(|error| {
+                remote_content_search_refusal_message("search_files", &request.root_path, &error)
+            })
         } else {
             let filename_outcome = state
                 .filesystem_service
@@ -4976,12 +5230,21 @@ pub async fn search_file_contents(
     .await?;
     request.root_path = workspace.root_path.to_string_lossy().into_owned();
 
-    if let Some(message) =
-        remote_content_search_refusal(&state, "search_file_contents", &workspace).await
-    {
-        error!("Content search refused: {}", message);
-        return Err(message);
-    }
+    let remote_target = if workspace.workspace_kind == WorkspaceKind::Remote {
+        Some(
+            remote_content_search_target(&state, &workspace)
+                .await
+                .map_err(|error| {
+                    remote_content_search_refusal_message(
+                        "search_file_contents",
+                        &request.root_path,
+                        &error,
+                    )
+                })?,
+        )
+    } else {
+        None
+    };
 
     let search_id = request.search_id.clone();
     let cancel_flag = register_search(&state, search_id.as_deref());
@@ -4996,7 +5259,28 @@ pub async fn search_file_contents(
         include_directories: false,
     };
 
-    let result = if should_use_workspace_search(&state, &workspace).await {
+    let result = if let Some(target) = remote_target {
+        search_remote_contents(
+            target,
+            RemoteContentSearchQuery {
+                pattern: request.pattern.clone(),
+                case_sensitive: request.case_sensitive,
+                use_regex: request.use_regex,
+                whole_word: request.whole_word,
+                limit,
+                cancel_flag,
+            },
+        )
+        .await
+        .map(|outcome| (outcome, None))
+        .map_err(|error| {
+            remote_content_search_refusal_message(
+                "search_file_contents",
+                &request.root_path,
+                &error,
+            )
+        })
+    } else if should_use_workspace_search(&state, &workspace).await {
         search_file_contents_via_workspace_search(
             &state,
             &workspace,
@@ -5218,12 +5502,21 @@ pub async fn start_search_file_contents_stream(
     .await?;
     request.root_path = workspace.root_path.to_string_lossy().into_owned();
 
-    if let Some(message) =
-        remote_content_search_refusal(&state, "start_search_file_contents_stream", &workspace).await
-    {
-        error!("Content search stream refused: {}", message);
-        return Err(message);
-    }
+    let remote_target = if workspace.workspace_kind == WorkspaceKind::Remote {
+        Some(
+            remote_content_search_target(&state, &workspace)
+                .await
+                .map_err(|error| {
+                    remote_content_search_refusal_message(
+                        "start_search_file_contents_stream",
+                        &request.root_path,
+                        &error,
+                    )
+                })?,
+        )
+    } else {
+        None
+    };
 
     let search_id = ensure_search_id(request.search_id.clone(), "content-stream");
     let cancel_flag = register_search(&state, Some(&search_id));
@@ -5272,7 +5565,45 @@ pub async fn start_search_file_contents_stream(
     ));
 
     tokio::spawn(async move {
-        let result = if use_workspace_search {
+        let result = if let Some(target) = remote_target {
+            let result = search_remote_contents(
+                target,
+                RemoteContentSearchQuery {
+                    pattern: pattern.clone(),
+                    case_sensitive,
+                    use_regex,
+                    whole_word,
+                    limit,
+                    cancel_flag: cancel_flag.clone(),
+                },
+            )
+            .await;
+            if let Ok(outcome) = &result {
+                if !cancel_flag
+                    .as_ref()
+                    .is_some_and(|flag| flag.load(Ordering::Relaxed))
+                {
+                    for group in group_search_results(outcome.results.clone()) {
+                        openbitfun_core::infrastructure::FileSearchProgressSink::report(
+                            progress_sink.as_ref(),
+                            group,
+                        );
+                    }
+                    openbitfun_core::infrastructure::FileSearchProgressSink::flush(
+                        progress_sink.as_ref(),
+                    );
+                }
+            }
+            result.map(|outcome| (outcome, None)).map_err(|error| {
+                openbitfun_core::util::errors::OpenBitFunError::service(
+                    remote_content_search_refusal_message(
+                        "start_search_file_contents_stream",
+                        &root_path,
+                        &error,
+                    ),
+                )
+            })
+        } else if use_workspace_search {
             let result = workspace_search_runner
                 .as_ref()
                 .expect("workspace search runner should exist when enabled")
@@ -5553,6 +5884,21 @@ pub async fn get_watched_paths() -> Result<Vec<String>, String> {
     file_watch::get_watched_paths().await
 }
 
+/// Whether filesystem changes still reach product surfaces, and why not.
+/// `LocalOnly`: the watcher is a host-side resource and is not used for remote
+/// workspaces, which do their own remote IO.
+#[tauri::command]
+pub async fn get_file_watch_status() -> Result<file_watch::FileWatchStatus, String> {
+    Ok(file_watch::get_file_watch_status())
+}
+
+/// Re-registers every watched root on a fresh native watcher so a surface can
+/// recover from a backend failure after the user fixes its cause.
+#[tauri::command]
+pub async fn retry_file_watch() -> Result<(), String> {
+    file_watch::retry_file_watch().await
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SubscriptionProviderRequest {
@@ -5566,6 +5912,43 @@ pub struct SubscriptionLoginRequest {
     pub session_id: String,
     #[serde(default)]
     pub method: Option<openbitfun_core::infrastructure::subscription_auth::SubscriptionLoginMethod>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubscriptionAccountInstanceRequest {
+    pub provider: openbitfun_core::infrastructure::subscription_auth::SubscriptionProvider,
+    pub account_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubscriptionAccountEnabledRequest {
+    pub provider: openbitfun_core::infrastructure::subscription_auth::SubscriptionProvider,
+    pub account_id: String,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubscriptionAccountLoginRequest {
+    pub provider: openbitfun_core::infrastructure::subscription_auth::SubscriptionProvider,
+    pub account_id: String,
+    pub session_id: String,
+    #[serde(default)]
+    pub method: Option<openbitfun_core::infrastructure::subscription_auth::SubscriptionLoginMethod>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubscriptionAccountQuotaRequest {
+    pub provider: openbitfun_core::infrastructure::subscription_auth::SubscriptionProvider,
+    pub account_id: String,
+    /// Saved API-key configuration on this host; absent retains account-slot lookup.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_id: Option<String>,
+    #[serde(default)]
+    pub force_refresh: bool,
 }
 
 async fn configured_ai_proxy(
@@ -5588,6 +5971,160 @@ async fn configured_ai_proxy(
 pub async fn list_subscription_accounts(
 ) -> Result<Vec<openbitfun_core::infrastructure::subscription_auth::SubscriptionAccount>, String> {
     Ok(openbitfun_core::infrastructure::subscription_auth::list_accounts().await)
+}
+
+#[tauri::command]
+pub async fn list_subscription_account_instances() -> Result<
+    Vec<openbitfun_core::infrastructure::subscription_auth::SubscriptionAccountInstance>,
+    String,
+> {
+    openbitfun_core::infrastructure::subscription_auth::list_account_instances()
+        .await
+        .map_err(|error| format!("Failed to list subscription account instances: {error:#}"))
+}
+
+#[tauri::command]
+pub async fn start_subscription_account_login(
+    state: State<'_, AppState>,
+    request: SubscriptionAccountLoginRequest,
+) -> Result<openbitfun_core::infrastructure::subscription_auth::LoginStartResult, String> {
+    let options = openbitfun_core::infrastructure::subscription_auth::SubscriptionHttpOptions::new(
+        configured_ai_proxy(&state).await?,
+        false,
+    );
+    openbitfun_core::infrastructure::subscription_auth::start_account_login_with_options(
+        request.provider,
+        request.account_id,
+        request.session_id,
+        request.method,
+        options,
+    )
+    .await
+    .map_err(|error| format!("Failed to start subscription account login: {error:#}"))
+}
+
+#[tauri::command]
+pub async fn get_subscription_account_quota(
+    state: State<'_, AppState>,
+    request: SubscriptionAccountQuotaRequest,
+) -> Result<openbitfun_core_types::subscription::SubscriptionQuotaSnapshot, String> {
+    let options = openbitfun_core::infrastructure::subscription_auth::SubscriptionHttpOptions::new(
+        configured_ai_proxy(&state).await?,
+        false,
+    );
+    if let Some(model_id) = request.model_id.as_ref() {
+        use openbitfun_core::infrastructure::subscription_auth::{
+            opencode_quota, SubscriptionProvider,
+        };
+        use openbitfun_core::service::config::types::AuthConfig;
+        if request.provider != SubscriptionProvider::Opencode
+            || request.account_id != format!("model:{model_id}")
+        {
+            return Err("Invalid model quota binding".into());
+        }
+        let model = state
+            .config_service
+            .get_ai_models()
+            .await
+            .map_err(|_| "Could not read model configuration")?
+            .into_iter()
+            .find(|model| model.id == *model_id)
+            .ok_or("Model configuration is unavailable")?;
+        if !matches!(model.auth, AuthConfig::ApiKey) {
+            return Err("OpenCode Go allowance requires API-key authentication".into());
+        }
+        if model.custom_headers.as_ref().is_some_and(|headers| {
+            (!headers.is_empty() && model.custom_headers_mode.as_deref() == Some("replace"))
+                || headers.keys().any(|name| {
+                    name.eq_ignore_ascii_case("authorization")
+                        || name.eq_ignore_ascii_case("x-api-key")
+                })
+        }) {
+            return Ok(opencode_quota::unavailable(
+                &request.account_id,
+                "opencode_custom_auth",
+            ));
+        }
+        let observation = opencode_quota::read_api_key_quota(
+            &model.base_url,
+            &model.api_key,
+            &request.account_id,
+            &options,
+        )
+        .await
+        .map_err(|_| "Could not read OpenCode allowance")?;
+        let current = state
+            .config_service
+            .get_ai_models()
+            .await
+            .map_err(|_| "Could not revalidate model configuration")?;
+        if !current.iter().any(|entry| {
+            entry.id == model.id
+                && entry.api_key == model.api_key
+                && entry.base_url == model.base_url
+                && entry.auth == model.auth
+                && entry.custom_headers == model.custom_headers
+                && entry.custom_headers_mode == model.custom_headers_mode
+        }) {
+            return Err(
+                "Model authorization changed while querying allowance; refresh again".into(),
+            );
+        }
+        return Ok(observation);
+    }
+    openbitfun_core::infrastructure::subscription_auth::read_account_quota_with_options(
+        request.provider,
+        &request.account_id,
+        request.force_refresh,
+        &options,
+    )
+    .await
+    .map_err(|error| format!("Failed to read subscription account quota: {error:#}"))
+}
+
+#[tauri::command]
+pub async fn logout_subscription_account_instance(
+    request: SubscriptionAccountInstanceRequest,
+) -> Result<openbitfun_core::infrastructure::subscription_auth::SubscriptionLogoutResult, String> {
+    openbitfun_core::infrastructure::subscription_auth::logout_account(
+        request.provider,
+        &request.account_id,
+    )
+    .await
+    .map_err(|error| format!("Failed to logout subscription account instance: {error:#}"))
+}
+
+#[tauri::command]
+pub async fn set_subscription_account_enabled(
+    request: SubscriptionAccountEnabledRequest,
+) -> Result<openbitfun_core::infrastructure::subscription_auth::SubscriptionAccountInstance, String>
+{
+    openbitfun_core::infrastructure::subscription_auth::set_account_instance_enabled(
+        request.provider,
+        &request.account_id,
+        request.enabled,
+    )
+    .await
+    .map_err(|error| format!("Failed to set subscription account eligibility: {error:#}"))
+}
+
+#[tauri::command]
+pub async fn refresh_subscription_account_instance(
+    state: State<'_, AppState>,
+    request: SubscriptionAccountInstanceRequest,
+) -> Result<openbitfun_core::infrastructure::subscription_auth::SubscriptionAccountInstance, String>
+{
+    let options = openbitfun_core::infrastructure::subscription_auth::SubscriptionHttpOptions::new(
+        configured_ai_proxy(&state).await?,
+        false,
+    );
+    openbitfun_core::infrastructure::subscription_auth::refresh_account_instance_with_options(
+        request.provider,
+        &request.account_id,
+        &options,
+    )
+    .await
+    .map_err(|error| format!("Failed to refresh subscription account instance: {error:#}"))
 }
 
 #[tauri::command]
@@ -5861,4 +6398,64 @@ mod file_workspace_id_contract_tests {
         assert_eq!(legacy.workspace_path, "/legacy/project");
         assert_eq!(legacy.remote_connection_id.as_deref(), Some("ssh-old"));
     }
+}
+
+#[cfg(test)]
+mod quota_request_compatibility_tests {
+    use super::SubscriptionAccountQuotaRequest;
+    #[test]
+    fn legacy_account_request_round_trips_without_a_model_binding() {
+        let old = serde_json::json!({"provider":"codex","accountId":"codex","forceRefresh":false});
+        let request: SubscriptionAccountQuotaRequest = serde_json::from_value(old.clone()).unwrap();
+        assert!(request.model_id.is_none());
+        assert_eq!(serde_json::to_value(request).unwrap(), old);
+        let minimal: SubscriptionAccountQuotaRequest = serde_json::from_value(
+            serde_json::json!({"provider":"opencode","accountId":"opencode"}),
+        )
+        .unwrap();
+        assert!(!minimal.force_refresh);
+        assert!(minimal.model_id.is_none());
+    }
+    #[test]
+    fn model_binding_is_explicit_and_does_not_repurpose_the_legacy_account_id() {
+        let request: SubscriptionAccountQuotaRequest = serde_json::from_value(serde_json::json!({
+            "provider":"opencode","accountId":"model:fixture","modelId":"fixture"
+        }))
+        .unwrap();
+        assert_eq!(request.model_id.as_deref(), Some("fixture"));
+        assert_eq!(request.account_id, "model:fixture");
+    }
+}
+
+#[tauri::command]
+pub async fn get_workspace_icon(
+    state: State<'_, AppState>,
+    request: openbitfun_core::service::workspace::WorkspaceIconRequest,
+) -> Result<openbitfun_core::service::workspace::WorkspaceIconSnapshot, String> {
+    state
+        .workspace_service
+        .get_workspace_icon(&request.workspace_id)
+        .await
+}
+
+#[tauri::command]
+pub async fn set_workspace_icon(
+    state: State<'_, AppState>,
+    request: openbitfun_core::service::workspace::SetWorkspaceIconRequest,
+) -> Result<openbitfun_core::service::workspace::WorkspaceIconSnapshot, String> {
+    state.workspace_service.set_workspace_icon(request).await
+}
+
+/// Detect Magpie on the selected inference host without running inference.
+#[tauri::command]
+pub async fn probe_magpie_gateway(
+    state: State<'_, AppState>,
+    request: openbitfun_core_types::magpie::MagpieProbeRequest,
+) -> Result<openbitfun_core_types::magpie::MagpieProbeResult, String> {
+    let config: openbitfun_core::service::config::GlobalConfig = state
+        .config_service
+        .get_config(None)
+        .await
+        .map_err(|_| "Failed to read proxy configuration".to_string())?;
+    Ok(openbitfun_core::infrastructure::ai::magpie::probe(request, Some(config.ai.proxy)).await)
 }

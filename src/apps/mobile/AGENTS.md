@@ -105,7 +105,19 @@ UiState or an Intent declared there, and no module above it is visible to them.
   same `commonTest` sources onto ART; they are not in CI, so run them by hand
   when touching either module.
 
+## Chat Markdown verification
+
+For chat Markdown ranges, double-tilde strikethrough, escapes and streaming
+prefixes, run from `shared/` with the Android guide's Java runtime:
+`./gradlew :core-feature:jvmTest --tests '*MarkdownParserTest*'`.
+Android and iOS share this parser; their native inline renderers own styles.
+
 ## Remote capability ownership
+
+For next-input suggestion replay, stale-turn retirement, host restart and session
+isolation, run from `shared/` with the Android guide's Java runtime:
+`./gradlew :core-feature:jvmTest --tests '*promptSuggestion*' --tests '*SessionRecordReplicaTest*'`.
+These are simulated host streams, not evidence of a live remote connection.
 
 Native mobile surfaces are controllers. Desktop and CLI own execution, files, terminals and SSH credentials. Mobile workspace selection may use only connections already saved on the controlled runtime; it must not create an SSH connection or instantiate another runtime. Carry the selected connection identity through every operation, and report missing identity instead of falling back to local files.
 
@@ -118,3 +130,14 @@ its existing native host and invokes the same generator without native wrappers.
 Run `node --test src/apps/mobile/miniapps/*.test.cjs src/apps/mobile/harmonyos/miniapps/*.test.cjs`
 from the repository root after bundle/bridge changes. Storage keys remain scoped
 to an allowlisted app; retain unreadable records and surface the error.
+
+For host-queue negotiation, stale replies, disconnect retention and mutation
+conflicts, run from `shared/`:
+
+```bash
+./gradlew :core-feature:jvmTest --tests '*MessageQueueStoreTest*'
+```
+
+These simulated-host tests do not establish live Relay, SSH, Peer Device or
+Detached Dispatch behavior. Queue ordering belongs to the execution host;
+native views submit intents and never optimistically replace its order.

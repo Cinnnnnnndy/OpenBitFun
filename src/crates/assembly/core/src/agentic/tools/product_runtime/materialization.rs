@@ -21,11 +21,13 @@ const PRODUCT_TOOL_REGISTRATION_ORDER: &[&str] = &[
     "Read",
     "view_image",
     "analyze_image",
+    "generate_image",
     "Glob",
     "Grep",
     "Write",
     "Edit",
     "Delete",
+    "GenOfficeFile",
     "ExecCommand",
     "WriteStdin",
     "ExecControl",
@@ -49,16 +51,13 @@ const PRODUCT_TOOL_REGISTRATION_ORDER: &[&str] = &[
     "CallDeferredTool",
     "OpenBitFunControl",
     "GetFileDiff",
-    "CreateCanvas",
-    "ReadCanvas",
-    "UpdateCanvas",
-    "PatchCanvas",
     "ListWorkspaces",
     "SessionControl",
     "SessionMessage",
     "SessionHistory",
     "Cron",
     "PortForward",
+    "DesktopCard",
     "WebSearch",
     "WebFetch",
     "ListMCPResources",
@@ -71,8 +70,10 @@ const PRODUCT_TOOL_REGISTRATION_ORDER: &[&str] = &[
     "InitMiniApp",
     "FinalizeMiniApp",
     "PublishMiniApp",
+    "MiniAppBrowser",
     "FrontendWorkbench",
     "PublishAppearance",
+    "PageManage",
     "PageDeploy",
     "PagePublish",
     "ControlHub",
@@ -110,11 +111,15 @@ impl StaticToolProviderFactory<dyn Tool> for ProductConcreteToolFactory {
             "view_image" => Some(Arc::new(ViewImageTool::new())),
             #[cfg(feature = "tools-image-analysis")]
             "analyze_image" => Some(Arc::new(AnalyzeImageTool::new())),
+            #[cfg(feature = "tools-image-generation")]
+            "generate_image" => Some(Arc::new(GenerateImageTool::new())),
             "Glob" => Some(Arc::new(GlobTool::new())),
             "Grep" => Some(Arc::new(GrepTool::new())),
             "Write" => Some(Arc::new(FileWriteTool::new())),
             "Edit" => Some(Arc::new(FileEditTool::new())),
             "Delete" => Some(Arc::new(DeleteFileTool::new())),
+            #[cfg(feature = "tools-office-documents")]
+            "GenOfficeFile" => Some(Arc::new(GenOfficeFileTool::new())),
             "ExecCommand" => Some(Arc::new(ExecCommandTool::new())),
             "WriteStdin" => Some(Arc::new(WriteStdinTool::new())),
             "ExecControl" => Some(Arc::new(ExecControlTool::new())),
@@ -134,14 +139,6 @@ impl StaticToolProviderFactory<dyn Tool> for ProductConcreteToolFactory {
             "get_goal" => Some(Arc::new(GetGoalTool::new())),
             "create_goal" => Some(Arc::new(CreateGoalTool::new())),
             "update_goal" => Some(Arc::new(UpdateGoalTool::new())),
-            #[cfg(feature = "tools-canvas")]
-            "CreateCanvas" => Some(Arc::new(CreateCanvasTool::new())),
-            #[cfg(feature = "tools-canvas")]
-            "ReadCanvas" => Some(Arc::new(ReadCanvasTool::new())),
-            #[cfg(feature = "tools-canvas")]
-            "UpdateCanvas" => Some(Arc::new(UpdateCanvasTool::new())),
-            #[cfg(feature = "tools-canvas")]
-            "PatchCanvas" => Some(Arc::new(PatchCanvasTool::new())),
             "submit_code_review" => Some(Arc::new(CodeReviewTool::new())),
             "GetToolSpec" => Some(Arc::new(GetToolSpecTool::new())),
             "CallDeferredTool" => Some(Arc::new(CallDeferredTool::new())),
@@ -155,6 +152,8 @@ impl StaticToolProviderFactory<dyn Tool> for ProductConcreteToolFactory {
             "Cron" => Some(Arc::new(CronTool::new())),
             #[cfg(feature = "tools-agent-control")]
             "PortForward" => Some(Arc::new(PortForwardTool::new())),
+            #[cfg(feature = "tools-agent-control")]
+            "DesktopCard" => Some(Arc::new(DesktopCardTool::new())),
             #[cfg(feature = "tools-browser-web")]
             "WebSearch" => Some(Arc::new(WebSearchTool::new())),
             #[cfg(feature = "tools-browser-web")]
@@ -179,10 +178,14 @@ impl StaticToolProviderFactory<dyn Tool> for ProductConcreteToolFactory {
             "FinalizeMiniApp" => Some(Arc::new(FinalizeMiniAppTool::new())),
             #[cfg(feature = "tools-miniapp")]
             "PublishMiniApp" => Some(Arc::new(PublishMiniAppTool::new())),
+            #[cfg(feature = "tools-miniapp")]
+            "MiniAppBrowser" => Some(Arc::new(MiniAppBrowserTool::new())),
             #[cfg(feature = "tools-creation")]
             "FrontendWorkbench" => Some(Arc::new(FrontendWorkbenchTool::new())),
             #[cfg(feature = "tools-miniapp")]
             "PublishAppearance" => Some(Arc::new(PublishAppearanceTool::new())),
+            #[cfg(feature = "tools-pages")]
+            "PageManage" => Some(Arc::new(PageManageTool::new())),
             #[cfg(feature = "tools-pages")]
             "PageDeploy" => Some(Arc::new(PageDeployTool::new())),
             #[cfg(feature = "tools-pages")]
@@ -255,6 +258,60 @@ mod tests {
     use super::*;
     use crate::agentic::tools::framework::ToolExposure;
     use openbitfun_tool_packs::product_tool_provider_group_plan;
+
+    #[test]
+    fn image_tools_follow_independent_compiled_owners() {
+        for (group, expected, compiled) in [
+            (
+                ToolPackFeatureGroup::ImageGeneration,
+                &["generate_image"][..],
+                cfg!(feature = "tools-image-generation"),
+            ),
+            (
+                ToolPackFeatureGroup::ImageAnalysis,
+                &["view_image", "analyze_image"][..],
+                cfg!(feature = "tools-image-analysis"),
+            ),
+            (
+                ToolPackFeatureGroup::OfficeDocuments,
+                &["GenOfficeFile"][..],
+                cfg!(feature = "tools-office-documents"),
+            ),
+        ] {
+            let result = create_product_tool_registry_from_plan(
+                product_tool_provider_group_plan(),
+                &[group],
+                Arc::new(openbitfun_agent_tools::SnapshotToolDecorator::new(
+                    Arc::new(super::super::snapshot::ProductSnapshotToolWrapper),
+                )),
+            );
+            if !compiled {
+                assert!(matches!(
+                    result,
+                    Err(ProductToolMaterializationError::UnavailableFeatureGroups { .. })
+                ));
+                continue;
+            }
+            let registry = result.expect("the explicitly selected image owner must materialize");
+            assert_eq!(
+                registry
+                    .get_tool_names()
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>(),
+                expected
+            );
+            for tool in registry.get_all_tools() {
+                assert!(
+                    tool.output_schema()
+                        .as_object()
+                        .is_some_and(|schema| !schema.is_empty()),
+                    "{} must expose its output contract",
+                    tool.name()
+                );
+            }
+        }
+    }
 
     /// Every tool name the provider plan advertises must materialize.
     ///

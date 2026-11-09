@@ -49,6 +49,14 @@ export DEVELOPER_DIR="$HOME/Downloads/Xcode.app/Contents/Developer"
 ./Testing/run-pure-swift-tests.sh
 ```
 
+This also covers dictation draft ownership (partial-result corrections and
+manual edits) and ImageIO thumbnail decoding (large photos, camera rotation,
+full-screen bounds, and invalid bytes). Chat previews decode off the UI thread
+at up to 1024 pixels on the long edge; the full-screen viewer uses up to 2560.
+Typing during dictation keeps the manual edit and stops the recognition attempt,
+including while authorization is pending. Recognition callbacks also check the active
+surface, session, and remote target generation before updating a draft.
+
 After changing shared Kotlin code, regenerate the framework with the same compatible
 toolchain before building the Xcode project. Xcode links the existing XCFramework;
 its build does not rebuild Kotlin. Compiling a Kotlin target alone also does not
@@ -107,6 +115,12 @@ For offline parity regression, use `-only-testing:OpenBitFunUITests/MobileParity
 It exercises language switching, numbered file previews, plan capability gating,
 and all three bundled Mini Apps using isolated preview data. No host command is sent.
 The Mini App resource build phase requires Node.js on PATH.
+
+For next-input suggestions, run the simulator suite with
+`-only-testing:OpenBitFunUITests/PromptSuggestionUITests` on a phone and an iPad.
+The Debug-only `--prompt-suggestion-preview` launch flag uses an isolated host
+hint with the production composer; acceptance must preserve its whitespace,
+focus the editor and leave the text unsent. It does not contact a remote host.
 
 The MiniApp build phase generates resources directly into the app bundle, so
 incremental builds include CSS and script edits without relying on a folder

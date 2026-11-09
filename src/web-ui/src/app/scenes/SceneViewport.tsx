@@ -5,11 +5,13 @@
  * session tabs share one Session host backed by the authoritative selection;
  * their resource identity is independent of the host's mounting lifetime.
  *
- * When no tabs are open, the viewport renders WelcomeScene as a shell-owned
- * landing surface rather than manufacturing a tab for it.
+ * When no scene is selected, the viewport renders WelcomeScene as a shell-owned
+ * landing surface rather than manufacturing a tab for it. Background tabs may
+ * remain open while the shell is idle.
  */
 import { lazyWithRecovery } from '@/shared/utils/lazyWithRecovery';
 
+import { DeviceSwitchCurtain } from './device-switch/DeviceSwitchCurtain';
 import React, {
   Suspense,
   useCallback,
@@ -23,8 +25,13 @@ import { getSceneViewId } from '../components/SceneBar/types';
 import { useSceneManager } from '../hooks/useSceneManager';
 import { useI18n } from '@/infrastructure/i18n/hooks/useI18n';
 import { useDialogCompletionNotify } from '../hooks/useDialogCompletionNotify';
-import { Spinner } from '@openbitfun/ui';
+import { Spinner, SplitViewSurface } from '@openbitfun/ui';
+import { selectedScene, tabPane } from '../workbench/scenePaneModel';
+import { useSceneStore } from '../stores/sceneStore';
+import { useSessionPaneLayout } from './session/sessionPaneLayoutStore';
 import SettingsScene from './settings/SettingsScene';
+import { DEFAULT_SETTINGS_PAGE_ID, preloadSettingsPage } from './settings/settingsRegistry';
+import { backgroundTaskScheduler } from '@/shared/utils/backgroundTaskScheduler';
 import AssistantScene from './assistant/AssistantScene';
 import SessionScene from './session/SessionScene';
 import WelcomeScene from './welcome/WelcomeScene';
@@ -37,11 +44,10 @@ import './SceneViewport.scss';
 const TerminalScene   = lazyWithRecovery(() => import('./terminal/TerminalScene'));
 const GitScene        = lazyWithRecovery(() => import('./git/GitScene'));
 const ProfileScene    = lazyWithRecovery(() => import('./profile/ProfileScene'));
+const PersonalOverviewScene = lazyWithRecovery(() => import('./personal-overview/PersonalOverviewScene'));
+const ProjectResourcesScene = lazyWithRecovery(() => import('./project-resources/ProjectResourcesScene'));
 const AgentsScene       = lazyWithRecovery(() => import('./agents/AgentsScene'));
 const SkillsScene     = lazyWithRecovery(() => import('./skills/SkillsScene'));
-const EcosystemCompatibilityScene = lazyWithRecovery(
-  () => import('./ecosystem-compatibility/EcosystemCompatibilityScene'),
-);
 const MiniAppGalleryScene = lazyWithRecovery(() => import('./miniapps/MiniAppGalleryScene'));
 const PagesScene      = lazyWithRecovery(() => import('./pages/PagesScene'));
 const BrowserScene    = lazyWithRecovery(() => import('./browser/BrowserScene'));
@@ -51,18 +57,59 @@ const ShellScene      = lazyWithRecovery(() => import('./shell/ShellScene'));
 const MiniAppScene    = lazyWithRecovery(() => import('./miniapps/MiniAppScene'));
 
 const SCENE_ENTRY_DURATION_MS = 480;
+
+/**
+ * Scenes a user opens first get their code ready while the app is idle, so
+ * opening one renders at once instead of fetching and parsing its chunk on the
+ * click. One at a time, at idle priority, after startup has settled.
+ */
+const WARM_SCENES: ReadonlyArray<() => Promise<unknown>> = [
+  () => preloadSettingsPage(DEFAULT_SETTINGS_PAGE_ID),
+  () => AgentsScene.preload(),
+  () => SkillsScene.preload(),
+  () => MiniAppGalleryScene.preload(),
+  () => PersonalOverviewScene.preload(),
+  () => ProjectResourcesScene.preload(),
+  () => TerminalScene.preload(),
+  () => GitScene.preload(),
+];
+const SCENE_WARMUP_DELAY_MS = 2_500;
+
+function useSceneWarmup(): void {
+  useEffect(() => {
+    if (import.meta.env.MODE === 'test') return undefined;
+    let cancelled = false;
+    const handles: Array<{ cancel: () => void }> = [];
+    const timer = window.setTimeout(() => {
+      let chain: Promise<unknown> = Promise.resolve();
+      for (const warm of WARM_SCENES) {
+        chain = chain.then(() => {
+          if (cancelled) return undefined;
+          const handle = backgroundTaskScheduler.schedule(() => warm(), { priority: 'low', idle: true });
+          handles.push(handle);
+          return handle.promise.catch(() => undefined);
+        });
+      }
+    }, SCENE_WARMUP_DELAY_MS);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+      handles.forEach(handle => handle.cancel());
+    };
+  }, []);
+}
 const EMPTY_SCENE_ID = '__empty-scene__' as const;
 type RenderedSceneId = SceneTabId | typeof EMPTY_SCENE_ID;
 
 interface SceneTransition {
-  outgoingTabId: RenderedSceneId;
-  incomingTabId: RenderedSceneId;
+  outgoingTabId: RenderedSceneId | null;
+  incomingTabId: RenderedSceneId | null;
   phase: 'holding' | 'preparing' | 'running';
 }
 
 interface SceneReadyBoundaryProps {
   sceneId: SceneTabId;
-  onReady: (sceneId: SceneTabId) => void;
+  onReady: (sceneId: SceneTabId) => () => void;
   children: React.ReactNode;
 }
 
@@ -77,7 +124,7 @@ const SceneReadyBoundary: React.FC<SceneReadyBoundaryProps> = ({
   children,
 }) => {
   useLayoutEffect(() => {
-    onReady(sceneId);
+    return onReady(sceneId);
   }, [onReady, sceneId]);
 
   return <>{children}</>;
@@ -86,28 +133,174 @@ const SceneReadyBoundary: React.FC<SceneReadyBoundaryProps> = ({
 interface SceneViewportProps {
   workspacePath?: string;
   isEntering?: boolean;
+  paned?: boolean;
 }
 
-const SceneViewport: React.FC<SceneViewportProps> = ({ workspacePath, isEntering = false }) => {
+interface SceneContentProps {
+  sceneId: SceneTabId;
+  workspacePath?: string;
+  isEntering?: boolean;
+  isActive: boolean;
+}
+
+// Keep retained scenes subscribed to their own data/context, without rendering
+// every open scene again for each navigation and transition phase in the deck.
+const SceneContent = React.memo(function SceneContent({
+  sceneId, workspacePath, isEntering, isActive,
+}: SceneContentProps) {
+  return renderScene(sceneId, workspacePath, isEntering, isActive);
+});
+
+const SceneViewport: React.FC<SceneViewportProps> = ({ workspacePath, isEntering = false, paned = false }) => {
   const {
     openTabs,
     activeTabId,
     navigationMotion,
     navigationSequence,
+    paneSelections,
   } = useSceneManager();
   const { t } = useI18n('common');
   const resources = useContentResourceStore(state => state.resources);
-  const activeRenderedSceneId: RenderedSceneId = activeTabId ? getSceneViewId(activeTabId) : EMPTY_SCENE_ID;
+  const pane = useSessionPaneLayout();
+  const primaryTabId = paned ? selectedScene(paneSelections.primary) : activeTabId;
+  const secondaryTabId = paned ? selectedScene(paneSelections.secondary) : null;
+  const activeRenderedSceneId: RenderedSceneId | null = primaryTabId ? getSceneViewId(primaryTabId)
+    : paned && paneSelections.primary.kind === 'canvas' ? null : EMPTY_SCENE_ID;
+  const secondarySceneId = secondaryTabId ? getSceneViewId(secondaryTabId) : null;
+  const primaryTransition = useSceneTransition(activeRenderedSceneId, navigationMotion, navigationSequence);
+  const secondaryTransition = useSceneTransition(secondarySceneId, navigationMotion, navigationSequence);
+  const pendingTransition = primaryTransition.pendingTransition;
+  useDialogCompletionNotify();
+  useSceneWarmup();
+  const renderedTabIds: RenderedSceneId[] = [...new Set(openTabs.map(tab => getSceneViewId(tab.id)))];
+  for (const resource of Object.values(resources)) {
+    const id: SceneTabId = `content:${resource.id}`;
+    if (resource.target.kind === 'file' && !renderedTabIds.includes(id)) renderedTabIds.push(id);
+  }
+  if (activeRenderedSceneId === EMPTY_SCENE_ID) renderedTabIds.push(EMPTY_SCENE_ID);
+  for (const transition of [primaryTransition, secondaryTransition]) {
+    if (transition.outgoingTabId && !renderedTabIds.includes(transition.outgoingTabId)) renderedTabIds.push(transition.outgoingTabId);
+  }
+
+  return (
+    <div
+      className={`openbitfun-scene-viewport${paned ? ' openbitfun-scene-viewport--paned' : ''}`}
+      data-testid="scene-viewport"
+      data-openbitfun-scene="workbench"
+      data-openbitfun-part="viewport"
+      data-openbitfun-state={activeRenderedSceneId === EMPTY_SCENE_ID ? 'empty' : undefined}
+    >
+      <div
+        className="openbitfun-scene-viewport__clip"
+        data-testid="scene-viewport-clip"
+        data-scene-motion-phase={pendingTransition?.phase}
+        data-openbitfun-scene="workbench"
+        data-openbitfun-part="viewportClip"
+      >
+        {renderedTabIds.map(tabId => {
+          const isEmpty = tabId === EMPTY_SCENE_ID;
+          const isSecondary = tabId === secondarySceneId || (tabId !== activeRenderedSceneId && (
+            tabId === secondaryTransition.outgoingTabId || openTabs.some(tab => getSceneViewId(tab.id) === tabId && tabPane(tab) === 'secondary')));
+          const location = paned && isSecondary ? 'secondary' : 'primary';
+          const selectedId = location === 'secondary' ? secondarySceneId : activeRenderedSceneId;
+          const transition = location === 'secondary' ? secondaryTransition : primaryTransition;
+          const paneVisible = !paned || (location === 'secondary' ? pane.mode !== 'chat-only' : pane.mode !== 'content-only');
+          const isActive = tabId === selectedId && paneVisible;
+          const isOutgoing = !isActive && tabId === transition.outgoingTabId;
+          const isIncoming = isActive && transition.pendingTransition?.incomingTabId === tabId;
+          const phase = transition.pendingTransition?.phase;
+          // Holding shows only the outgoing scene; once the incoming one is
+          // ready both are shown and the outgoing one fades out above it.
+          const isVisible = paneVisible && (phase === 'holding' && transition.outgoingTabId
+            ? isOutgoing : isActive || (!paned && isOutgoing && (phase === 'preparing' || phase === 'running')));
+          const Host: React.ElementType = paned ? SplitViewSurface : 'div';
+          const focusScene = () => {
+            if (isActive) useSceneStore.getState().focusPane(location);
+          };
+          return (
+            <Host
+              key={tabId}
+              {...(paned ? { pane: location, active: isVisible } : {})}
+              onPointerDownCapture={paned ? focusScene : undefined}
+              onFocusCapture={paned ? focusScene : undefined}
+              className={[
+                'openbitfun-scene-viewport__scene',
+                isEmpty && 'openbitfun-scene-viewport__scene--empty',
+                isActive && 'openbitfun-scene-viewport__scene--active',
+                isVisible && 'openbitfun-scene-viewport__scene--visible',
+                isIncoming && 'openbitfun-scene-viewport__scene--incoming',
+                isOutgoing && 'openbitfun-scene-viewport__scene--outgoing',
+              ].filter(Boolean).join(' ')}
+              aria-hidden={!isActive || !isVisible}
+              {...(!isActive || !isVisible ? { inert: '' } : {})}
+              data-testid="scene-viewport-scene"
+              data-scene-id={tabId}
+              data-pane-motion-phase={transition.pendingTransition?.phase}
+              data-shortcut-scope={String(tabId).startsWith('content:') ? 'workbench-content' : undefined}
+              data-scene-active={isActive ? 'true' : 'false'}
+              data-openbitfun-scene="workbench"
+              data-openbitfun-part="scene"
+              data-openbitfun-scene-id={isEmpty ? 'welcome' : tabId.startsWith('project-resources:') ? 'project-resources' : tabId.startsWith('content:') ? 'content' : tabId.startsWith('miniapp:') ? 'miniapp' : tabId}
+              data-openbitfun-state={[
+                isActive && 'active',
+                isEmpty && 'empty',
+              ].filter(Boolean).join(' ') || undefined}
+            >
+              {isEmpty ? (
+                <div
+                  className="openbitfun-scene-viewport__empty"
+                  data-testid="scene-viewport-empty"
+                  data-openbitfun-scene="workbench"
+                  data-openbitfun-part="empty"
+                  data-openbitfun-state="empty"
+                >
+                  <WelcomeScene />
+                </div>
+              ) : (
+                <Suspense
+                  fallback={
+                    isActive ? (
+                      <div
+                        className="openbitfun-scene-viewport__lazy-fallback"
+                        role="status"
+                        aria-busy="true"
+                        aria-label={t('loading.scenes')}
+                        data-openbitfun-scene="workbench"
+                        data-openbitfun-part="loading"
+                      >
+                        <Spinner size="md" />
+                      </div>
+                    ) : null
+                  }
+                >
+                  <SceneReadyBoundary sceneId={tabId} onReady={transition.markSceneReady}>
+                    <SceneContent sceneId={tabId} workspacePath={workspacePath} isEntering={isEntering} isActive={isActive} />
+                  </SceneReadyBoundary>
+                </Suspense>
+              )}
+            </Host>
+          );
+        })}
+      </div>
+      <DeviceSwitchCurtain />
+    </div>
+  );
+};
+
+function useSceneTransition(activeRenderedSceneId: RenderedSceneId | null,
+  navigationMotion: string, navigationSequence: number) {
   const [transition, setTransition] = useState<SceneTransition | null>(null);
   const [readyVersion, setReadyVersion] = useState(0);
   const readySceneIdsRef = useRef<Set<RenderedSceneId>>(new Set([EMPTY_SCENE_ID]));
-  const previousActiveTabIdRef = useRef<RenderedSceneId>(activeRenderedSceneId);
-  useDialogCompletionNotify();
+  const previousActiveTabIdRef = useRef<RenderedSceneId | null>(activeRenderedSceneId);
 
   const markSceneReady = useCallback((sceneId: SceneTabId) => {
-    if (readySceneIdsRef.current.has(sceneId)) return;
-    readySceneIdsRef.current.add(sceneId);
-    setReadyVersion(version => version + 1);
+    if (!readySceneIdsRef.current.has(sceneId)) {
+      readySceneIdsRef.current.add(sceneId);
+      setReadyVersion(version => version + 1);
+    }
+    // Readiness belongs to the mounted tree, not a tab id that may be reopened.
+    return () => { readySceneIdsRef.current.delete(sceneId); };
   }, []);
 
   // Derive the outgoing id during render as well as from state. Pointer
@@ -125,19 +318,6 @@ const SceneViewport: React.FC<SceneViewportProps> = ({ workspacePath, isEntering
       ? null
       : transition;
   const outgoingTabId = pendingTransition?.outgoingTabId ?? null;
-  // Session tabs are resource bookmarks into a shared projection. Mounting one
-  // SessionScene per tab would duplicate global composers, listeners and panes.
-  const renderedTabIds: RenderedSceneId[] = [...new Set(openTabs.map(tab => getSceneViewId(tab.id)))];
-  // Open documents retain their view/undo state while another device is selected.
-  for (const resource of Object.values(resources)) {
-    const id: SceneTabId = `content:${resource.id}`;
-    if (resource.target.kind === 'file' && !renderedTabIds.includes(id)) renderedTabIds.push(id);
-  }
-  if (activeTabId === null) renderedTabIds.push(EMPTY_SCENE_ID);
-  if (outgoingTabId && !renderedTabIds.includes(outgoingTabId)) {
-    renderedTabIds.push(outgoingTabId);
-  }
-
   useLayoutEffect(() => {
     const previousActiveTabId = previousActiveTabIdRef.current;
     previousActiveTabIdRef.current = activeRenderedSceneId;
@@ -154,14 +334,14 @@ const SceneViewport: React.FC<SceneViewportProps> = ({ workspacePath, isEntering
     setTransition({
       outgoingTabId: previousActiveTabId,
       incomingTabId: activeRenderedSceneId,
-      phase: readySceneIdsRef.current.has(activeRenderedSceneId) ? 'preparing' : 'holding',
+      phase: (!activeRenderedSceneId || readySceneIdsRef.current.has(activeRenderedSceneId)) ? 'preparing' : 'holding',
     });
   }, [activeRenderedSceneId, navigationMotion, navigationSequence]);
 
   useLayoutEffect(() => {
     if (
       transition?.phase !== 'holding'
-      || !readySceneIdsRef.current.has(transition.incomingTabId)
+      || transition.incomingTabId !== null && !readySceneIdsRef.current.has(transition.incomingTabId)
     ) {
       return;
     }
@@ -209,93 +389,8 @@ const SceneViewport: React.FC<SceneViewportProps> = ({ workspacePath, isEntering
     return () => window.clearTimeout(entryTimer);
   }, [transition]);
 
-  return (
-    <div
-      className="openbitfun-scene-viewport"
-      data-testid="scene-viewport"
-      data-openbitfun-scene="workbench"
-      data-openbitfun-part="viewport"
-      data-openbitfun-state={activeRenderedSceneId === EMPTY_SCENE_ID ? 'empty' : undefined}
-    >
-      <div
-        className="openbitfun-scene-viewport__clip"
-        data-testid="scene-viewport-clip"
-        data-scene-motion-phase={pendingTransition?.phase}
-        data-openbitfun-scene="workbench"
-        data-openbitfun-part="viewportClip"
-      >
-        {renderedTabIds.map(tabId => {
-          const isEmpty = tabId === EMPTY_SCENE_ID;
-          const isActive = tabId === activeRenderedSceneId;
-          const isOutgoing = !isActive && tabId === outgoingTabId;
-          const isIncoming = isActive && pendingTransition?.incomingTabId === tabId;
-          const isVisible = pendingTransition?.phase === 'holding'
-            ? isOutgoing
-            : isActive;
-          return (
-            <div
-              key={tabId}
-              className={[
-                'openbitfun-scene-viewport__scene',
-                isEmpty && 'openbitfun-scene-viewport__scene--empty',
-                isActive && 'openbitfun-scene-viewport__scene--active',
-                isVisible && 'openbitfun-scene-viewport__scene--visible',
-                isIncoming && 'openbitfun-scene-viewport__scene--incoming',
-                isOutgoing && 'openbitfun-scene-viewport__scene--outgoing',
-              ].filter(Boolean).join(' ')}
-              aria-hidden={!isActive || !isVisible}
-              {...(!isActive || !isVisible ? { inert: '' } : {})}
-              data-testid="scene-viewport-scene"
-              data-scene-id={tabId}
-              data-shortcut-scope={String(tabId).startsWith('content:') ? 'canvas' : undefined}
-              data-scene-active={isActive ? 'true' : 'false'}
-              data-openbitfun-scene="workbench"
-              data-openbitfun-part="scene"
-              data-openbitfun-scene-id={isEmpty ? 'welcome' : tabId.startsWith('content:') ? 'content' : tabId.startsWith('miniapp:') ? 'miniapp' : tabId}
-              data-openbitfun-state={[
-                isActive && 'active',
-                isEmpty && 'empty',
-              ].filter(Boolean).join(' ') || undefined}
-            >
-              {isEmpty ? (
-                <div
-                  className="openbitfun-scene-viewport__empty"
-                  data-testid="scene-viewport-empty"
-                  data-openbitfun-scene="workbench"
-                  data-openbitfun-part="empty"
-                  data-openbitfun-state="empty"
-                >
-                  <WelcomeScene />
-                </div>
-              ) : (
-                <Suspense
-                  fallback={
-                    isActive ? (
-                      <div
-                        className="openbitfun-scene-viewport__lazy-fallback"
-                        role="status"
-                        aria-busy="true"
-                        aria-label={t('loading.scenes')}
-                        data-openbitfun-scene="workbench"
-                        data-openbitfun-part="loading"
-                      >
-                        <Spinner size="md" />
-                      </div>
-                    ) : null
-                  }
-                >
-                  <SceneReadyBoundary sceneId={tabId} onReady={markSceneReady}>
-                    {renderScene(tabId, workspacePath, isEntering, isActive)}
-                  </SceneReadyBoundary>
-                </Suspense>
-              )}
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-};
+  return { pendingTransition, outgoingTabId, markSceneReady };
+}
 
 function renderScene(
   id: SceneTabId,
@@ -314,12 +409,12 @@ function renderScene(
       return <SettingsScene isActive={isActive} />;
     case 'profile':
       return <ProfileScene />;
+    case 'personal-overview':
+      return <PersonalOverviewScene isActive={isActive} />;
     case 'agents':
       return <AgentsScene />;
     case 'skills':
       return <SkillsScene />;
-    case 'ecosystem-compatibility':
-      return <EcosystemCompatibilityScene />;
     case 'miniapps':
       return <MiniAppGalleryScene />;
     case 'pages':
@@ -329,12 +424,15 @@ function renderScene(
     case 'assistant':
       return <AssistantScene />;
     case 'todos':
-      return <TodosScene />;
+      return <TodosScene isActive={isActive} />;
     case 'insights':
       return <InsightsScene />;
     case 'shell':
       return <ShellScene isActive={isActive} />;
     default:
+      if (id.startsWith('project-resources:')) {
+        return <ProjectResourcesScene sceneId={id} isActive={isActive} />;
+      }
       if (id.startsWith('content:')) {
         return <ContentResourceView resourceId={id.slice('content:'.length)} isActive={isActive} />;
       }

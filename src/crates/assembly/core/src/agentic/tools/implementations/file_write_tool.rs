@@ -205,8 +205,6 @@ impl FileWriteTool {
             "success": true,
             "status": outcome.status.as_str(),
             "missing_path_fallback": missing_path_fallback,
-            "rename_required": missing_path_fallback,
-            "path_format_corrected": path_format_warning.is_some(),
             "path_format_warning": path_format_warning,
             "message": assistant_message,
         });
@@ -338,6 +336,23 @@ impl Tool for FileWriteTool {
         _context: Option<&ToolUseContext>,
     ) -> Value {
         FileWriteTool::input_schema()
+    }
+
+    fn output_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "file_path": {"type": "string"},
+                "bytes_written": {"type": "integer"},
+                "lines_written": {"type": "integer"},
+                "success": {"type": "boolean"},
+                "status": {"type": "string"},
+                "message": {"type": "string"},
+                "plan_format": {"type": "object", "additionalProperties": true}
+            },
+            "required": ["file_path", "bytes_written", "lines_written", "success", "status", "message"],
+            "additionalProperties": false
+        })
     }
 
     fn is_readonly(&self) -> bool {
@@ -588,6 +603,7 @@ mod tests {
             dialog_turn_id: None,
             workspace: Some(WorkspaceBinding::new(None, root)),
             loaded_deferred_tool_specs: Vec::new(),
+            model_client: None,
             primary_model_facts: tool_runtime::context::PrimaryModelFacts::default(),
             custom_data: HashMap::new(),
             computer_use_host: None,
@@ -1123,7 +1139,6 @@ mod tests {
             panic!("expected result");
         };
 
-        assert_eq!(data["path_format_corrected"], true);
         assert_eq!(data["path_format_warning"], warning);
         assert!(warning.contains(requested_path));
         assert!(warning.contains(r"E:\workspace\project\example.txt"));
@@ -1219,7 +1234,7 @@ mod tests {
             Some(file_name.as_str())
         );
         assert_eq!(data["missing_path_fallback"], true);
-        assert_eq!(data["rename_required"], true);
+        assert!(data.get("rename_required").is_none());
         let assistant_message = result_for_assistant.as_deref().unwrap_or_default();
         assert!(assistant_message
             .contains("Use your shell tool to move this file to the intended path"));

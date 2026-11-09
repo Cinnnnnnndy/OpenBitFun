@@ -16,10 +16,10 @@ type StandardToolCardRegistry = Record<
   JSXElementConstructor<ToolCardProps>
 > &
   Partial<Record<CompatibilityStandardToolName, JSXElementConstructor<ToolCardProps>>>;
-type ProductToolCardRegistry = Record<
+type ProductToolCardRegistry = Partial<Record<
   ToolNameForOwner<'product'>,
   JSXElementConstructor<ToolCardProps>
-> &
+>> &
   Partial<Record<CompatibilityProductToolName, JSXElementConstructor<ToolCardProps>>>;
 
 export {
@@ -68,10 +68,9 @@ import { ExecCommandToolCard } from './ExecCommandToolCard';
 import { WriteStdinToolCard } from './WriteStdinToolCard';
 import { ExecControlToolCard } from './ExecControlToolCard';
 import { InitMiniAppDisplay } from './MiniAppToolDisplay';
+import { PageManageDisplay } from './PageManageToolDisplay';
 import { PageDeployDisplay } from './PageDeployToolDisplay';
 import { PagePublishDisplay } from './PagePublishToolDisplay';
-import { GenerativeWidgetToolCard } from './GenerativeWidgetToolCard';
-import { CanvasToolCard } from './CanvasToolCard';
 import { ReviewSessionSummaryCard } from './ReviewSessionSummaryCard';
 import { SessionControlToolCard } from './SessionControlToolCard';
 import { SessionMessageToolCard } from './SessionMessageToolCard';
@@ -82,6 +81,7 @@ import { OpenBitFunControlToolCard } from './OpenBitFunControlToolCard';
 import { ListModelsToolCard } from './ListModelsToolCard';
 import { ControlHubToolCard } from './ControlHubToolCard';
 import { BuiltinToolCard } from './BuiltinToolCard';
+import { GenerateImageToolCard } from './GenerateImageToolCard';
 
 /**
  * Standard tool adapters backed by concrete `@openbitfun/ui/flow-chat` views.
@@ -142,6 +142,7 @@ export const STANDARD_TOOL_CARD_ADAPTERS = {
   'ExecControl': ExecControlToolCard,
 
   // OpenBitFun Page (session-only publish)
+  'PageManage': PageManageDisplay,
   'PageDeploy': PageDeployDisplay,
   'PagePublish': PagePublishDisplay,
 
@@ -154,6 +155,7 @@ export const STANDARD_TOOL_CARD_ADAPTERS = {
   'AgentDelete': AgentDeleteToolCard,
   'SessionHistory': BuiltinToolCard,
   'analyze_image': BuiltinToolCard,
+  'generate_image': GenerateImageToolCard,
   'GetTime': BuiltinToolCard,
   'ListMCPResources': BuiltinToolCard,
   'ReadMCPResource': BuiltinToolCard,
@@ -167,6 +169,7 @@ export const STANDARD_TOOL_CARD_ADAPTERS = {
   'PublishMiniApp': BuiltinToolCard,
   'PublishAppearance': BuiltinToolCard,
   'Playbook': BuiltinToolCard,
+  'DesktopCard': BuiltinToolCard,
 } as const satisfies StandardToolCardRegistry;
 
 /**
@@ -184,15 +187,9 @@ export const PRODUCT_OWNED_TOOL_CARD_COMPONENTS = {
   // Legacy CreatePlan history remains displayable after runtime tool removal.
   'CreatePlan': CreatePlanDisplay,
   'InitMiniApp': InitMiniAppDisplay,
-  'GenerativeUI': GenerativeWidgetToolCard,
   'ComputerUse': ComputerUseToolCard,
   'OpenBitFunControl': OpenBitFunControlToolCard,
 
-  // OpenBitFun Canvas tools
-  'CreateCanvas': CanvasToolCard,
-  'ReadCanvas': CanvasToolCard,
-  'UpdateCanvas': CanvasToolCard,
-  'PatchCanvas': CanvasToolCard,
 } as const satisfies ProductToolCardRegistry;
 
 // Runtime map keyed by backend tool names.

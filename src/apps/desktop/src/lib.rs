@@ -25,24 +25,37 @@ pub mod appearance;
 mod builtin_browser_host;
 pub mod computer_use;
 pub mod crash_diagnostics;
+pub mod desktop_cards;
 mod embedded_relay_host;
 pub mod frontend_workbench;
 pub mod logging;
 pub mod macos_menubar;
 #[cfg(target_os = "macos")]
 mod macos_window_chrome;
+#[cfg(target_os = "macos")]
+mod macos_window_close;
+#[cfg(target_os = "macos")]
+mod macos_window_resize;
+mod miniapp_desktop;
+mod miniapp_web_host;
+
+// Keep one macro expansion: on macOS it emits a process-wide Info.plist symbol.
+fn desktop_context() -> tauri::Context<tauri::Wry> {
+    tauri::generate_context!()
+}
 mod openbitfun_control_host;
 pub mod runtime;
 pub mod sleep_prevention;
 pub mod startup_trace;
 pub mod tray;
 mod webview_recovery;
+mod window_material;
 mod window_state_support;
 #[cfg(target_os = "windows")]
 mod window_webview_geometry;
 
 use openbitfun_agent_runtime::sdk::{attach_session_event_cursor, SessionEventJournal};
-use openbitfun_core::agentic::tools::computer_use_capability::set_computer_use_desktop_available;
+use openbitfun_core::agentic::tools::computer_use_capability::set_computer_use_host_available;
 use openbitfun_core::agentic::tools::computer_use_host::ComputerUseHostRef;
 use openbitfun_core::infrastructure::ai::AIClientFactory;
 use openbitfun_core::infrastructure::{get_path_manager_arc, try_get_path_manager_arc};
@@ -78,6 +91,7 @@ use api::custom_agent_api::{
 };
 use api::diff_api::*;
 use api::external_hooks_api::*;
+use api::external_session_import_api::*;
 use api::external_sources_api::*;
 use api::git_agent_api::*;
 use api::git_api::*;
@@ -182,8 +196,11 @@ pub(crate) fn mark_main_window_hidden_on_macos(hidden: bool) {
 }
 
 #[cfg(target_os = "macos")]
-pub(crate) fn cancel_main_window_close_request_on_macos() {
+pub(crate) fn cancel_main_window_close_request_on_macos(app: &tauri::AppHandle) {
     MAIN_WINDOW_CLOSE_PENDING_ON_MACOS.store(false, Ordering::SeqCst);
+    if let Err(error) = app.run_on_main_thread(macos_window_chrome::cancel_pending_hide) {
+        log::warn!("Failed to cancel deferred macOS main-window hide: {error}");
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -201,39 +218,32 @@ fn take_main_window_close_request_on_macos() -> bool {
 }
 
 #[cfg(target_os = "macos")]
-fn hide_main_window_on_macos(app: &tauri::AppHandle, reason: &str) -> Result<(), String> {
-    let Some(main_window) = app.get_webview_window("main") else {
-        mark_main_window_hidden_on_macos(false);
-        return Err("Main window not found".to_string());
-    };
-
-    main_window.hide().map_err(|error| {
-        mark_main_window_hidden_on_macos(false);
-        log::warn!(
-            "Failed to hide main window on macOS close request: reason={}, error={}",
-            reason,
-            error
-        );
-        format!("Failed to hide main window: {}", error)
-    })?;
-
-    mark_main_window_hidden_on_macos(true);
-    log::info!(
-        "Main window close requested on macOS; hid window instead of exiting: reason={}",
-        reason
-    );
-    Ok(())
+async fn hide_main_window_on_macos(
+    app: &tauri::AppHandle,
+    reason: &'static str,
+) -> Result<(), String> {
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    app.run_on_main_thread(move || {
+        // Claim on the AppKit thread so a reopen can cancel an enqueued hide.
+        let result = if take_main_window_close_request_on_macos() {
+            macos_window_chrome::request_hide(reason)
+        } else {
+            Ok(())
+        };
+        let _ = sender.send(result);
+    })
+    .map_err(|error| format!("Failed to schedule main-window hide: {error}"))?;
+    receiver
+        .await
+        .map_err(|error| format!("Main-window hide was canceled: {error}"))?
 }
 
 #[cfg(target_os = "macos")]
 fn show_main_window_on_macos(app: &tauri::AppHandle, reason: &str) {
-    cancel_main_window_close_request_on_macos();
+    cancel_main_window_close_request_on_macos(app);
 
-    let Some(main_window) = app.get_webview_window("main") else {
-        log::warn!(
-            "Failed to show main window on macOS reopen event: reason={}, error=main window not found",
-            reason
-        );
+    let Some(main_window) = app.get_window("main") else {
+        handle_secondary_launch(app);
         return;
     };
 
@@ -262,9 +272,7 @@ fn show_main_window_on_macos(app: &tauri::AppHandle, reason: &str) {
 async fn hide_main_window_after_close_request(app: tauri::AppHandle) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
-        if take_main_window_close_request_on_macos() {
-            hide_main_window_on_macos(&app, "frontend_ack")?;
-        }
+        hide_main_window_on_macos(&app, "frontend_ack").await?;
     }
     #[cfg(not(target_os = "macos"))]
     {
@@ -279,13 +287,28 @@ fn show_main_window_for_secondary_launch(
     app: &tauri::AppHandle,
     attempt: &str,
 ) -> Result<(), String> {
-    let Some(main_window) = app.get_webview_window("main") else {
+    if app.get_window("main").is_none() {
+        #[cfg(target_os = "macos")]
+        let _ = app.set_activation_policy(tauri::ActivationPolicy::Regular);
+        let trace = app.state::<DesktopStartupTrace>();
+        appearance::create_main_window(
+            app,
+            trace.trace_id(),
+            &trace,
+            None,
+            Arc::clone(
+                app.state::<Arc<frontend_workbench::FrontendWorkbenchManager>>()
+                    .inner(),
+            ),
+        );
+    }
+    let Some(main_window) = app.get_window("main") else {
         return Err("main window not found".to_string());
     };
 
     #[cfg(target_os = "macos")]
     {
-        cancel_main_window_close_request_on_macos();
+        cancel_main_window_close_request_on_macos(app);
         mark_main_window_hidden_on_macos(false);
     }
 
@@ -411,6 +434,60 @@ fn get_startup_native_trace(
 /// Tauri application entry point
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub async fn run() {
+    // E2E profiles must isolate authentication as well as ordinary config.
+    // Use the existing encrypted fixture vault on every platform, before any
+    // account discovery or background refresh can touch the normal profile.
+    if e2e_storage_guard_enabled() {
+        let paths = match openbitfun_core::infrastructure::PathManager::new() {
+            Ok(paths) => paths,
+            Err(error) => {
+                eprintln!("Failed to initialize isolated E2E authentication storage: {error}");
+                return;
+            }
+        };
+        openbitfun_core::infrastructure::subscription_auth::store::set_store_path_and_file_vault_for_test(
+            paths.user_data_dir().join("subscription_auth.json"),
+        );
+        #[cfg(not(debug_assertions))]
+        if std::env::var_os("OPENBITFUN_E2E_SUBSCRIPTION_CA_FILE").is_some() {
+            eprintln!("Isolated subscription mock TLS requires a debug build");
+            return;
+        }
+        #[cfg(debug_assertions)]
+        if let Some(certificate_path) = std::env::var_os("OPENBITFUN_E2E_SUBSCRIPTION_CA_FILE") {
+            let result = std::fs::read(certificate_path)
+                .map_err(|error| error.to_string())
+                .and_then(|pem| openbitfun_core::infrastructure::subscription_auth::set_isolated_http_root_certificate_for_test(&pem).map_err(|error| error.to_string()));
+            if let Err(error) = result {
+                eprintln!("Failed to initialize isolated E2E subscription TLS: {error}");
+                return;
+            }
+        }
+    }
+    match miniapp_desktop::launch_manifest() {
+        Ok(Some(manifest)) => {
+            if let Err(error) = miniapp_desktop::run_shell(manifest) {
+                show_fatal_startup_error(&error);
+            }
+            return;
+        }
+        Err(error) => {
+            show_fatal_startup_error(&error);
+            return;
+        }
+        Ok(None) => {}
+    }
+    let miniapp_background = std::env::args_os().any(|arg| arg == "--miniapp-background");
+    let miniapp_host_channel = miniapp_desktop::host_channel();
+    let _miniapp_host_owner =
+        match miniapp_desktop::claim_host(miniapp_background, miniapp_host_channel).await {
+            Ok(Some(owner)) => owner,
+            Ok(None) => return,
+            Err(error) => {
+                show_fatal_startup_error(&error);
+                return;
+            }
+        };
     let startup_started = Instant::now();
     let startup_trace_id = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -691,14 +768,19 @@ pub async fn run() {
         // developer's normal OpenBitFun instance. Its storage root and automation
         // port are already test-scoped, so joining the product single-instance
         // group would make the E2E child exit before WebDriver can attach.
-        if !logging::is_embedded_webdriver_mode() {
+        if !logging::is_embedded_webdriver_mode()
+            && std::env::var_os("OPENBITFUN_USER_ROOT").is_none()
+            && miniapp_host_channel.is_default()
+        {
             builder = builder.plugin(tauri_plugin_single_instance::init(|app, args, cwd| {
                 log::info!(
                     "Existing OpenBitFun Desktop instance received launch request: args_count={}, cwd={}",
                     args.len(),
                     cwd
                 );
-                handle_secondary_launch(app);
+                if !args.iter().any(|arg| arg == "--miniapp-background") {
+                    handle_secondary_launch(app);
+                }
             }));
         }
     }
@@ -709,6 +791,9 @@ pub async fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
+        // The webview's own clipboard API raises a WebView2 permission prompt on
+        // first read; product clipboard paths go through this plugin instead.
+        .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(
             tauri_plugin_autostart::Builder::new()
                 .app_name("OpenBitFun")
@@ -720,6 +805,7 @@ pub async fn run() {
         // window-state: its exit hook can overwrite repairs with stale cached data.
         .manage(window_state_support::MainWindowState::default())
         .manage(app_state)
+        .manage(miniapp_desktop::DesktopMiniApps::new(miniapp_host_channel))
         .manage(sleep_prevention::SleepPreventionState::default())
         .manage(desktop_runtime)
         .manage(coordinator_state)
@@ -740,7 +826,7 @@ pub async fn run() {
                     tauri::webview::PageLoadEvent::Finished => "finished",
                 };
                 let url = payload.url().to_string();
-                api::browser_api::update_browser_target_url(label, &url);
+                api::browser_api::update_browser_target_page_load(label, event, &url);
                 openbitfun_core::agentic::tools::browser_control::builtin_browser::publish_builtin_browser_page_load(
                     label,
                     event,
@@ -1026,13 +1112,19 @@ pub async fn run() {
             };
             let window_started = Instant::now();
             startup_trace.record_phase("main_window_create_start", "native_window");
-            appearance::create_main_window(
+            if !miniapp_background {
+                appearance::create_main_window(
                 &app_handle,
                 &startup_trace_id,
                 &startup_trace,
                 workspace_startup_bootstrap_snapshot,
                 Arc::clone(&frontend_workbench),
             );
+            } else {
+                #[cfg(target_os = "macos")]
+                app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+            }
+            miniapp_desktop::install(&app_handle).map_err(std::io::Error::other)?;
             let window_duration_ms = elapsed_ms(window_started);
             startup_trace.record_step(
                 "native_step_end",
@@ -1048,6 +1140,12 @@ pub async fn run() {
             openbitfun_webdriver::maybe_start(app_handle.clone());
             builtin_browser_host::install(app_handle.clone());
             openbitfun_control_host::install(app_handle.clone());
+            miniapp_web_host::install(app_handle.clone());
+            if !miniapp_background {
+                if let Err(error) = desktop_cards::install(&app_handle) {
+                    log::warn!("Desktop cards unavailable: {}", error);
+                }
+            }
             startup_trace.record_elapsed_step(
                 "native_setup",
                 "maybe_start_webdriver",
@@ -1194,6 +1292,10 @@ pub async fn run() {
             move |window, event| {
                 #[cfg(target_os = "windows")]
                 window_webview_geometry::handle_event(window, event);
+                if window.label().starts_with(desktop_cards::DESKTOP_CARD_WINDOW_PREFIX) {
+                    desktop_cards::handle_window_event(window, event);
+                    return;
+                }
                 if window.label() == "main"
                     && !MAIN_WINDOW_USES_TRANSIENT_GEOMETRY.load(Ordering::SeqCst)
                     && matches!(event, tauri::WindowEvent::Moved(_) | tauri::WindowEvent::Resized(_))
@@ -1208,6 +1310,12 @@ pub async fn run() {
 
                 if let tauri::WindowEvent::CloseRequested { api: _api, .. } = event {
                     if window.label() == "main" {
+                        if window.app_handle().state::<miniapp_desktop::DesktopMiniApps>().instances.snapshot().instances.iter().any(|instance|
+                            instance.primary_view.iter().chain(instance.pending_view.iter()).any(|view| view.kind == openbitfun_product_domains::miniapp::instances::MiniAppViewKind::Window)) {
+                            _api.prevent_close();
+                            let _ = window.hide();
+                            return;
+                        }
                         #[cfg(target_os = "macos")]
                         {
                             _api.prevent_close();
@@ -1229,15 +1337,13 @@ pub async fn run() {
                                 ))
                                 .await;
 
-                                if take_main_window_close_request_on_macos() {
-                                    if let Err(error) =
-                                        hide_main_window_on_macos(&app_handle, "frontend_timeout")
-                                    {
-                                        log::warn!(
-                                            "macOS close fallback hide failed after frontend timeout: {}",
-                                            error
-                                        );
-                                    }
+                                if let Err(error) =
+                                    hide_main_window_on_macos(&app_handle, "frontend_timeout").await
+                                {
+                                    log::warn!(
+                                        "macOS close fallback hide failed after frontend timeout: {}",
+                                        error
+                                    );
                                 }
                             });
                         }
@@ -1261,6 +1367,8 @@ pub async fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            api::miniapp_api::miniapp_presentation,
+            api::miniapp_api::miniapp_shell_call,
             appearance::show_main_window,
             frontend_workbench::frontend_update_candidate_ready,
             frontend_workbench::frontend_update_candidate_failed,
@@ -1271,6 +1379,14 @@ pub async fn run() {
             api::agentic_api::create_session,
             api::agentic_api::update_session_mode,
             api::agentic_api::update_session_model,
+            api::agentic_api::get_model_routing_status,
+            api::model_pool_api::get_model_pools,
+            api::model_pool_api::retry_model_pool_member,
+            api::model_pool_api::save_model_pool,
+            api::model_pool_api::delete_model_pool,
+            api::model_pool_api::get_model_pool_status,
+            api::model_pool_api::get_session_model_target,
+            api::model_pool_api::update_session_model_target,
             api::agentic_api::update_session_permission_mode,
             api::agentic_api::update_active_turn_permission_mode,
             api::agentic_api::get_session_permission_mode,
@@ -1306,6 +1422,7 @@ pub async fn run() {
             api::agentic_api::restore_session_view,
             api::agentic_api::load_session_event_backfill,
             api::agentic_api::load_session_turn_window,
+            api::agentic_api::load_session_trajectory,
             api::agentic_api::restore_session_with_turns,
             api::agentic_api::reset_memory,
             api::agentic_api::get_memory_paths,
@@ -1345,6 +1462,8 @@ pub async fn run() {
             reveal_external_source_location,
             get_external_source_control_snapshot,
             get_external_source_discovery_snapshot,
+            list_removed_external_sessions,
+            restore_removed_external_session,
             apply_external_source_control_action_command,
             get_external_ecosystem_awareness_command,
             acknowledge_external_ecosystems_command,
@@ -1379,13 +1498,24 @@ pub async fn run() {
             openbitfun_control_host::mark_openbitfun_control_surface_ready,
             openbitfun_control_host::mark_openbitfun_control_surface_unready,
             openbitfun_control_host::product_control_invoke,
+            api::generative_ui_api::gen_ui_provider_call,
             openbitfun_control_host::report_openbitfun_control_result,
+            miniapp_web_host::mark_miniapp_web_surface_ready,
+            miniapp_web_host::report_miniapp_web_result,
             get_health_status,
             get_statistics,
             test_ai_connection,
             test_ai_config_connection,
+            test_image_generation_service,
             list_ai_models_by_config,
+            probe_magpie_gateway,
             list_subscription_accounts,
+            list_subscription_account_instances,
+            get_subscription_account_quota,
+            start_subscription_account_login,
+            logout_subscription_account_instance,
+            set_subscription_account_enabled,
+            refresh_subscription_account_instance,
             start_subscription_login,
             get_subscription_login_status,
             cancel_subscription_login,
@@ -1396,10 +1526,20 @@ pub async fn run() {
             get_app_state,
             update_app_status,
             update_workspace_info,
+            get_workspace_icon,
+            set_workspace_icon,
             appearance::show_agent_companion_desktop_pet,
             appearance::hide_agent_companion_desktop_pet,
             appearance::resize_agent_companion_desktop_pet,
+            desktop_cards::commands::desktop_card_list,
+            desktop_cards::commands::desktop_card_get,
+            desktop_cards::commands::desktop_card_set_visible,
+            desktop_cards::commands::desktop_card_delete,
+            desktop_cards::commands::desktop_card_refresh,
+            desktop_cards::commands::desktop_card_set_checklist_item,
+            desktop_cards::commands::desktop_card_set_always_on_top,
             list_agent_companion_pets,
+            load_agent_companion_pet_spritesheet,
             import_agent_companion_pet_package,
             delete_agent_companion_pet_package,
             read_file_content,
@@ -1438,6 +1578,8 @@ pub async fn run() {
             start_file_watch,
             stop_file_watch,
             get_watched_paths,
+            get_file_watch_status,
+            retry_file_watch,
             get_clipboard_files,
             get_clipboard_image,
             api::browser_file_drop_api::resolve_browser_dropped_file_paths,
@@ -1450,6 +1592,15 @@ pub async fn run() {
             computer_use_control_stop,
             computer_use_control_preview,
             computer_use_request_permissions,
+            computer_use_request_permission,
+            computer_use_share_targets,
+            computer_use_share_observe,
+            computer_use_share_input,
+            computer_use_share_start,
+            computer_use_share_control,
+            computer_use_share_request,
+            computer_use_share_grants,
+            computer_use_share_forget_grant,
             computer_use_open_system_settings,
             set_config,
             save_cloud_speech_config,
@@ -1533,6 +1684,7 @@ pub async fn run() {
             review_platform_update_auth_token,
             review_platform_clear_auth_token,
             git_get_status,
+            git_get_tracked_change_count,
             git_get_branches,
             git_get_enhanced_branches,
             git_get_commits,
@@ -1609,6 +1761,7 @@ pub async fn run() {
             touch_session_activity,
             load_persisted_session_metadata,
             fork_session,
+            copy_session,
             archive_session,
             unarchive_session,
             archive_all_sessions,
@@ -1793,11 +1946,6 @@ pub async fn run() {
             api::miniapp_api::miniapp_runtime_status,
             api::miniapp_api::miniapp_worker_call,
             api::miniapp_api::miniapp_host_call,
-            api::canvas_api::load_canvas_artifact,
-            api::canvas_api::load_canvas_state,
-            api::canvas_api::report_canvas_runtime_error,
-            api::canvas_api::report_canvas_runtime_ready,
-            api::canvas_api::save_canvas_state,
             api::miniapp_api::miniapp_worker_stop,
             api::miniapp_api::miniapp_worker_list_running,
             api::miniapp_api::miniapp_install_deps,
@@ -1862,6 +2010,7 @@ pub async fn run() {
             api::browser_api::browser_webview_set_agent_target_state,
             api::browser_api::browser_get_url,
             api::html_preview_api::html_preview_create,
+            api::html_preview_api::html_preview_read_resource,
             api::html_preview_api::html_preview_release,
             // Browser Control API (CDP-based user browser control)
             api::browser_control_api::browser_control_list_browsers,
@@ -1940,12 +2089,25 @@ pub async fn run() {
             api::debug_api::debug_open_devtools,
             api::debug_api::debug_close_devtools,
         ])
-        .build(tauri::generate_context!());
+        .build(desktop_context());
 
     match app {
         Ok(app) => {
             app.run(|app_handle, event| match event {
                 tauri::RunEvent::ExitRequested { api, code, .. } => {
+                    if code.is_none()
+                        && (app_handle.get_window("main").is_none()
+                            || app_handle
+                                .state::<miniapp_desktop::DesktopMiniApps>()
+                                .instances
+                                .snapshot()
+                                .instances
+                                .iter()
+                                .any(|instance| instance.primary_view.is_some()))
+                    {
+                        api.prevent_exit();
+                        return;
+                    }
                     if !PROCESS_EXIT_CLEANUP_COMPLETE.load(Ordering::Acquire) {
                         api.prevent_exit();
                         request_desktop_exit(app_handle, code.unwrap_or(0), "tauri_exit_requested");
@@ -1992,6 +2154,16 @@ async fn init_agentic_system() -> anyhow::Result<(
 
     let path_manager = try_get_path_manager_arc()?;
     let persistence_manager = Arc::new(persistence::PersistenceManager::new(path_manager.clone())?);
+    // The round executor captures this service at construction so failed or
+    // cancelled attempts with unknown usage persist without a usage event.
+    let token_usage_service = Arc::new(
+        openbitfun_core::service::token_usage::TokenUsageService::new(path_manager.clone())
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to initialize token usage service: {}", e))?,
+    );
+    openbitfun_core::service::token_usage::set_global_token_usage_service(
+        token_usage_service.clone(),
+    );
 
     let context_store = Arc::new(session::SessionContextStore::new());
     let context_compressor = Arc::new(session::ContextCompressor::new());
@@ -2008,9 +2180,17 @@ async fn init_agentic_system() -> anyhow::Result<(
         openbitfun_core::product_runtime::core_permission_request_manager()
             .map_err(anyhow::Error::msg)?;
 
+    if let Ok(paths) = openbitfun_core::infrastructure::try_get_path_manager_arc() {
+        openbitfun_computer_use::set_ocr_debug_directory(
+            paths
+                .default_assistant_workspace_dir(None)
+                .join(openbitfun_core_types::product_identity::hidden_data_directory())
+                .join("computer_use_debug"),
+        );
+    }
     let computer_use_host: ComputerUseHostRef =
         Arc::new(computer_use::DesktopComputerUseHost::new());
-    set_computer_use_desktop_available(true);
+    set_computer_use_host_available(true);
 
     let tool_pipeline = Arc::new(
         tools::pipeline::ToolPipeline::new(
@@ -2030,13 +2210,14 @@ async fn init_agentic_system() -> anyhow::Result<(
 
     let execution_config = execution::execution_engine_config_from_global_config().await;
 
-    let execution_engine = Arc::new(execution::ExecutionEngine::new(
+    let execution_engine = execution::ExecutionEngine::new(
         round_executor,
         event_queue.clone(),
         session_manager.clone(),
         context_compressor,
         execution_config,
-    ));
+    );
+    let execution_engine = Arc::new(execution_engine);
 
     let runtime_ownership = Arc::new(
         openbitfun_core::runtime_ownership::CoreRuntimeOwnership::embedded(
@@ -2061,12 +2242,8 @@ async fn init_agentic_system() -> anyhow::Result<(
 
     coordination::ConversationCoordinator::set_global(coordinator.clone());
 
-    // Initialize token usage service and register subscriber
-    let token_usage_service = Arc::new(
-        openbitfun_core::service::token_usage::TokenUsageService::new(path_manager.clone())
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to initialize token usage service: {}", e))?,
-    );
+    // The subscriber reuses the round executor's authority. Known-usage events
+    // deduplicate by attempt ID; unknown usage is recorded directly by the round.
     let token_usage_subscriber = Arc::new(
         openbitfun_core::service::token_usage::TokenUsageSubscriber::new(
             token_usage_service.clone(),
@@ -2195,16 +2372,6 @@ fn setup_panic_hook() {
             thread_id,
         );
 
-        // Known wry bug: WKWebView.URL() returns nil after navigating to an
-        // invalid address, causing url_from_webview to panic on unwrap().
-        // This is non-fatal — the webview is still alive — so we log and
-        // continue instead of killing the process.
-        // See: https://github.com/tauri-apps/wry/pull/1554
-        if location.contains("wry") && location.contains("wkwebview") {
-            log::warn!("Suppressed non-fatal wry/wkwebview panic, application continues");
-            return;
-        }
-
         if message.contains("WSAStartup") || message.contains("10093") || message.contains("hyper")
         {
             log::error!("Network-related crash detected, possible solutions:");
@@ -2213,16 +2380,11 @@ fn setup_panic_hook() {
             log::error!("  3) Run as administrator");
         }
 
-        // ── Recovery strategy ──────────────────────────────────────────
-        // Main-thread panics are unrecoverable — the event loop is gone.
-        // Spawned-thread panics only kill that thread; the rest of the
-        // application can continue.  We log a clear message and skip the
-        // hard exit so the user isn't forced to restart.
+        // Returning from a panic hook does not catch the panic. Leave worker
+        // panics to the runtime and any caller-owned unwind boundary; main-thread
+        // panics follow the application's fatal cleanup and exit path.
         if !is_main_thread {
-            log::warn!(
-                "Non-main thread panicked — application will continue. \
-                 The affected feature may be degraded until the next restart."
-            );
+            log::warn!("Non-main-thread panic recorded; deferring to the panic runtime");
             return;
         }
 
@@ -2235,6 +2397,13 @@ static PROCESS_EXIT_CLEANUP_STARTED: AtomicBool = AtomicBool::new(false);
 static PROCESS_EXIT_CLEANUP_COMPLETE: AtomicBool = AtomicBool::new(false);
 static DESKTOP_EXIT_REQUESTED: AtomicBool = AtomicBool::new(false);
 static PROCESS_EXIT_CLEANUP_NOTIFY: OnceLock<tokio::sync::Notify> = OnceLock::new();
+
+/// Whether a graceful desktop exit has started; background recovery must not
+/// recreate windows while the app is shutting down.
+pub(crate) fn desktop_exit_in_progress() -> bool {
+    DESKTOP_EXIT_REQUESTED.load(Ordering::Acquire)
+        || PROCESS_EXIT_CLEANUP_STARTED.load(Ordering::Acquire)
+}
 
 pub(crate) async fn perform_process_exit_cleanup() -> bool {
     let notify = PROCESS_EXIT_CLEANUP_NOTIFY.get_or_init(tokio::sync::Notify::new);
@@ -2329,56 +2498,56 @@ async fn deliver_event_to_webview(
         attach_session_event_cursor(&mut projected.payload, cursor);
     }
 
-    if let (Some(hub), Some(session_id)) = (
-        api::remote_connect_api::host_stream_hub().await,
-        projected
+    for hub in api::remote_connect_api::host_stream_hubs().await {
+        if let Some(session_id) = projected
             .payload
             .get("sessionId")
             .or_else(|| projected.payload.get("session_id"))
-            .and_then(serde_json::Value::as_str),
-    ) {
-        let name = projected.event_name.as_str();
-        let policy =
+            .and_then(serde_json::Value::as_str)
+        {
+            let name = projected.event_name.as_str();
+            let policy =
             openbitfun_core::service::remote_connect::session_records::session_event_publication(
                 name,
                 &projected.payload,
             );
-        if policy.synchronize_records {
-            if let Err(error) = async {
-                if let Some(turn) = projected
-                    .payload
-                    .get("turnId")
-                    .or_else(|| projected.payload.get("settledTurnId"))
-                    .and_then(serde_json::Value::as_str)
+            if policy.synchronize_records {
+                if let Err(error) = async {
+                    if let Some(turn) = projected
+                        .payload
+                        .get("turnId")
+                        .or_else(|| projected.payload.get("settledTurnId"))
+                        .and_then(serde_json::Value::as_str)
+                    {
+                        openbitfun_core::service::remote_connect::synchronize_session_record_turn(
+                            &hub, session_id, turn,
+                        )
+                        .await
+                    } else if name == "agentic://session-history-changed" {
+                        openbitfun_core::service::remote_connect::synchronize_session_records(
+                            &hub, session_id,
+                        )
+                        .await
+                    } else {
+                        Ok(())
+                    }
+                }
+                .await
                 {
-                    openbitfun_core::service::remote_connect::synchronize_session_record_turn(
-                        &hub, session_id, turn,
-                    )
-                    .await
-                } else if name == "agentic://session-history-changed" {
-                    openbitfun_core::service::remote_connect::synchronize_session_records(
-                        &hub, session_id,
-                    )
-                    .await
-                } else {
-                    Ok(())
+                    log::error!("Unable to synchronize host session records: {error}");
                 }
             }
-            .await
-            {
-                log::error!("Unable to synchronize host session records: {error}");
-            }
-        }
-        if policy.persist_control {
-            if let Err(error) = hub
-                .append(
-                    session_id.to_owned(),
-                    projected.event_name.clone(),
-                    projected.payload.clone(),
-                )
-                .await
-            {
-                log::error!("Unable to publish session control event: {error}");
+            if policy.persist_control {
+                if let Err(error) = hub
+                    .append(
+                        session_id.to_owned(),
+                        projected.event_name.clone(),
+                        projected.payload.clone(),
+                    )
+                    .await
+                {
+                    log::error!("Unable to publish session control event: {error}");
+                }
             }
         }
     }

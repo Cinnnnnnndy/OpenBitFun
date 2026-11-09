@@ -61,7 +61,7 @@ export const requiredContentRules = [
         message: 'missing local diff capability source gate',
       },
       {
-        regex: /#\[cfg\(any\(feature = "local-storage", feature = "runtime-ownership"\)\)\]\s*mod file_lock;/,
+        regex: /#\[cfg\(any\(\s*feature = "local-storage",\s*feature = "runtime-ownership",\s*feature = "resource-capacity",?\s*\)\)\]\s*mod file_lock;/,
         message: 'missing shared file lock owner source gate',
       },
       {
@@ -71,6 +71,14 @@ export const requiredContentRules = [
       {
         regex: /#\[cfg\(any\(feature = "json-io", feature = "local-storage"\)\)\]\s*pub mod json_store;/,
         message: 'missing json-io/local-storage JSON owner source gate',
+      },
+      {
+        regex: /#\[cfg\(feature = "routing-state"\)\]\s*pub mod routing_state;/,
+        message: 'missing durable routing-state owner source gate',
+      },
+      {
+        regex: /#\[cfg\(feature = "resource-capacity"\)\]\s*pub mod resource_capacity;/,
+        message: 'missing cooperative resource capacity owner source gate',
       },
       {
         regex: /#\[cfg\(feature = "local-storage"\)\]\s*pub mod persistence;/,
@@ -272,8 +280,12 @@ export const requiredContentRules = [
       'services-core workspace instruction owner must keep local and declarative discovery behavior contracts',
     patterns: [
       {
-        regex: /\bworkspace_instruction_files_reads_agents_then_claude_and_skips_empty_files\b/,
+        regex: /\bworkspace_instruction_families_select_agents_then_claude_then_opencode\b/,
         message: 'missing workspace instruction owner behavior regression',
+      },
+      {
+        regex: /\bworkspace_instruction_override_skips_empty_files_and_suppresses_claude\b/,
+        message: 'missing non-empty workspace instruction override regression',
       },
       {
         regex: /\bopencode_project_instructions_support_local_files_and_globs_only\b/,
@@ -716,33 +728,6 @@ export const requiredContentRules = [
       {
         regex: /\[\[example\]\]\r?\nname = "sdk_minimal"\r?\npath = "examples\/sdk_minimal\.rs"\r?\nrequired-features = \["agent-runtime"\]/,
         message: 'sdk_minimal example must declare the versioned agent-runtime owner feature',
-      },
-    ],
-  },
-  {
-    path: 'src/crates/execution/agent-runtime/src/context_profile.rs',
-    reason:
-      'agent-runtime must own provider-neutral context profile and model capability policy facts',
-    patterns: [
-      {
-        regex: /\bpub enum ContextProfile\b/,
-        message: 'missing context profile fact',
-      },
-      {
-        regex: /\bpub enum ModelCapabilityProfile\b/,
-        message: 'missing model capability profile fact',
-      },
-      {
-        regex: /\bpub struct ContextProfilePolicy\b/,
-        message: 'missing context profile policy fact',
-      },
-      {
-        regex: /\bfor_subagent_context_and_models\b/,
-        message: 'missing subagent context/model policy helper',
-      },
-      {
-        regex: /\bmodel_capability_weak_for_mini\b/,
-        message: 'missing weak-model regression',
       },
     ],
   },
@@ -3006,6 +2991,10 @@ export const requiredContentRules = [
         message: 'missing session metadata page owner entrypoint',
       },
       {
+        regex: /\bpub async fn list_metadata_page_with_query\b/,
+        message: 'missing query-aware session metadata page owner entrypoint',
+      },
+      {
         regex: /\bpub async fn list_metadata_including_internal\b/,
         message: 'missing internal session metadata list owner entrypoint',
       },
@@ -3222,7 +3211,7 @@ export const requiredContentRules = [
         message: 'missing metadata list delegation to services-core store',
       },
       {
-        regex: /\.list_metadata_page\(cursor,\s*limit\)/,
+        regex: /\.session_metadata_store\(workspace_path\)\s*\.list_metadata_page_with_query\(cursor,\s*limit,\s*query\)/,
         message: 'missing metadata page delegation to services-core store',
       },
       {
@@ -3727,17 +3716,6 @@ export const requiredContentRules = [
         message: 'core MiniApp tool owner must select its product-domain slice explicitly',
       },
       {
-        regex: /canvas-runtime = \[[^\]]*"openbitfun-services-integrations\/canvas-runtime"[^\]]*\]/,
-        message:
-          'core canvas-runtime facade must enable the Canvas service owner feature it imports',
-      },
-      {
-        regex:
-          /canvas-runtime = \[[\s\S]*"dep:openbitfun-product-domains"[\s\S]*"openbitfun-services-integrations\/canvas-runtime"[\s\S]*\]/,
-        message:
-          'core canvas-runtime feature must explicitly aggregate the domain contract and canvas service owner',
-      },
-      {
         regex:
           /openbitfun-product-domains = \{ path = "\.\.\/\.\.\/contracts\/product-domains", optional = true \}/,
         message:
@@ -4183,7 +4161,7 @@ export const requiredContentRules = [
         message: 'missing ExecControl input/default wait regression',
       },
       {
-        regex: /\bexec_command_result_builder_preserves_existing_wire_shape\b/,
+        regex: /\bexec_command_result_builder_exposes_only_model_result_fields\b/,
         message: 'missing ExecCommand result shape regression',
       },
       {
@@ -4397,7 +4375,7 @@ export const requiredContentRules = [
   {
     path: 'src/crates/execution/tool-execution/src/computer_use.rs',
     reason:
-      'tool-runtime must own provider-neutral Computer Use loop detection, screenshot hashing, verification, and retry policy while core keeps host adapters',
+      'tool-runtime must own provider-neutral Computer Use observation evidence, screenshot hashing, and read retry policy while core keeps host adapters',
     patterns: [
       {
         regex: /\bpub struct ComputerUseOptimizer\b/,
@@ -4416,12 +4394,12 @@ export const requiredContentRules = [
         message: 'missing provider-neutral Computer Use retry decision owner',
       },
       {
-        regex: /\bdetects_repeated_action_loop\b/,
-        message: 'missing Computer Use loop detection regression',
+        regex: /\blegitimate_repeated_work_is_not_classified_as_a_loop\b/,
+        message: 'missing Computer Use repeated-work evidence regression',
       },
       {
-        regex: /\bretry_decision_uses_error_text_without_core_error_type\b/,
-        message: 'missing Computer Use retry decision regression',
+        regex: /\btimeout_or_stale_errors_never_authorize_input_replay\b/,
+        message: 'missing Computer Use mutation replay rejection regression',
       },
     ],
   },
@@ -5158,11 +5136,15 @@ export const requiredContentRules = [
         .filter((moduleName) => moduleName !== 'native_hooks')
         .map((moduleName) => ({
           regex: new RegExp(
-            agentRuntimeDefinitionContractModules.has(moduleName)
+            ['account_routing', 'channel_routing'].includes(moduleName)
+              ? `#\\[cfg\\(feature = "account-routing"\\)\\]\\r?\\npub mod ${moduleName};`
+              : agentRuntimeDefinitionContractModules.has(moduleName)
               ? `#\\[cfg\\(any\\(feature = "agent-runtime", feature = "definition-contracts"\\)\\)\\]\\r?\\npub mod ${moduleName};`
               : `#\\[cfg\\(feature = "agent-runtime"\\)\\]\\r?\\npub mod ${moduleName};`,
           ),
-          message: agentRuntimeDefinitionContractModules.has(moduleName)
+          message: ['account_routing', 'channel_routing'].includes(moduleName)
+            ? `${moduleName} must stay behind its pure account-routing owner`
+            : agentRuntimeDefinitionContractModules.has(moduleName)
             ? `${moduleName} must stay behind the full runtime or definition-contracts owner`
             : `${moduleName} must stay behind the full agent-runtime owner`,
         })),
@@ -7827,8 +7809,8 @@ export const requiredContentRules = [
         message: 'missing builtin agent definition catalog owner',
       },
       {
-        regex: /builtin_agent_spec\(\s*"GeneralPurpose",\s*SubAgent,\s*"primary"/,
-        message: 'missing GeneralPurpose runtime default model mapping',
+        regex: /builtin_agent_spec\(\s*"GeneralPurpose",\s*SubAgent,\s*"fast"/,
+        message: 'missing GeneralPurpose runtime fast default model mapping',
       },
       {
         regex: /SubagentVisibilityPolicy::restricted\(\["Claw"\]\)/,

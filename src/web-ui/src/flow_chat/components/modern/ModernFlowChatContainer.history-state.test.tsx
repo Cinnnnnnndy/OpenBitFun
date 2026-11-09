@@ -21,7 +21,7 @@ describe('ModernFlowChatContainer natural navigation contract', () => {
 
   it('keeps provisional mount snapshots and auto-tail placement out of session restoration', () => {
     expect(componentSource).toContain('viewportRestorePendingSessionIdRef');
-    expect(componentSource).toContain('viewport.sessionSnapshotIgnoredDuringRestore');
+    expect(componentSource).toContain('viewportRestorePendingSessionIdRef.current === snapshot.sessionId');
     expect(componentSource).toContain('onViewportRestoreSettled={handleViewportRestoreSettled}');
     expect(componentSource).toContain('viewportRestorePendingSessionId === sessionId');
   });
@@ -29,5 +29,13 @@ describe('ModernFlowChatContainer natural navigation contract', () => {
   it('dismisses a pending open shield when its global transition is cancelled', () => {
     expect(componentSource).toContain('subscribeHistorySessionOpenTransition');
     expect(componentSource).toContain("transition?.sessionId !== current.sessionId ? null : current");
+  });
+
+  it('uses settled presentation to release background history after paint', () => {
+    expect(componentSource).not.toContain('isTurnTextRenderedInViewport');
+    expect(componentSource).not.toContain('HISTORY_INITIAL_CONTENT_PAINT_MAX_ATTEMPTS');
+    expect(componentSource).toContain('if (!isHistoryContentPresented) return;');
+    expect(componentSource).toContain('scheduleAfterStartupPaint(releaseAfterPaint, { frameCount: 2 })');
+    expect(componentSource).toContain('releaseSessionHistoryCompletionAfterInitialPaint(sessionId)');
   });
 });

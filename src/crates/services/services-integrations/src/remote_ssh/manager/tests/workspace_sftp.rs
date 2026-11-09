@@ -15,6 +15,10 @@ struct State {
     closed: AtomicUsize,
     live: AtomicUsize,
     channels: AtomicUsize,
+    #[cfg(unix)]
+    execs: AtomicUsize,
+    #[cfg(unix)]
+    reject_exec: AtomicBool,
     pause_open: AtomicBool,
     pause_read: AtomicBool,
     pause_dir: AtomicBool,
@@ -22,8 +26,77 @@ struct State {
     fail_read: AtomicBool,
     fail_write: AtomicBool,
     fail_close: AtomicBool,
+    kill_sftp: Arc<KillSwitch>,
     requested: tokio::sync::Notify,
     release: tokio::sync::Notify,
+    response_delay_ms: std::sync::atomic::AtomicU64,
+}
+
+/// Cuts an in-memory SFTP transport on demand.
+#[derive(Default)]
+struct KillSwitch {
+    killed: AtomicBool,
+    waker: std::sync::Mutex<Option<std::task::Waker>>,
+}
+
+impl KillSwitch {
+    fn kill(&self) {
+        self.killed.store(true, Ordering::SeqCst);
+        let waker = self.waker.lock().unwrap().take();
+        if let Some(waker) = waker {
+            // A pending read has to observe the new state without a packet.
+            waker.wake();
+        }
+    }
+}
+
+/// Server side of an in-memory SFTP transport that can be cut on demand.
+///
+/// Ending the server's read loop drops its channel, which is what a server-side
+/// subsystem close leaves behind.
+struct KillableStream<S> {
+    inner: S,
+    switch: Arc<KillSwitch>,
+}
+
+impl<S: tokio::io::AsyncRead + Unpin> tokio::io::AsyncRead for KillableStream<S> {
+    fn poll_read(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        if self.switch.killed.load(Ordering::SeqCst) {
+            return std::task::Poll::Ready(Ok(()));
+        }
+        if let Ok(mut waker) = self.switch.waker.lock() {
+            *waker = Some(cx.waker().clone());
+        }
+        std::pin::Pin::new(&mut self.inner).poll_read(cx, buf)
+    }
+}
+
+impl<S: tokio::io::AsyncWrite + Unpin> tokio::io::AsyncWrite for KillableStream<S> {
+    fn poll_write(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        std::pin::Pin::new(&mut self.inner).poll_write(cx, buf)
+    }
+
+    fn poll_flush(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.inner).poll_flush(cx)
+    }
+
+    fn poll_shutdown(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.inner).poll_shutdown(cx)
+    }
 }
 
 struct SftpServer {
@@ -175,6 +248,12 @@ impl russh_sftp::server::Handler for SftpServer {
             attrs: metadata(),
         })
     }
+    async fn lstat(&mut self, id: u32, _path: String) -> Result<Attrs, Self::Error> {
+        Ok(Attrs {
+            id,
+            attrs: metadata(),
+        })
+    }
     async fn fstat(&mut self, id: u32, _handle: String) -> Result<Attrs, Self::Error> {
         Ok(Attrs {
             id,
@@ -227,6 +306,37 @@ impl russh::server::Handler for SshServer {
         self.channels.insert(channel.id(), channel);
         Ok(true)
     }
+    #[cfg(unix)]
+    async fn exec_request(
+        &mut self,
+        id: russh::ChannelId,
+        command: &[u8],
+        session: &mut russh::server::Session,
+    ) -> Result<(), Self::Error> {
+        self.state.execs.fetch_add(1, Ordering::SeqCst);
+        if self.state.reject_exec.load(Ordering::SeqCst) {
+            session.channel_failure(id);
+            session.close(id);
+            self.channels.remove(&id);
+            return Ok(());
+        }
+        session.channel_success(id);
+        let output = process_manager::create_tokio_command("/bin/sh")
+            .arg("-c")
+            .arg(std::str::from_utf8(command).unwrap())
+            .stdin(Stdio::null())
+            .kill_on_drop(true)
+            .output()
+            .await
+            .unwrap();
+        session.data(id, russh::CryptoVec::from_slice(&output.stdout));
+        session.extended_data(id, 1, russh::CryptoVec::from_slice(&output.stderr));
+        session.exit_status_request(id, output.status.code().unwrap_or(1) as u32);
+        session.eof(id);
+        session.close(id);
+        self.channels.remove(&id);
+        Ok(())
+    }
     async fn subsystem_request(
         &mut self,
         id: russh::ChannelId,
@@ -249,6 +359,7 @@ impl russh::server::Handler for SshServer {
             let mut stdin = child.stdin.take().unwrap();
             let mut stdout = child.stdout.take().unwrap();
             let (mut reader, mut writer) = tokio::io::split(channel.into_stream());
+            let state = self.state.clone();
             tokio::spawn(async move {
                 use tokio::io::AsyncWriteExt;
                 let input = async {
@@ -256,8 +367,40 @@ impl russh::server::Handler for SshServer {
                     stdin.shutdown().await
                 };
                 let output = async {
-                    tokio::io::copy(&mut stdout, &mut writer).await?;
-                    writer.shutdown().await
+                    // Delay complete SFTP response packets independently. A
+                    // sleeping copy loop would serialize unrelated replies and
+                    // misrepresent a network that supports pipelined requests.
+                    let (send, mut receive) = tokio::sync::mpsc::channel(32);
+                    let read = async move {
+                        loop {
+                            let size = match stdout.read_u32().await {
+                                Ok(size) => size,
+                                Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => {
+                                    break
+                                }
+                                Err(error) => return Err(error),
+                            };
+                            let mut packet = vec![0; size as usize + 4];
+                            packet[..4].copy_from_slice(&size.to_be_bytes());
+                            stdout.read_exact(&mut packet[4..]).await?;
+                            let ready = tokio::time::Instant::now()
+                                + std::time::Duration::from_millis(
+                                    state.response_delay_ms.load(Ordering::SeqCst),
+                                );
+                            if send.send((ready, packet)).await.is_err() {
+                                break;
+                            }
+                        }
+                        Ok::<_, std::io::Error>(())
+                    };
+                    let write = async {
+                        while let Some((ready, packet)) = receive.recv().await {
+                            tokio::time::sleep_until(ready).await;
+                            writer.write_all(&packet).await?;
+                        }
+                        writer.shutdown().await
+                    };
+                    tokio::try_join!(read, write).map(|_| ())
                 };
                 tokio::select! {
                     _ = async { tokio::try_join!(input, output) } => {},
@@ -275,6 +418,105 @@ impl russh::server::Handler for SshServer {
         tokio::spawn(russh_sftp::server::run(channel.into_stream(), handler));
         Ok(())
     }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn recursive_directory_delete_uses_one_exec_and_no_sftp() {
+    use std::os::unix::fs::symlink;
+    let f = Fixture::new().await;
+    let service = crate::remote_ssh::RemoteFileService::new(Arc::new(tokio::sync::RwLock::new(
+        Some(f.manager.as_ref().clone()),
+    )));
+    let root = f._dir.path();
+    let target = root.join("delete 'quoted'; $(printf injected) `printf injected` \\ \n ");
+    let outside = root.join("keep");
+    std::fs::create_dir(&outside).unwrap();
+    std::fs::write(outside.join("sentinel"), b"keep").unwrap();
+    for directory in 0..10 {
+        let nested = target.join(format!("nested-{directory}"));
+        std::fs::create_dir_all(&nested).unwrap();
+        for file in 0..50 {
+            std::fs::write(nested.join(format!("file-{file}")), b"delete").unwrap();
+        }
+    }
+    std::fs::write(target.join(".hidden"), b"delete").unwrap();
+    symlink(&outside, target.join("outside-link")).unwrap();
+    symlink("missing", target.join("dangling-link")).unwrap();
+    service
+        .remove_dir_all("sftp-test", &format!("{}///", target.display()))
+        .await
+        .unwrap();
+    assert!(!target.exists());
+    assert_eq!(std::fs::read(outside.join("sentinel")).unwrap(), b"keep");
+    assert_eq!(f.state.execs.load(Ordering::SeqCst), 1);
+    assert_eq!(f.state.channels.load(Ordering::SeqCst), 0);
+
+    for (name, destination) in [
+        ("directory-link", outside.clone()),
+        ("broken-link", root.join("missing")),
+    ] {
+        let link = root.join(name);
+        symlink(destination, &link).unwrap();
+        service
+            .remove_dir_all("sftp-test", &format!("{}/", link.display()))
+            .await
+            .unwrap();
+        assert!(std::fs::symlink_metadata(&link).is_err());
+        assert_eq!(std::fs::read(outside.join("sentinel")).unwrap(), b"keep");
+    }
+    let error = service
+        .remove_dir_all("sftp-test", outside.join("sentinel").to_str().unwrap())
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("not a directory"));
+    assert_eq!(std::fs::read(outside.join("sentinel")).unwrap(), b"keep");
+    let error = service
+        .remove_dir_all("sftp-test", root.join("missing").to_str().unwrap())
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("does not exist"));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn recursive_directory_delete_rejects_unsafe_paths_and_exec_failure() {
+    let f = Fixture::new().await;
+    let service = crate::remote_ssh::RemoteFileService::new(Arc::new(tokio::sync::RwLock::new(
+        Some(f.manager.as_ref().clone()),
+    )));
+    for path in [
+        "",
+        "/",
+        "///",
+        "relative",
+        "/tmp/.",
+        "/tmp/../",
+        "/tmp/invalid\0name",
+    ] {
+        assert!(
+            service.remove_dir_all("sftp-test", path).await.is_err(),
+            "{path:?}"
+        );
+    }
+    assert_eq!(f.state.execs.load(Ordering::SeqCst), 0);
+
+    let target = f._dir.path().join("must stay");
+    std::fs::create_dir(&target).unwrap();
+    std::fs::write(target.join("sentinel"), b"keep").unwrap();
+    f.state.reject_exec.store(true, Ordering::SeqCst);
+    let error = service
+        .remove_dir_all("sftp-test", target.to_str().unwrap())
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("no exit status"), "{error}");
+    assert_eq!(std::fs::read(target.join("sentinel")).unwrap(), b"keep");
+    assert_eq!(f.state.execs.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        f.state.channels.load(Ordering::SeqCst),
+        0,
+        "must not fall back to per-file SFTP deletion"
+    );
 }
 
 struct Fixture {
@@ -335,6 +577,7 @@ impl Fixture {
             },
             default_workspace: None,
             proxy_jump: None,
+            proxy_command: None,
             container: None,
             wsl: None,
             options: Default::default(),
@@ -350,6 +593,7 @@ impl Fixture {
                 sftp_session: Arc::new(SftpCache::new()),
                 bounded_sftp_session: Arc::new(BoundedSftpCache::new()),
                 server_key: None,
+                proxy_child: None,
                 alive: Arc::new(AtomicBool::new(true)),
             },
         );
@@ -765,6 +1009,244 @@ async fn openssh_real_files_over_loopback_ssh() {
     assert_eq!(f.state.channels.load(Ordering::SeqCst), 2);
 }
 
+#[cfg(feature = "remote-connect")]
+#[tokio::test]
+#[ignore = "Set OPENBITFUN_TEST_SFTP_SERVER to the OpenSSH sftp-server executable"]
+async fn openssh_html_preview_reads_nested_site_resources() {
+    use crate::remote_connect::{
+        file_projection::SessionFileTarget, html_preview::HtmlPreviewSource,
+    };
+    use crate::remote_ssh::workspace_services::RemoteWorkspaceFs;
+    use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+    use openbitfun_product_domains::html_preview::{
+        HtmlPreviewErrorCode, HtmlPreviewResourceRequest, PREVIEW_CHUNK_BYTES,
+    };
+    let executable = std::env::var("OPENBITFUN_TEST_SFTP_SERVER").unwrap();
+    let f = Fixture::with_openssh(Some(executable)).await;
+    let root = f._dir.path().canonicalize().unwrap();
+    std::fs::create_dir_all(root.join("website/dist/assets")).unwrap();
+    std::fs::write(
+        root.join("website/dist/index.html"),
+        b"<script src='/assets/app.js'></script>",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("website/dist/assets/app.js"),
+        b"window.sshLoaded=true",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("website/dist/assets/app.css"),
+        b"body{color:green}",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("website/dist/assets/image.png"),
+        [137, 80, 78, 71, 0, 255],
+    )
+    .unwrap();
+    std::fs::write(root.join("website/shared.css"), b"parent-style").unwrap();
+    let large = vec![53; PREVIEW_CHUNK_BYTES + 17];
+    std::fs::write(root.join("website/dist/assets/large.js"), &large).unwrap();
+    let service = crate::remote_ssh::RemoteFileService::new(Arc::new(tokio::sync::RwLock::new(
+        Some(f.manager.as_ref().clone()),
+    )));
+    let entry = root
+        .join("website/dist/index.html")
+        .to_string_lossy()
+        .into_owned();
+    let source = HtmlPreviewSource::new(
+        SessionFileTarget {
+            fs: Arc::new(RemoteWorkspaceFs::new("sftp-test".into(), service)),
+            root: root.to_string_lossy().into_owned(),
+            path: entry.clone(),
+            remote: true,
+        },
+        "ssh-workspace",
+    )
+    .await
+    .unwrap();
+    for (path, expected) in [
+        ("assets/app.js", b"window.sshLoaded=true".as_slice()),
+        (
+            "website/dist/assets/app.css",
+            b"body{color:green}".as_slice(),
+        ),
+        ("assets/image.png", [137, 80, 78, 71, 0, 255].as_slice()),
+        ("website/shared.css", b"parent-style".as_slice()),
+    ] {
+        let file = source
+            .read(&HtmlPreviewResourceRequest {
+                workspace_id: "ssh-workspace".into(),
+                file_path: entry.clone(),
+                resource_path: Some(path.into()),
+                metadata_only: false,
+                offset: 0,
+                expected_source: None,
+                expected_revision: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(BASE64.decode(file.content_base64).unwrap(), expected);
+    }
+    let mut chunk_request = HtmlPreviewResourceRequest {
+        workspace_id: "ssh-workspace".into(),
+        file_path: entry,
+        resource_path: Some("assets/large.js".into()),
+        metadata_only: false,
+        offset: 0,
+        expected_source: None,
+        expected_revision: None,
+    };
+    let first = source.read(&chunk_request).await.unwrap();
+    let mut content = BASE64.decode(first.content_base64).unwrap();
+    assert_eq!(content.len(), PREVIEW_CHUNK_BYTES);
+    chunk_request.offset = content.len() as u64;
+    chunk_request.expected_source = Some(first.source);
+    chunk_request.expected_revision = Some(first.revision);
+    content.extend(
+        BASE64
+            .decode(source.read(&chunk_request).await.unwrap().content_base64)
+            .unwrap(),
+    );
+    assert_eq!(content, large);
+    chunk_request.resource_path = Some("../private-file".into());
+    assert_eq!(
+        source.read(&chunk_request).await.unwrap_err().code,
+        HtmlPreviewErrorCode::InvalidPath
+    );
+    assert!(
+        f.state.channels.load(Ordering::SeqCst) > 0,
+        "Reads must traverse a real SSH/SFTP channel"
+    );
+}
+
+#[cfg(feature = "remote-connect")]
+#[tokio::test]
+#[ignore = "Performance experiment: set OPENBITFUN_TEST_SFTP_SERVER; adds 40 ms to each SFTP reply"]
+async fn openssh_html_preview_loading_benchmark() {
+    use crate::remote_connect::{
+        file_projection::SessionFileTarget,
+        html_preview::{transfer::tests::benchmark_loading, HtmlPreviewSource},
+    };
+    use crate::remote_ssh::workspace_services::RemoteWorkspaceFs;
+    use openbitfun_product_domains::html_preview::HtmlPreviewResourceRequest;
+    let executable = std::env::var("OPENBITFUN_TEST_SFTP_SERVER").unwrap();
+    let f = Fixture::with_openssh(Some(executable)).await;
+    f.state.response_delay_ms.store(40, Ordering::SeqCst);
+    let root = f._dir.path().canonicalize().unwrap();
+    std::fs::create_dir_all(root.join("site/assets")).unwrap();
+    let files = vec![
+        ("site/index.html".to_string(), b"<link rel='stylesheet' href='assets/app.css'><script src='assets/app.js'></script><img src='assets/image.png'>".to_vec()),
+        ("site/assets/app.css".to_string(), vec![b'c'; 96 * 1024]),
+        ("site/assets/app.js".to_string(), vec![b'j'; 2 * 1024 * 1024]),
+        ("site/assets/image.png".to_string(), vec![53; 512 * 1024]),
+        ("site/assets/font.woff2".to_string(), vec![19; 128 * 1024]),
+    ];
+    for (path, bytes) in &files {
+        std::fs::write(root.join(path), bytes).unwrap();
+    }
+    let service = crate::remote_ssh::RemoteFileService::new(Arc::new(tokio::sync::RwLock::new(
+        Some(f.manager.as_ref().clone()),
+    )));
+    let entry = root.join("site/index.html").to_string_lossy().into_owned();
+    let source = HtmlPreviewSource::new(
+        SessionFileTarget {
+            fs: Arc::new(RemoteWorkspaceFs::new("sftp-test".into(), service)),
+            root: root.to_string_lossy().into_owned(),
+            path: entry.clone(),
+            remote: true,
+        },
+        "ssh-workspace",
+    )
+    .await
+    .unwrap();
+    benchmark_loading(
+        Arc::new(source),
+        HtmlPreviewResourceRequest {
+            workspace_id: "ssh-workspace".into(),
+            file_path: entry,
+            resource_path: None,
+            metadata_only: false,
+            offset: 0,
+            expected_source: None,
+            expected_revision: None,
+        },
+        files,
+        "ssh-sftp-40ms",
+    )
+    .await;
+    assert!(f.state.channels.load(Ordering::SeqCst) > 0);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+#[ignore = "Set OPENBITFUN_TEST_SFTP_SERVER to the OpenSSH sftp-server executable"]
+async fn openssh_directory_symlink_browsing() {
+    use std::os::unix::fs::symlink;
+    let executable = std::env::var("OPENBITFUN_TEST_SFTP_SERVER")
+        .expect("OpenSSH sftp-server executable required");
+    let f = Fixture::with_openssh(Some(executable)).await;
+    let service = crate::remote_ssh::RemoteFileService::new(Arc::new(tokio::sync::RwLock::new(
+        Some(f.manager.as_ref().clone()),
+    )));
+    let directory = f._dir.path().join("target directory");
+    std::fs::create_dir(&directory).unwrap();
+    std::fs::write(directory.join("sentinel.txt"), b"keep").unwrap();
+    symlink("..", directory.join("parent-link")).unwrap();
+    symlink(&directory, f._dir.path().join("absolute-link")).unwrap();
+    symlink("target directory", f._dir.path().join("relative-link")).unwrap();
+    symlink("relative-link", f._dir.path().join("chained-link")).unwrap();
+    symlink("missing", f._dir.path().join("broken-link")).unwrap();
+    symlink(
+        "target directory/sentinel.txt",
+        f._dir.path().join("file-link"),
+    )
+    .unwrap();
+    symlink("loop-link", f._dir.path().join("loop-link")).unwrap();
+
+    let entries = service
+        .read_dir("sftp-test", f._dir.path().to_str().unwrap())
+        .await
+        .unwrap();
+    for name in ["absolute-link", "relative-link", "chained-link"] {
+        let entry = entries.iter().find(|entry| entry.name == name).unwrap();
+        assert!(entry.is_symlink);
+        assert!(!entry.is_dir, "listing must retain no-follow metadata");
+        assert!(service.is_dir("sftp-test", &entry.path).await.unwrap());
+        let children = service.read_dir("sftp-test", &entry.path).await.unwrap();
+        assert_eq!(children.len(), 2);
+        let file = children
+            .iter()
+            .find(|child| child.name == "sentinel.txt")
+            .unwrap();
+        assert_eq!(file.path, format!("{}/sentinel.txt", entry.path));
+        let link = children
+            .iter()
+            .find(|child| child.name == "parent-link")
+            .unwrap();
+        assert!(link.is_symlink && !link.is_dir);
+    }
+    for name in ["file-link", "broken-link", "loop-link"] {
+        let path = f._dir.path().join(name);
+        assert!(service
+            .read_dir("sftp-test", path.to_str().unwrap())
+            .await
+            .is_err());
+    }
+    service
+        .remove_dir_all(
+            "sftp-test",
+            f._dir.path().join("relative-link").to_str().unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        std::fs::read(directory.join("sentinel.txt")).unwrap(),
+        b"keep"
+    );
+}
+
 #[tokio::test]
 async fn cancellation_during_close_finishes_the_existing_close_once() {
     let f = Fixture::new().await;
@@ -812,6 +1294,106 @@ async fn a_directory_waiter_detects_retirement_after_acquiring_the_lock() {
     );
     assert_eq!(f.state.channels.load(Ordering::SeqCst), 2);
     assert_eq!(f.state.opened.load(Ordering::SeqCst), 1);
+}
+
+/// Serve SFTP over an in-memory transport and cache that session, so a test
+/// can kill its channel without disturbing the SSH transport.
+async fn cache_killable_sftp_session(f: &Fixture) -> Arc<ManagedSftpSession> {
+    let (client_io, server_io) = tokio::io::duplex(64 * 1024);
+    let handler = SftpServer {
+        state: f.state.clone(),
+        handles: HashMap::new(),
+        data: vec![0, 1, 254, 255],
+    };
+    let server_stream = KillableStream {
+        inner: server_io,
+        switch: f.state.kill_sftp.clone(),
+    };
+    tokio::spawn(russh_sftp::server::run(server_stream, handler));
+    let session = SftpSession::new_with_config(client_io, sftp_client_config())
+        .await
+        .unwrap();
+    let cached = Arc::new(ManagedSftpSession::new(session));
+    {
+        let connections = f.manager.connections.read().await;
+        let connection = connections.get("sftp-test").unwrap();
+        *connection.sftp_session.session.write().await = Some(cached.clone());
+    }
+    f.manager.sftp_stat("sftp-test", "/file").await.unwrap();
+    assert_eq!(f.state.channels.load(Ordering::SeqCst), 0);
+    cached
+}
+
+/// Kill the channel underneath a cached session the manager still considers
+/// usable. A server-side close leaves exactly this state: russh-sftp answers
+/// every later request with "session closed" while the SSH transport and the
+/// cache entry stay alive. The raw session is used on purpose here, because
+/// the managed wrapper is what retires a dead subsystem.
+async fn kill_cached_sftp_channel(f: &Fixture, cached: &ManagedSftpSession) {
+    f.state.kill_sftp.kill();
+    let raw: &SftpSession = cached;
+    // A request in flight when the channel dies never completes, so every probe
+    // is bounded and repeated until russh-sftp reports the closed session.
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            match tokio::time::timeout(Duration::from_millis(100), raw.metadata("/file")).await {
+                Ok(Ok(_)) | Err(_) => continue,
+                Ok(Err(error)) => {
+                    assert!(
+                        sftp_error_may_be_stale_transport(&error),
+                        "unexpected SFTP failure: {error}"
+                    );
+                    break;
+                }
+            }
+        }
+    })
+    .await
+    .expect("the closed subsystem channel never surfaced to the cached session");
+    assert!(!cached.is_retired());
+}
+
+#[tokio::test]
+async fn a_closed_subsystem_channel_is_replaced_instead_of_failing_forever() {
+    let f = Fixture::new().await;
+    let cached = cache_killable_sftp_session(&f).await;
+    kill_cached_sftp_channel(&f, &cached).await;
+
+    // A dead cached subsystem must not poison metadata queries: the manager
+    // retires it and opens a new channel on the same SSH transport.
+    let metadata = f.manager.sftp_stat("sftp-test", "/file").await.unwrap();
+    assert_eq!(metadata.size, Some(4));
+    assert_eq!(f.state.channels.load(Ordering::SeqCst), 1);
+    assert!(f.manager.sftp_exists("sftp-test", "/file").await.unwrap());
+    f.manager.sftp_lstat("sftp-test", "/file").await.unwrap();
+    assert_eq!(f.state.channels.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn a_read_after_the_subsystem_channel_closed_replays_its_open() {
+    let f = Fixture::new().await;
+    let cached = cache_killable_sftp_session(&f).await;
+    kill_cached_sftp_channel(&f, &cached).await;
+
+    assert_eq!(
+        f.manager.sftp_read("sftp-test", "/file").await.unwrap(),
+        vec![0, 1, 254, 255]
+    );
+    assert!(cached.is_retired());
+    assert_eq!(f.state.channels.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn mkdir_all_after_the_subsystem_channel_closed_replays_on_a_new_channel() {
+    let f = Fixture::new().await;
+    let cached = cache_killable_sftp_session(&f).await;
+    kill_cached_sftp_channel(&f, &cached).await;
+
+    // The fixture reports every path as existing, so a healthy channel
+    // finishes without CREATE; the dead one fails every step instead.
+    f.manager.sftp_mkdir_all("sftp-test", "/a/b").await.unwrap();
+    assert!(cached.is_retired());
+    assert_eq!(f.state.channels.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test]

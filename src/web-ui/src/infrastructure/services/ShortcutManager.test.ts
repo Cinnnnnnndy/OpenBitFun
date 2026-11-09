@@ -6,8 +6,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, createElement, createRef } from 'react';
 import { createRoot } from 'react-dom/client';
 import { Portal } from '@openbitfun/ui';
-import { EDITOR_SHORTCUTS } from '@/shared/constants/shortcuts';
-import { parseStoredKeybindings, shortcutManager } from './ShortcutManager';
+import { CANVAS_OVERVIEW_SHORTCUT, EDITOR_SHORTCUTS } from '@/shared/constants/shortcuts';
+import { buildStoredKeybindings, getReservedShortcutReason, parseStoredKeybindings, shortcutManager } from './ShortcutManager';
 
 function setPlatform(platform: string): void {
   Object.defineProperty(window.navigator, 'platform', {
@@ -40,6 +40,109 @@ describe('ShortcutManager platform primary modifier', () => {
     shortcutManager.setEnabled(true);
     shortcutManager.loadUserOverrides({});
     document.body.innerHTML = '';
+  });
+
+  it('uses a reachable overview default on macOS and preserves legacy overrides', () => {
+    setPlatform('MacIntel');
+    const callback = vi.fn();
+    shortcutManager.register('canvas.missionControl', CANVAS_OVERVIEW_SHORTCUT, callback);
+    dispatchScopedKey('canvas', { key: 'E', metaKey: true, shiftKey: true });
+    expect(callback).toHaveBeenCalledOnce();
+    expect(getReservedShortcutReason(CANVAS_OVERVIEW_SHORTCUT)).toBeUndefined();
+    const legacy = { 'canvas.missionControl': { key: 'Tab', ctrl: true } };
+    const loaded = parseStoredKeybindings(legacy);
+    shortcutManager.loadUserOverrides(loaded);
+    expect(shortcutManager.getEffectiveConfig('canvas.missionControl', CANVAS_OVERVIEW_SHORTCUT).key).toBe('Tab');
+    expect(parseStoredKeybindings(buildStoredKeybindings(loaded))).toEqual(legacy);
+    expect(getReservedShortcutReason(loaded['canvas.missionControl'])).toBe('appSwitch');
+  });
+
+  it.each([
+    ['MacIntel', { key: 'Tab', meta: true }, 'appSwitch'],
+    ['MacIntel', { key: ' ', ctrl: true }, 'systemSearch'],
+    ['Win32', { key: 'Tab', alt: true }, 'appSwitch'],
+    ['Win32', { key: 'Delete', ctrl: true, alt: true }, 'secureAttention'],
+    ['Linux', { key: 'Tab', ctrl: true }, undefined],
+    ['Win32', CANVAS_OVERVIEW_SHORTCUT, undefined],
+  ])('recognizes OS interception for %s', (platform, config, reason) => {
+    expect(getReservedShortcutReason(config, platform)).toBe(reason);
+  });
+
+  it('keeps the same tab command independently registered in the main and side regions', () => {
+    setPlatform('Win32');
+    const main = vi.fn();
+    const side = vi.fn();
+    const removeMain = shortcutManager.register('tab.close', { key: 'w', ctrl: true, scope: 'workbench-content' }, main);
+    shortcutManager.register('tab.close', { key: 'w', ctrl: true, scope: 'canvas' }, side);
+    shortcutManager.loadUserOverrides({ 'tab.close': { key: 'q', ctrl: true } });
+    dispatchScopedKey('workbench-content', { key: 'q', ctrlKey: true });
+    dispatchScopedKey('canvas', { key: 'q', ctrlKey: true });
+    expect(main).toHaveBeenCalledOnce();
+    expect(side).toHaveBeenCalledOnce();
+    removeMain();
+    dispatchScopedKey('canvas', { key: 'q', ctrlKey: true });
+    expect(side).toHaveBeenCalledTimes(2);
+  });
+
+  it('inherits the main document command from an editor without targeting the side canvas', () => {
+    setPlatform('Win32');
+    const main = vi.fn();
+    const side = vi.fn();
+    shortcutManager.register('tab.close', { key: 'w', ctrl: true, scope: 'workbench-content', allowInInput: true }, main);
+    shortcutManager.register('tab.close', { key: 'w', ctrl: true, scope: 'canvas', allowInInput: true }, side);
+    const host = document.createElement('div');
+    host.dataset.shortcutScope = 'workbench-content';
+    const input = document.createElement('textarea');
+    input.dataset.shortcutScope = 'editor';
+    host.append(input);
+    document.body.append(host);
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'w', ctrlKey: true, bubbles: true, cancelable: true }));
+    expect(main).toHaveBeenCalledOnce();
+    expect(side).not.toHaveBeenCalled();
+  });
+
+  it('inherits only opted-in commands through terminal scope and preserves the terminal event otherwise', () => {
+    setPlatform('Win32');
+    const close = vi.fn(), escape = vi.fn(), main = vi.fn();
+    shortcutManager.register('tab.close', { key: 'w', ctrl: true, scope: 'app', allowInInput: true }, main);
+    shortcutManager.register('tab.close', { key: 'w', ctrl: true, scope: 'canvas', allowInInput: true, inheritInChildScopes: true }, close);
+    shortcutManager.register('canvas.escape', { key: 'Escape', scope: 'canvas', allowInInput: true }, escape);
+    const canvas = document.createElement('div');
+    canvas.dataset.shortcutScope = 'canvas';
+    const terminal = document.createElement('textarea');
+    terminal.dataset.shortcutScope = 'terminal';
+    canvas.append(terminal);
+    document.body.append(canvas);
+    terminal.dispatchEvent(new KeyboardEvent('keydown', { key: 'w', ctrlKey: true, bubbles: true, cancelable: true }));
+    const escapeEvent = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
+    terminal.dispatchEvent(escapeEvent);
+    expect(close).toHaveBeenCalledOnce();
+    expect(main).not.toHaveBeenCalled();
+    expect(escape).not.toHaveBeenCalled();
+    expect(escapeEvent.defaultPrevented).toBe(false);
+  });
+
+  it('keeps separately owned handlers through override changes and another owner unmounting', () => {
+    setPlatform('Win32');
+    const right = document.createElement('div'), bottom = document.createElement('div');
+    right.dataset.shortcutScope = bottom.dataset.shortcutScope = 'canvas';
+    document.body.append(right, bottom);
+    const onRight = vi.fn(), onBottom = vi.fn();
+    const config = { key: 'w', ctrl: true, scope: 'canvas' as const };
+    shortcutManager.register('tab.close', config, onRight, { owner: Symbol(), when: event => right.contains(event.target as Node) });
+    const removeBottom = shortcutManager.register('tab.close', config, onBottom, { owner: Symbol(), when: event => bottom.contains(event.target as Node) });
+    shortcutManager.loadUserOverrides({ 'tab.close': { key: 'q', alt: true } });
+    const press = (element: HTMLElement) => element.dispatchEvent(new KeyboardEvent('keydown', { key: 'q', altKey: true, bubbles: true, cancelable: true }));
+    press(right); press(bottom);
+    expect(onRight).toHaveBeenCalledOnce();
+    expect(onBottom).toHaveBeenCalledOnce();
+    removeBottom();
+    press(right); press(bottom);
+    expect(onRight).toHaveBeenCalledTimes(2);
+    expect(onBottom).toHaveBeenCalledOnce();
+    expect(shortcutManager.unregister('tab.close')).toBe(true);
+    press(right);
+    expect(onRight).toHaveBeenCalledTimes(2);
   });
 
   afterEach(() => {

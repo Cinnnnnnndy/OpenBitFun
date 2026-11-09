@@ -2,6 +2,7 @@ import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import {
   __test_only__,
   handleDialogTurnComplete,
+  handlePromptSuggestion,
   handleSessionHistoryChanged,
   handleSessionStateChanged,
   insertSteeringItemIfAbsent,
@@ -17,17 +18,31 @@ import {
   useSessionMutationStore,
 } from '../../store/sessionMutationStore';
 import { notificationService } from '../../../shared/notification-system/services/NotificationService';
-import type { DialogTurn, FlowToolItem, FlowUserSteeringItem, ModelRound, Session } from '../../types/flow-chat';
+import type { DialogTurn, FlowThinkingItem, FlowToolItem, FlowUserSteeringItem, ModelRound, Session } from '../../types/flow-chat';
 import type { FlowChatContext } from './types';
 import { markOptimisticDispatchTurnMetadata } from '@/features/dispatch/optimisticDispatchTurn';
 import { interruptedTurnRecoveryGate } from '../interruptedTurnRecoveryGate';
 import { agentAPI } from '@/infrastructure/api/service-api/AgentAPI';
 import { localSessionDriver } from '../../session-drivers/local/LocalSessionDriver';
+import * as peerSessionRefresh from './PeerSessionRefreshModule';
 import { chatInputSessionSubscriptionKey } from '../../utils/chatInputSessionSubscription';
 import { selectInterruptedTurnRecovery } from '../../utils/interruptedTurnRecovery';
+import { promptSuggestionKey, usePromptSuggestionStore } from '../../store/promptSuggestionStore';
+import { clearAgentCanvasForPeerSwitch, switchAgentCanvasScope, useAgentCanvasStore } from '@/app/components/panels/content-canvas/stores';
+import { activateSurface } from '@/infrastructure/peer-device/deviceSurface';
+import {
+  isRuntimeSessionProjectionStale,
+  resetRuntimeSessionEventGateForTest,
+} from '@/infrastructure/peer-device/runtimeSessionEventGate';
+import { markCurrentTurnItemsAsCancelled } from '../../utils/turnCancellation';
+import {
+  isManualCompactionPending,
+  resetManualCompactionStateForTest,
+} from '../manualCompactionState';
 
 const {
   buildBuiltInBrowserTabOptions,
+  handleCompressionStarted,
   handleCompressionCompleted,
   handleTokenUsageUpdate,
 } = __test_only__;
@@ -40,9 +55,56 @@ vi.mock('../../../shared/notification-system/services/NotificationService', () =
   },
 }));
 
+describe('relayRecordsBeforeEvent', () => {
+  it('renders received records before the direct event applies', () => {
+    const order: string[] = [];
+    const context = { flowChatStore: {
+      settleRelaySessionRecords: (sessionId: string) => order.push(`settle:${sessionId}`),
+    } } as unknown as FlowChatContext;
+    __test_only__.relayRecordsBeforeEvent(context)(() => order.push('event'))({ sessionId: 'session-1' });
+    expect(order).toEqual(['settle:session-1', 'event']);
+  });
+});
+
 describe('isAppWindowFocused', () => {
   it('returns true when no document is available', () => {
     expect(isAppWindowFocused()).toBe(true);
+  });
+});
+
+describe('host session deletion', () => {
+  beforeEach(() => { resetFlowChatStore(); clearAgentCanvasForPeerSwitch(); });
+  afterEach(() => { resetFlowChatStore(); clearAgentCanvasForPeerSwitch(); });
+
+  it.each([true, false])('releases retained browser snapshots when the deleted session is active=%s', active => {
+    switchAgentCanvasScope('browser-b');
+    useAgentCanvasStore.getState().addTab({ type: 'text-viewer', title: 'B work' }, 'active');
+    const bTab = useAgentCanvasStore.getState().primaryGroup.tabs[0].id;
+    __test_only__.handleOpenBuiltInBrowser({ sessionId: 'browser-a', targetId: 'page-a', url: 'https://a.example' });
+    if (active) switchAgentCanvasScope('browser-a');
+    __test_only__.handleSessionDeleted(createFlowChatContext(), { sessionId: 'browser-a' });
+    switchAgentCanvasScope('browser-a');
+    expect(useAgentCanvasStore.getState().primaryGroup.tabs).toEqual([]);
+    switchAgentCanvasScope('browser-b');
+    expect(useAgentCanvasStore.getState().primaryGroup.tabs.map(tab => tab.id)).toEqual([bTab]);
+  });
+
+  it.each([true, false])('retires an AgentControl-deleted child tab even when its record is present=%s', recordPresent => {
+    createSessionWithTurn(createFinishingTurn());
+    const store = FlowChatStore.getInstance();
+    store.updateSessionRelationship('session-1', { parentSessionId: 'parent', sessionKind: 'subagent' });
+    switchAgentCanvasScope('parent');
+    useAgentCanvasStore.getState().addTab({
+      type: 'btw-session', title: 'Subagent', data: { childSessionId: 'session-1', parentSessionId: 'parent' },
+    }, 'active');
+    if (!recordPresent) store.removeSession('session-1');
+    const context = createFlowChatContext();
+    __test_only__.handleSessionDeleted(context, { sessionId: 'session-1' });
+    __test_only__.handleSessionDeleted(context, { sessionId: 'session-1' });
+    expect(store.getState().sessions.has('session-1')).toBe(false);
+    expect(useAgentCanvasStore.getState().primaryGroup.tabs).toEqual([]);
+    expect(useAgentCanvasStore.getState().closedTabs).toEqual([]);
+    expect(context.processingManager.clearSessionStatus).toHaveBeenCalledTimes(recordPresent ? 1 : 0);
   });
 });
 
@@ -97,7 +159,120 @@ describe('Claw bootstrap cancellation', () => {
   });
 });
 
+describe('prompt suggestion projection', () => {
+  beforeEach(() => {
+    resetFlowChatStore();
+    usePromptSuggestionStore.setState({ suggestions: {} });
+  });
+  afterEach(() => {
+    resetFlowChatStore();
+    usePromptSuggestionStore.setState({ suggestions: {} });
+  });
+
+  it('trims surrounding whitespace in legacy suggestion events while preserving message content', () => {
+    createSessionWithTurn(createFinishingTurn());
+
+    handlePromptSuggestion(createFlowChatContext(), {
+      sessionId: 'session-1', sourceTurnId: 'turn-1', suggestion: '\n\n  Run  the tests\n  Then commit.  \r\n',
+    });
+
+    expect(usePromptSuggestionStore.getState().suggestions[promptSuggestionKey('session-1')]).toEqual({
+      suggestion: 'Run  the tests\n  Then commit.', sourceTurnId: 'turn-1',
+    });
+  });
+
+  it('ignores a suggestion whose source turn is no longer the latest one', () => {
+    createSessionWithTurn(createFinishingTurn());
+
+    handlePromptSuggestion(createFlowChatContext(), {
+      sessionId: 'session-1', sourceTurnId: 'turn-0', suggestion: 'Old idea',
+    });
+    handlePromptSuggestion(createFlowChatContext(), {
+      sessionId: 'missing', sourceTurnId: 'turn-1', suggestion: 'Unknown session',
+    });
+
+    expect(usePromptSuggestionStore.getState().suggestions).toEqual({});
+  });
+
+  it('clears the visible suggestion when the session starts another turn', () => {
+    createSessionWithTurn(createFinishingTurn());
+    const context = createFlowChatContext();
+    handlePromptSuggestion(context, {
+      sessionId: 'session-1', sourceTurnId: 'turn-1', suggestion: 'Commit it',
+    });
+    expect(usePromptSuggestionStore.getState().suggestions[promptSuggestionKey('session-1')]).toBeDefined();
+
+    __test_only__.handleDialogTurnStarted(context, {
+      sessionId: 'session-1', turnId: 'turn-2', turnIndex: 1, userInput: 'Next request',
+    });
+
+    expect(usePromptSuggestionStore.getState().suggestions[promptSuggestionKey('session-1')]).toBeUndefined();
+  });
+
+  it('retires suggestions before a history rewrite is reloaded', () => {
+    createSessionWithTurn(createFinishingTurn());
+    const context = createFlowChatContext();
+    const reload = vi.spyOn(context.flowChatStore, 'loadSessionHistory').mockResolvedValue(undefined);
+    handlePromptSuggestion(context, {
+      sessionId: 'session-1', sourceTurnId: 'turn-1', suggestion: 'Commit it',
+    });
+    handleSessionHistoryChanged(context, { sessionId: 'session-1' });
+    expect(usePromptSuggestionStore.getState().suggestions[promptSuggestionKey('session-1')]).toBeUndefined();
+    expect(reload).toHaveBeenCalled();
+    reload.mockRestore();
+  });
+});
+
 describe('built-in browser open request projection', () => {
+  beforeEach(() => clearAgentCanvasForPeerSwitch());
+  afterEach(() => clearAgentCanvasForPeerSwitch());
+
+  it('binds a manually opened browser tab to its conversation and restores the same target', () => {
+    switchAgentCanvasScope('manual-owner');
+    useAgentCanvasStore.getState().addTab({ type: 'browser', title: 'Browser', data: { url: 'https://example.com' } }, 'active');
+    const data = useAgentCanvasStore.getState().primaryGroup.tabs[0].content.data;
+    expect(data.conversationId).toBe('manual-owner');
+    expect(data.targetId).toMatch(/^embedded-browser-panel-view-/);
+    switchAgentCanvasScope('other-owner');
+    switchAgentCanvasScope('manual-owner');
+    expect(useAgentCanvasStore.getState().primaryGroup.tabs[0].content.data).toEqual(data);
+  });
+
+  it('never binds a peer-host browser label to a controller-local WebView', () => {
+    activateSurface('peer-browser');
+    try {
+      switchAgentCanvasScope('same-session-id');
+      __test_only__.handleOpenBuiltInBrowser({ sessionId: 'same-session-id', targetId: 'embedded-browser-panel-view-1', url: 'https://peer.example' });
+      expect(useAgentCanvasStore.getState().primaryGroup.tabs).toEqual([]);
+    } finally { activateSurface('local'); }
+  });
+
+  it('opens A in its suspended canvas while B remains unchanged, and reuses each native target', () => {
+    switchAgentCanvasScope('browser-b');
+    useAgentCanvasStore.getState().addTab({ type: 'text-viewer', title: 'B work', data: {} }, 'active');
+    const b = useAgentCanvasStore.getState().primaryGroup;
+    const openA = { sessionId: 'browser-a', targetId: 'embedded-browser-panel-view-a', requestId: 'a-1', url: 'https://a.example' };
+    __test_only__.handleOpenBuiltInBrowser(openA);
+    expect(useAgentCanvasStore.getState().scopeKey).toBe('browser-b');
+    expect(useAgentCanvasStore.getState().primaryGroup).toEqual(b);
+    __test_only__.handleOpenBuiltInBrowser({ ...openA, requestId: 'a-2', url: 'https://a.example/next' });
+    switchAgentCanvasScope('browser-a');
+    expect(useAgentCanvasStore.getState().primaryGroup.tabs).toHaveLength(1);
+    expect(useAgentCanvasStore.getState().primaryGroup.tabs[0].content.data).toMatchObject({
+      conversationId: 'browser-a', targetId: openA.targetId, url: 'https://a.example/next',
+    });
+    switchAgentCanvasScope('browser-b');
+    expect(useAgentCanvasStore.getState().primaryGroup).toEqual(b);
+  });
+
+  it('retains background browser tabs beyond the ordinary canvas LRU limit', () => {
+    const event = { sessionId: 'retained-a', targetId: 'embedded-browser-panel-view-retained', url: 'https://a.example' };
+    __test_only__.handleOpenBuiltInBrowser(event);
+    for (let index = 0; index < 30; index++) switchAgentCanvasScope(`other-${index}`);
+    switchAgentCanvasScope('retained-a');
+    expect(useAgentCanvasStore.getState().primaryGroup.tabs[0].content.data.targetId).toBe(event.targetId);
+  });
+
   it('correlates replacement and new-tab requests with distinct stable keys', () => {
     expect(buildBuiltInBrowserTabOptions({
       url: ' https://openbitfun.com/ ',
@@ -140,6 +315,57 @@ describe('interrupted turn lifecycle', () => {
     resetFlowChatStore();
     stateMachineManager.clear();
     interruptedTurnRecoveryGate.resetForTests();
+  });
+
+  describe.each(['local-stop', 'host-cancel', 'host-interrupt'] as const)('%s thinking settlement', source => {
+    it.each(['streaming', 'cancelled'] as const)('clears streaming flags even when the recorded status is %s', status => {
+      const thinking: FlowThinkingItem = {
+        id: 'thinking-1', type: 'thinking', content: 'Partial reasoning',
+        timestamp: 1, status, isStreaming: true, isCollapsed: false,
+      };
+      const completedThinking: FlowThinkingItem = {
+        ...thinking, id: 'thinking-completed', content: 'Earlier reasoning',
+        status: 'completed', isStreaming: false, isCollapsed: true,
+      };
+      const round: ModelRound = {
+        ...makeRound('round-1'),
+        items: [completedThinking, thinking],
+        attempts: [{ id: 'attempt-1', index: 1, status, items: [completedThinking, thinking] }],
+        status,
+        isStreaming: status === 'streaming',
+        isComplete: status === 'cancelled',
+      };
+      createSessionWithTurn({
+        ...createFinishingTurn(),
+        status: status === 'streaming' ? 'processing' : 'cancelled',
+        endTime: status === 'cancelled' ? 10 : undefined,
+        modelRounds: [round],
+      });
+      const context = createFlowChatContext();
+      if (source === 'local-stop') {
+        markCurrentTurnItemsAsCancelled(context, 'session-1');
+      } else if (source === 'host-cancel') {
+        __test_only__.handleDialogTurnCancelled(context, { sessionId: 'session-1', turnId: 'turn-1' }, vi.fn());
+      } else {
+        __test_only__.handleDialogTurnInterrupted(context, {
+          sessionId: 'session-1', turnId: 'turn-1', executionGeneration: 0,
+        });
+      }
+
+      const settled = FlowChatStore.getInstance().getState().sessions.get('session-1')!.dialogTurns[0];
+      expect(settled.status).toBe('cancelled');
+      expect(settled.modelRounds[0]).toMatchObject({
+        status: 'cancelled', isStreaming: false, isComplete: true,
+      });
+      const settledRound = settled.modelRounds[0];
+      expect(settledRound.attempts?.[0].status).toBe('cancelled');
+      for (const items of [settledRound.items, settledRound.attempts![0].items]) {
+        expect(items[0]).toEqual(completedThinking);
+        expect(items[1]).toMatchObject({
+          content: 'Partial reasoning', status: 'cancelled', isStreaming: false, isCollapsed: true,
+        });
+      }
+    });
   });
 
   it.each(['running', 'restored-interrupted'] as const)(
@@ -947,6 +1173,36 @@ describe('shouldProcessEvent', () => {
     ).toBe(false);
   });
 
+  it.each(['local', 'peer-review'])('preserves replay repair for an unmaterialized session on %s', surfaceId => {
+    resetRuntimeSessionEventGateForTest();
+    activateSurface(surfaceId);
+    try {
+      expect(FlowChatStore.getInstance().getState().sessions.has(mockSessionId)).toBe(false);
+      expect(shouldProcessEvent(mockSessionId, mockTurnId, 'data', 'TextChunk')).toBe(false);
+      expect(isRuntimeSessionProjectionStale(surfaceId, mockSessionId)).toBe(true);
+    } finally {
+      activateSurface('local');
+      resetRuntimeSessionEventGateForTest();
+    }
+  });
+
+  it('coalesces an unknown session gap without suppressing repair after registration', () => {
+    resetRuntimeSessionEventGateForTest();
+    const repair = vi.spyOn(peerSessionRefresh, 'requestRuntimeProjectionRepair');
+    try {
+      expect(shouldProcessEvent('session-1', 'turn-1', 'data', 'TextChunk')).toBe(false);
+      expect(shouldProcessEvent('session-1', 'turn-1', 'data', 'TextChunk')).toBe(false);
+      expect(repair).toHaveBeenCalledTimes(1);
+      expect(isRuntimeSessionProjectionStale('local', 'session-1')).toBe(true);
+      createSessionWithTurn(createFinishingTurn());
+      expect(shouldProcessEvent('session-1', 'turn-1', 'data', 'TextChunk')).toBe(false);
+      expect(repair).toHaveBeenCalledTimes(2);
+    } finally {
+      repair.mockRestore();
+      resetRuntimeSessionEventGateForTest();
+    }
+  });
+
   it('returns true for state_sync event even when no state machine exists', () => {
     expect(
       shouldProcessEvent(mockSessionId, mockTurnId, 'state_sync', 'SessionStateChanged'),
@@ -1334,6 +1590,7 @@ describe('handleModelRoundStart', () => {
       roundIndex: 0,
       modelConfigId: '  config-1  ',
       effectiveModelName: '  gpt-4o  ',
+      routing: { route: 'primary', latencyMs: 25, fallbackReason: 'router_request_failed' },
       renderHints: { disableExploreGrouping: true },
     } as any);
 
@@ -1346,6 +1603,7 @@ describe('handleModelRoundStart', () => {
     expect(turn?.modelRounds[0]).toMatchObject({
       modelConfigId: 'config-1',
       effectiveModelName: 'gpt-4o',
+      routing: { route: 'primary', latencyMs: 25, fallbackReason: 'router_request_failed' },
       renderHints: { disableExploreGrouping: true, disableExploreGroupingSource: 'host' },
     });
   });
@@ -1647,6 +1905,7 @@ describe('handleSessionHistoryChanged', () => {
     const context = createFlowChatContext();
     handleSessionHistoryChanged(context, {
       sessionId: 'session-1',
+      settledTurnId: 'turn-1',
     });
     await Promise.resolve();
 
@@ -1672,11 +1931,86 @@ describe('handleSessionHistoryChanged', () => {
     const context = createFlowChatContext();
     handleSessionHistoryChanged(context, {
       sessionId: 'session-1',
+      settledTurnId: 'turn-1',
     });
     await Promise.resolve();
 
     expect(reconcile).not.toHaveBeenCalled();
     expect(context.pendingHistoryFenceSessions.has('session-1')).toBe(true);
+  });
+
+  it.each([
+    { sessionId: 'session-1', settledTurnId: null },
+    { sessionId: 'session-1' },
+    { session_id: 'session-1', settled_turn_id: null },
+  ])('removes rolled-back turns with an authoritative reload, including legacy payloads: %j', async event => {
+    createSessionWithTurn({
+      ...createFinishingTurn(),
+      status: 'completed',
+      endTime: 1000,
+    });
+    const store = FlowChatStore.getInstance();
+    store.setState(prev => ({
+      ...prev,
+      activeSessionId: 'session-1',
+      sessions: new Map([['session-1', {
+        ...prev.sessions.get('session-1')!,
+        workspacePath: '/workspace',
+        workspaceId: 'workspace-1',
+        config: { agentType: 'Standard', workspaceId: 'workspace-1' },
+      }]]),
+    }));
+    vi.spyOn(agentAPI, 'restoreSessionView').mockResolvedValue({
+      session: {
+        sessionId: 'session-1', sessionName: 'Session 1', agentType: 'Standard',
+        state: 'Idle', turnCount: 0, createdAt: 1, updatedAt: 2,
+      },
+      turns: [],
+      contextRestoreState: 'ready',
+      isPartial: false,
+      loadedTurnCount: 0,
+      totalTurnCount: 0,
+    } as any);
+    const reconcile = vi.spyOn(store, 'reconcileSettledDialogTurn');
+    const context = createFlowChatContext();
+    context.pendingHistoryFenceSessions.add('session-1');
+
+    handleSessionHistoryChanged(context, event);
+
+    await vi.waitFor(() => expect(store.getState().sessions.get('session-1')?.dialogTurns).toEqual([]));
+    expect(reconcile).not.toHaveBeenCalled();
+    expect(context.pendingHistoryFenceSessions.has('session-1')).toBe(false);
+  });
+
+  it.each(['normal', 'miniapp', 'subagent'] as const)('reloads an out-of-lifecycle %s edit even when the obsolete local tail is still finishing', sessionKind => {
+    createSessionWithTurn(createFinishingTurn());
+    const store = FlowChatStore.getInstance();
+    store.setState(prev => ({ sessions: new Map(prev.sessions).set('session-1', {
+      ...prev.sessions.get('session-1')!, sessionKind, agentBackedTransient: sessionKind === 'miniapp',
+    }) }));
+    const reload = vi.spyOn(store, 'loadSessionHistory').mockResolvedValue(undefined);
+    const context = createFlowChatContext();
+
+    handleSessionHistoryChanged(context, { sessionId: 'session-1', settledTurnId: null });
+
+    expect(reload).toHaveBeenCalledExactlyOnceWith('session-1', { includeInternal: sessionKind !== 'normal' });
+    expect(context.pendingHistoryFenceSessions.has('session-1')).toBe(false);
+  });
+
+  it('repairs the identified settled turn without dropping a newer live turn', () => {
+    createSessionWithTurn({ ...createFinishingTurn(), status: 'completed', endTime: 1000 });
+    const store = FlowChatStore.getInstance();
+    store.addDialogTurn('session-1', { ...createFinishingTurn(), id: 'turn-2', status: 'processing' });
+    const reconcile = vi.spyOn(store, 'reconcileSettledDialogTurn').mockResolvedValue(false);
+    const reload = vi.spyOn(store, 'loadSessionHistory').mockResolvedValue(undefined);
+    const context = createFlowChatContext();
+
+    handleSessionHistoryChanged(context, { session_id: 'session-1', settled_turn_id: 'turn-1' });
+
+    expect(reconcile).toHaveBeenCalledExactlyOnceWith('session-1', 'turn-1');
+    expect(reload).not.toHaveBeenCalled();
+    expect(context.pendingHistoryFenceSessions.has('session-1')).toBe(false);
+    expect(store.getState().sessions.get('session-1')?.dialogTurns.at(-1)?.status).toBe('processing');
   });
 });
 
@@ -1761,7 +2095,7 @@ describe('handleDialogTurnComplete', () => {
 
     // Durable fence lands while the turn is still finalizing: it must be
     // parked instead of racing the persistence commit with an extra read.
-    handleSessionHistoryChanged(context, { sessionId: 'session-1' });
+    handleSessionHistoryChanged(context, { sessionId: 'session-1', settledTurnId: 'turn-1' });
     expect(FlowChatStore.getInstance().reconcileSettledDialogTurn)
       .not.toHaveBeenCalled();
     expect(context.pendingHistoryFenceSessions.has('session-1')).toBe(true);
@@ -1846,6 +2180,7 @@ describe('handleCompressionCompleted', () => {
   afterEach(() => {
     resetFlowChatStore();
     stateMachineManager.clear();
+    resetManualCompactionStateForTest();
   });
 
   it('writes the compacted token count into currentTokenUsage when applied', () => {
@@ -1874,6 +2209,28 @@ describe('handleCompressionCompleted', () => {
       turnId: 'turn-1',
       source: 'context_compression',
     });
+  });
+
+  it('settles a manual compaction whose turn was replayed after the surface switch', () => {
+    const context = createFlowChatContext();
+    handleCompressionStarted(context, {
+      sessionId: 'session-1',
+      turnId: 'turn-1',
+      compressionId: 'compression-1',
+      trigger: 'manual',
+    });
+    expect(isManualCompactionPending('session-1')).toBe(true);
+
+    handleCompressionCompleted(context, {
+      sessionId: 'session-1',
+      turnId: 'turn-1',
+      compressionId: 'compression-1',
+      applied: true,
+      tokensBefore: 90_000,
+      tokensAfter: 15_000,
+    });
+
+    expect(isManualCompactionPending('session-1')).toBe(false);
   });
 
   it('does not touch currentTokenUsage when the compression was not applied', () => {
@@ -2007,5 +2364,30 @@ describe('handleTokenUsageUpdate', () => {
 
     const session = FlowChatStore.getInstance().getState().sessions.get('session-1');
     expect(session?.currentTokenUsage).toBeUndefined();
+  });
+});
+
+
+describe('model round host timing', () => {
+  beforeEach(() => { resetFlowChatStore(); stateMachineManager.clear(); });
+  afterEach(() => { resetFlowChatStore(); stateMachineManager.clear(); });
+
+  it.each([
+    [{ firstChunkMs: 20, firstVisibleOutputMs: 200, streamDurationMs: 1_200, ttftMs: 350 }, 350],
+    [{ first_chunk_ms: 20, first_visible_output_ms: 200, stream_duration_ms: 1_200, ttft_ms: 0 }, 0],
+    [{}, undefined],
+  ])('receives projected, replayed and legacy timing: %j', async (timing, ttftMs) => {
+    putFinishingSessionInStore();
+    await stateMachineManager.transition('session-1', SessionExecutionEvent.START, {
+      taskId: 'session-1', dialogTurnId: 'turn-1',
+    });
+    __test_only__.handleModelRoundComplete(createFlowChatContext(), {
+      sessionId: 'session-1', turnId: 'turn-1', roundId: 'round-1', hasToolCalls: false,
+      modelConfigId: 'model', effectiveModelName: 'model', ...timing,
+    });
+    const round = FlowChatStore.getInstance().getState().sessions.get('session-1')?.dialogTurns[0].modelRounds[0];
+    expect(round?.ttftMs).toBe(ttftMs);
+    expect(round?.streamDurationMs).toBe(ttftMs === undefined ? undefined : 1_200);
+    expect(round?.firstVisibleOutputMs).toBe(ttftMs === undefined ? undefined : 200);
   });
 });

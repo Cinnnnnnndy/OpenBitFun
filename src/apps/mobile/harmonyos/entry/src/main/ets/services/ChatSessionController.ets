@@ -1,7 +1,10 @@
+import { MessageQueueStore } from './MessageQueueStore';
+import { MessageQueueAction, MessageQueueState } from '../model/MessageQueue';
 import { InteractionMailboxStore } from './InteractionMailboxStore';
 import { InteractionMailboxAction, InteractionMailboxState } from '../model/InteractionMailbox';
 import { DurableSessionReducer } from './DurableSessionReducer';
 import { HostSessionStream, HostSessionEvent } from './HostSessionStream';
+import { SubagentBranchCache, SubagentFollowState, SubagentStreamCoordinator } from './SubagentStreamCoordinator';
 import {
   ChatMessage,
   RemoteModelCatalog
@@ -35,10 +38,13 @@ export interface ChatSessionSnapshot {
   hasMoreMessages?: boolean;
   historyLoading?: boolean;
   historyFailed?: boolean;
+  /** Empty when no valid hint remains; older hosts simply never emit one. */
+  promptSuggestion?: string;
 }
 
 export interface ChatSessionControllerCallbacks {
   onSnapshot: (snapshot: ChatSessionSnapshot) => void;
+  onQueue?: (state: MessageQueueState) => void;
   onMailbox?: (state: InteractionMailboxState) => void;
   onError: (error: Object) => void;
   canPoll: (sessionId: string) => boolean;
@@ -47,6 +53,13 @@ export interface ChatSessionControllerCallbacks {
 export interface ChatSessionControllerOptions {
   /** Stabilization window before the first idle poll after selecting a session. */
   initialPollDelayMs: number;
+  /**
+   * Where a delegation's child transcripts are kept between app launches.
+   *
+   * Absent for a host that has no phone transcript cache to write to: the
+   * branches then live for as long as the session is open, as they always did.
+   */
+  branchCache?: SubagentBranchCache;
 }
 
 
@@ -60,7 +73,9 @@ export class ChatSessionController {
   private cursor: ChatSessionCursor = { pollVersion: 0, knownMessageCount: 0, knownModelCatalogVersion: 0 };
   private stream?: HostSessionStream;
   private reducer: DurableSessionReducer = new DurableSessionReducer();
+  private messageQueue: MessageQueueStore;
   private mailbox: InteractionMailboxStore;
+  private subagents: SubagentStreamCoordinator;
   private generation: number = 0;
   private stopped: boolean = true;
   private caughtUp: boolean = false;
@@ -74,19 +89,28 @@ export class ChatSessionController {
   private pendingModelCatalog?: RemoteModelCatalog;
 
   constructor(sessionManager: RemoteSessionManager, callbacks: ChatSessionControllerCallbacks,
-    _options?: ChatSessionControllerOptions) {
+    options?: ChatSessionControllerOptions) {
     this.sessionManager = sessionManager; this.callbacks = callbacks;
+    this.messageQueue = new MessageQueueStore(sessionManager, (state: MessageQueueState): void => { this.callbacks.onQueue?.(state); }, callbacks.canPoll);
     this.mailbox = new InteractionMailboxStore(sessionManager, (state: InteractionMailboxState): void => { this.callbacks.onMailbox?.(state); });
+    // A delegation tool's child sessions are streams of their own; they are read
+    // while this session is open and their records land in the branch of the
+    // item that launched them.
+    this.subagents = new SubagentStreamCoordinator(sessionManager,
+      (): void => { this.publishChildBranch(); },
+      (error: Error): void => { if (!this.stopped) this.callbacks.onError(error); },
+      options?.branchCache);
   }
   start(sessionId: string, cursor: ChatSessionCursor, _activeTurn?: ChatMessage): void {
     if (!this.stopped && this.sessionId === sessionId && this.stream && !this.stream.isClosed()) {
       this.stream.wake(); return;
     }
     this.stop(); this.sessionId = sessionId; this.cursor = cursor;
-    this.reducer = new DurableSessionReducer(); this.mailbox.select(sessionId); this.stopped = false; this.caughtUp = false;
+    this.reducer = new DurableSessionReducer(); this.mailbox.select(sessionId); this.messageQueue.select(sessionId); this.stopped = false; this.caughtUp = false;
     this.sessionState = 'idle'; this.completedTurnId = ''; this.hasMoreMessages = false;
     this.historyLoading = false; this.historyReplaying = false; this.historyFailed = false;
     this.pendingModelCatalog = undefined;
+    this.subagents.beginSession(sessionId);
     const epoch = this.generation;
     void this.loadInitialModelCatalog(sessionId, epoch);
     try {
@@ -97,6 +121,9 @@ export class ChatSessionController {
           // must not delay the serial transcript stream or its durable cursor.
           if (event.event === 'session-interaction-changed') { void this.mailbox.refresh(); return; }
           if (!this.reducer.apply(event)) return;
+          // The launch of a child agent is a parent record: it is the only place
+          // the host names the session its process lives in.
+          this.subagents.observeParentEvent(event);
           if (this.caughtUp && !this.historyReplaying) this.publish();
         },
         onResumed: async (): Promise<void> => { if (this.current(epoch)) void this.mailbox.refresh(); },
@@ -106,6 +133,7 @@ export class ChatSessionController {
           if (!this.current(epoch)) return;
           this.historyReplaying = true;
           this.reducer = new DurableSessionReducer(); this.hasMoreMessages = false;
+          if (this.caughtUp) this.publish();
         },
         onCaughtUp: async (): Promise<void> => {
           if (!this.current(epoch)) return;
@@ -139,7 +167,8 @@ export class ChatSessionController {
     }
   }
   stop(_clearActiveTurn: boolean = true): void {
-    this.generation++; this.stopped = true; this.mailbox.select(''); this.stream?.close(); this.stream = undefined;
+    this.generation++; this.stopped = true; this.mailbox.select(''); this.messageQueue.select(''); this.stream?.close(); this.stream = undefined;
+    this.subagents.endSession();
   }
   loadOlder(): void { this.stream?.loadOlder(); }
   nudge(): void { this.stream?.wake(); }
@@ -151,17 +180,50 @@ export class ChatSessionController {
   }
   setKnownMessageCount(count: number): void { this.cursor.knownMessageCount = count; }
   clearActiveTurn(): void { /* Runtime message/state events own turn lifetime. */ }
+  async dispatchQueue(action: MessageQueueAction): Promise<void> { if (!this.stopped) await this.messageQueue.dispatch(action); }
   async dispatchMailbox(action: InteractionMailboxAction): Promise<void> {
     if (!this.stopped && action.sessionId === this.sessionId) await this.mailbox.dispatch(action);
   }
   private current(epoch: number): boolean { return epoch === this.generation && !this.stopped; }
   async pollNow(): Promise<void> { this.stream?.wake(); }
+  /**
+   * A child branch grew while the parent's own records did not.
+   *
+   * The transcript is republished through the same path a parent record takes,
+   * so an arriving subagent step and an arriving parent record reach the screen
+   * the same way. It waits for the parent's own page like any other publish:
+   * while a history replay is landing, the transcript on screen is a partial
+   * one and every record of it would repaint the conversation.
+   */
+  private publishChildBranch(): void {
+    if (!this.caughtUp || this.historyReplaying) return;
+    this.publish();
+  }
+  /**
+   * Makes sure one delegation's worker is being followed.
+   *
+   * The card asks for this when the reader opens it: the branch may have lost
+   * its stream to the cap, and an open card has to show the worker's own steps.
+   */
+  ensureBranchSubscribed(ownerToolCallId: string): void {
+    this.subagents.ensureSubscribed(ownerToolCallId);
+  }
+  /** How many of this session's children are followed, for previews and focused tests. */
+  subagentFollowState(): SubagentFollowState {
+    return this.subagents.followState();
+  }
   private publish(): void {
     if (this.stopped || !this.callbacks.canPoll(this.sessionId)) return;
+    const transcript: ChatMessage[] = this.reducer.messages();
+    // The transcript names every child this session launched. Reading the names
+    // out of it is what keeps a delegation's worker reachable when no parent
+    // record arrives — a phone that just restarted, or an offline host — because
+    // the cached launch item still carries the child Session id.
+    this.subagents.observeParentMessages(transcript);
     const persisted: ChatMessage[] = [];
     let active: ChatMessage | undefined = undefined;
     this.completedTurnId = '';
-    this.reducer.messages().forEach((message: ChatMessage) => {
+    this.subagents.decorate(transcript).forEach((message: ChatMessage) => {
       if (message.role === 'assistant' && (message.status === 'active' || message.status === 'running')) active = message;
       else {
         persisted.push(message);
@@ -174,12 +236,14 @@ export class ChatSessionController {
     const catalog = this.pendingModelCatalog;
     this.pendingModelCatalog = undefined;
     if (catalog) this.cursor.knownModelCatalogVersion = catalog.version || 0;
+    const suggestion = this.reducer.promptSuggestion();
     this.callbacks.onSnapshot({
       sessionId: this.sessionId, cursor: this.cursor, changed: true, title: '', modelCatalog: catalog,
       sessionState: active ? 'active' : this.sessionState, newMessages: [],
       activeTurn: active, messageSnapshot: persisted, shouldSyncAfterTurnEnded: false,
       historyRewritten: false, completedTurnId: this.completedTurnId, hasMoreMessages: this.hasMoreMessages,
-      historyLoading: this.historyLoading, historyFailed: this.historyFailed
+      historyLoading: this.historyLoading, historyFailed: this.historyFailed,
+      promptSuggestion: active ? '' : suggestion
     });
   }
 }

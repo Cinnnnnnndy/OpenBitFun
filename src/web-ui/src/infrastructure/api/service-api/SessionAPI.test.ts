@@ -24,6 +24,22 @@ describe('SessionAPI paged metadata reads', () => {
     peerCapabilities.workspaceIdReferencesV1 = true;
   });
 
+  it('requests prompt content only for an explicit usage preview', async () => {
+    invokeMock.mockResolvedValue({});
+    await sessionAPI.getSessionUsageReport({ sessionId: 'session-1', workspaceId: 'workspace-1' });
+    expect(invokeMock).toHaveBeenLastCalledWith('get_session_usage_report', {
+      request: { session_id: 'session-1', workspace_id: 'workspace-1', include_hidden_subagents: true },
+    });
+    await sessionAPI.getSessionUsageReport({ sessionId: 'session-1', workspaceId: 'workspace-1', includeSystemPromptPreview: true, includeHiddenSubagents: false });
+    expect(invokeMock).toHaveBeenLastCalledWith('get_session_usage_report', {
+      request: { session_id: 'session-1', workspace_id: 'workspace-1', include_hidden_subagents: false, include_system_prompt_preview: true },
+    });
+    await sessionAPI.getSessionUsageReport({ sessionId: 'session-1', workspaceId: 'workspace-1', contextPreviewCategory: 'mcpTools', includeHiddenSubagents: false });
+    expect(invokeMock).toHaveBeenLastCalledWith('get_session_usage_report', {
+      request: { session_id: 'session-1', workspace_id: 'workspace-1', include_hidden_subagents: false, context_preview_category: 'mcpTools' },
+    });
+  });
+
   it('does not send a local workspace request to an equal ID on a newly selected peer', async () => {
     const pending = sessionAPI.listSessionsPage({ workspaceId: 'same-workspace-id', limit: 5 });
     activateSurface('peer-with-the-same-workspace');
@@ -38,6 +54,34 @@ describe('SessionAPI paged metadata reads', () => {
 
     await expect(pending).rejects.toSatisfy(isSurfaceChangedError);
     expect(invokeMock).not.toHaveBeenCalled();
+  });
+
+  it('does not copy an equal session ID on a peer selected during request preparation', async () => {
+    const pending = sessionAPI.duplicateSession('same-session-id', 'same-workspace-id');
+    activateSurface('peer-with-the-same-workspace');
+
+    await expect(pending).rejects.toSatisfy(isSurfaceChangedError);
+    expect(invokeMock).not.toHaveBeenCalled();
+  });
+
+  it('copies with a dedicated ID-only command without loading history or workspace paths', async () => {
+    const result = { sessionId: 'copy', sessionName: 'Source (1)', agentType: 'Standard' };
+    invokeMock.mockResolvedValueOnce(result);
+
+    await expect(sessionAPI.duplicateSession('source', 'workspace-1')).resolves.toBe(result);
+    expect(invokeMock).toHaveBeenCalledExactlyOnceWith('copy_session', {
+      request: { source_session_id: 'source', workspace_id: 'workspace-1' },
+    });
+  });
+
+  it('keeps selected-turn forks on their original command and required turn payload', async () => {
+    const result = { sessionId: 'fork', sessionName: 'Source (1)', agentType: 'Standard' };
+    invokeMock.mockResolvedValueOnce(result);
+
+    await expect(sessionAPI.forkSession('source', 'turn-2', 'workspace-1')).resolves.toBe(result);
+    expect(invokeMock).toHaveBeenCalledExactlyOnceWith('fork_session', {
+      request: { source_session_id: 'source', source_turn_id: 'turn-2', workspace_id: 'workspace-1' },
+    });
   });
 
   it.each(['local-project', 'remote-loopback', 'remote-project'])('reads %s by ID without path or SSH hints', async workspaceId => {
@@ -63,6 +107,30 @@ describe('SessionAPI paged metadata reads', () => {
 
     expect(invokeMock).toHaveBeenCalledWith('list_persisted_sessions', {
       request: { workspace_path: '/same/root', remote_connection_id: 'ssh-id', remote_ssh_host: 'localhost' },
+    });
+  });
+
+  it.each(['local', 'peer'])('forwards a read-only catalog query on the %s surface and preserves the host acknowledgement', async surface => {
+    activateSurface(surface);
+    const query = { workspaceId: 'project', ordering: 'updated' as const, source: 'codex', sortTimestamps: { running: 123 } };
+    const response = { sessions: [], totalTopLevelCount: 42, loadedTopLevelCount: 0, hasMore: false, catalogQuery: query };
+    invokeMock.mockResolvedValueOnce(response);
+    await expect(sessionAPI.listSessionsPage({ workspaceId: 'project', limit: 5, query })).resolves.toBe(response);
+    expect(invokeMock).toHaveBeenCalledExactlyOnceWith('list_persisted_sessions_page', {
+      request: { workspace_id: 'project', limit: 5, query },
+    });
+  });
+
+  it.each(['local', 'peer'])('requests one completed discovery refresh on the %s surface', async surface => {
+    activateSurface(surface);
+    const response = { sessions: [], totalTopLevelCount: 0, loadedTopLevelCount: 0,
+      hasMore: false, discoveryRefreshed: true };
+    invokeMock.mockResolvedValueOnce(response);
+    await expect(sessionAPI.listSessionsPage({
+      workspaceId: 'project', limit: 1, refreshExternalDiscovery: true,
+    })).resolves.toBe(response);
+    expect(invokeMock).toHaveBeenCalledExactlyOnceWith('list_persisted_sessions_page', {
+      request: { workspace_id: 'project', limit: 1, refresh_external_discovery: true },
     });
   });
 

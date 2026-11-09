@@ -55,7 +55,6 @@ vi.mock('@openbitfun/ui', async importOriginal => ({
   Tooltip: ({ children, content }: { children: React.ReactNode; content?: React.ReactNode }) => (
     <span data-tooltip={typeof content === 'string' ? content : undefined}>{children}</span>
   ),
-  Switch: () => null,
 }));
 
 vi.mock('@/infrastructure/config/services/ConfigManager', () => ({
@@ -216,6 +215,47 @@ describe('ModelSelector ACP mode picker', () => {
     expect(onAvailabilityChange).toHaveBeenLastCalledWith({ status: 'ready', canSend: true });
   });
 
+  it('retries failed initialization from the startup notification and ignores it after unmount', async () => {
+    const events: any[] = [];
+    const handler = (event: Event) => events.push((event as CustomEvent).detail);
+    window.addEventListener('openbitfun:acp-session-creation', handler);
+    try {
+      vi.mocked(ACPClientAPI.getSessionOptions).mockRejectedValueOnce(new Error('Agent initialize failed'));
+      await act(async () => root.render(<ModelSelector currentMode="acp:dsh" sessionId="acp-session" />));
+      const failed = events.find(event => event.phase === 'finish');
+      expect(failed).toMatchObject({ succeeded: false, error: 'Agent initialize failed', action: 'restore' });
+      vi.mocked(ACPClientAPI.getSessionOptions).mockResolvedValueOnce({
+        currentModelId: 'remote', availableModels: [{ id: 'remote', name: 'Remote' }], configOptions: [],
+      });
+      await act(async () => failed.retry());
+      expect(ACPClientAPI.getSessionOptions).toHaveBeenCalledTimes(2);
+      expect(events.filter(event => event.phase === 'start')).toHaveLength(2);
+      expect(events.at(-1)).toMatchObject({ phase: 'finish', succeeded: true });
+      act(() => root.render(null));
+      await failed.retry();
+      expect(ACPClientAPI.getSessionOptions).toHaveBeenCalledTimes(2);
+    } finally {
+      window.removeEventListener('openbitfun:acp-session-creation', handler);
+    }
+  });
+
+  it('dismisses pending startup feedback when its session view is unmounted', async () => {
+    const events: any[] = [];
+    const handler = (event: Event) => events.push((event as CustomEvent).detail);
+    window.addEventListener('openbitfun:acp-session-creation', handler);
+    let resolve!: (options: AcpSessionOptions) => void;
+    try {
+      vi.mocked(ACPClientAPI.getSessionOptions).mockReturnValueOnce(new Promise(done => { resolve = done; }));
+      await act(async () => root.render(<ModelSelector currentMode="acp:dsh" sessionId="acp-session" />));
+      act(() => root.render(null));
+      expect(events.at(-1)).toMatchObject({ phase: 'finish', cancelled: true, requestId: events[0].requestId });
+      await act(async () => resolve({ availableModels: [], configOptions: [] }));
+      expect(events.at(-1)).toMatchObject({ phase: 'finish', succeeded: true });
+    } finally {
+      window.removeEventListener('openbitfun:acp-session-creation', handler);
+    }
+  });
+
   it('preserves cached ACP information when a background refresh fails', async () => {
     await renderWithOptions([], {
       currentModelId: 'remote-model',
@@ -263,6 +303,24 @@ describe('ModelSelector ACP mode picker', () => {
     expect(trigger?.hasAttribute('aria-busy')).toBe(false);
   });
 
+  it.each(['local', 'peer-b'])('reloads the same session under a new %s activation and rejects stale options', async surfaceId => {
+    let resolvePrevious!: (options: AcpSessionOptions) => void;
+    vi.mocked(ACPClientAPI.getSessionOptions)
+      .mockReturnValueOnce(new Promise(resolve => { resolvePrevious = resolve; }))
+      .mockResolvedValueOnce({
+        currentModelId: 'fresh-model', availableModels: [{ id: 'fresh-model', name: 'Fresh Model' }], configOptions: [],
+      });
+    await act(async () => root.render(<ModelSelector currentMode="acp:dsh" sessionId="acp-session" />));
+    await act(async () => { activateSurface(surfaceId); });
+    expect(ACPClientAPI.getSessionOptions).toHaveBeenCalledTimes(2);
+    await act(async () => resolvePrevious({
+      currentModelId: 'old-model', availableModels: [{ id: 'old-model', name: 'Old Model' }], configOptions: [],
+    }));
+    const trigger = container.querySelector('[data-testid="chat-model-selector-btn"]');
+    expect(trigger?.textContent).toContain('Fresh Model');
+    expect(trigger?.textContent).not.toContain('Old Model');
+  });
+
   it('renders the mode as the whole picker when the agent offers no models', async () => {
     await renderWithOptions([MODE_OPTION]);
 
@@ -278,6 +336,36 @@ describe('ModelSelector ACP mode picker', () => {
     const options = document.body.querySelectorAll('[data-testid="chat-acp-mode-option"]');
     expect([...options].map(option => option.getAttribute('data-mode-value')))
       .toEqual(['standard', 'minimal']);
+  });
+
+  it('searches the ACP catalog and selects through the remote workspace adapter', async () => {
+    Object.assign(flowChatStoreMocks.sessions.get('acp-session')!, {
+      remoteConnectionId: 'ssh-connection', remoteSshHost: 'a100',
+    });
+    const availableModels = [
+      { id: 'deepseek-official/deepseek-v4-flash', name: 'DeepSeek V4 Flash' },
+      { id: 'deepseek-official/deepseek-v4-pro', name: 'DeepSeek V4 Pro' },
+    ];
+    await renderWithOptions([], { availableModels, currentModelId: availableModels[0].id });
+    await act(async () => container.querySelector<HTMLButtonElement>('[data-testid="chat-model-selector-btn"]')!.click());
+    expect(document.activeElement).toBe(document.body.querySelector(`[data-model-id="${availableModels[0].id}"]`));
+    await act(async () => document.body.querySelector<HTMLButtonElement>('[data-testid="chat-model-selector-search-toggle"]')!.click());
+    const input = document.body.querySelector<HTMLInputElement>('[data-testid="chat-model-selector-search-input"]')!;
+    expect(document.activeElement).toBe(input);
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, 'PRO');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    expect(document.body.querySelectorAll('[data-testid="chat-model-selector-option"]')).toHaveLength(1);
+    vi.mocked(ACPClientAPI.setSessionModel).mockResolvedValue({
+      availableModels, currentModelId: availableModels[1].id, configOptions: [],
+    } as never);
+    await act(async () => document.body.querySelector<HTMLButtonElement>('[data-testid="chat-model-selector-option"]')!.click());
+    expect(ACPClientAPI.setSessionModel).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      sessionId: 'acp-session', clientId: 'dsh', modelId: availableModels[1].id,
+      remoteConnectionId: 'ssh-connection', remoteSshHost: 'a100',
+    }));
+    expect(configManager.setConfig).not.toHaveBeenCalled();
   });
 
   it('keeps the mode out of the model dropdown when the agent offers both', async () => {
@@ -299,6 +387,8 @@ describe('ModelSelector ACP mode picker', () => {
     const modelMenu = document.body.querySelector('[data-testid="chat-model-selector-menu"]');
     expect(modelMenu?.querySelectorAll('[data-testid="chat-model-selector-option"]')).toHaveLength(2);
     expect(modelMenu?.querySelectorAll('[data-testid="chat-acp-mode-option"]')).toHaveLength(0);
+    expect(modelMenu?.querySelector('[data-testid="chat-model-selector-pool-action"]')).toBeNull();
+    expect(modelMenu?.querySelector('[data-testid="chat-model-selector-smart-action"]')).toBeNull();
 
     await act(async () => { modeTrigger?.click(); });
     expect(
@@ -391,20 +481,19 @@ describe('ModelSelector ACP mode picker', () => {
     };
     await renderWithOptions([reasoningOption], sessionOptions);
     await click('chat-model-selector-btn');
-    await click(`chat-model-selector-settings-${entry}`);
+    await click('chat-model-selector-settings-model');
     if (entry === 'provider') {
-      const providers = document.body.querySelectorAll('[data-testid="chat-model-selector-provider"]');
-      expect(providers).toHaveLength(2);
-      expect(document.body.querySelector('[data-testid="chat-model-selector-option"]')).toBeNull();
-      const currentProvider = document.body.querySelector<HTMLButtonElement>(
-        '[data-testid="chat-model-selector-provider"][data-provider-key="acp:Acme"]',
+      await click('chat-model-selector-search-toggle');
+      await click('chat-model-selector-provider-filter');
+      const provider = document.body.querySelector<HTMLButtonElement>(
+        '[data-testid="chat-model-selector-provider-filter-menu"] [data-menu-id="acp:Acme"]',
       )!;
-      expect(currentProvider.getAttribute('data-selected')).toBe('true');
-      await act(async () => currentProvider.click());
+      await act(async () => provider.click());
     }
 
     expect(document.body.querySelector('[data-testid="chat-model-selector-provider"]')).toBeNull();
-    expect(document.body.querySelector('[data-model-id="other-model"]')).toBeNull();
+    if (entry === 'provider') expect(document.body.querySelector('[data-model-id="other-model"]')).toBeNull();
+    else expect(document.body.querySelector('[data-model-id="other-model"]')).not.toBeNull();
     expect(document.body.querySelector('[data-model-id="model-one"]')?.getAttribute('aria-checked')).toBe('true');
     vi.mocked(ACPClientAPI.setSessionModel).mockResolvedValue({
       ...sessionOptions, currentModelId: 'model-two', configOptions: [reasoningOption],
@@ -432,7 +521,8 @@ describe('ModelSelector ACP mode picker', () => {
     expect(document.body.querySelector('[data-testid="chat-model-selector-settings-model"]')).not.toBeNull();
     await click('chat-model-selector-settings-model');
     expect(document.body.querySelectorAll('[data-testid="chat-model-selector-option"]')).toHaveLength(1);
-    await click('chat-model-selector-back');
+    await act(async () => document.body.querySelector<HTMLElement>('[data-testid="chat-model-selector-options"]')!
+      .dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })));
     await click('chat-model-selector-settings-reasoning');
     expect(document.body.querySelector('[data-openbitfun-value="preset:auto"]')).toBeNull();
     vi.mocked(ACPClientAPI.setSessionConfigOption).mockResolvedValue({
@@ -504,10 +594,12 @@ describe('ModelSelector ACP mode picker', () => {
     expect(container.querySelector<HTMLButtonElement>('[data-testid="chat-model-selector-btn"]')?.disabled).toBe(false);
   });
 
-  it('keeps the advertised fast mode available in the shared settings menu', async () => {
+  it('keeps the advertised ACP fast mode in the model list rather than the homepage', async () => {
     const fastMode = { id: 'fast-mode', name: 'Fast', type: 'boolean', currentValue: false };
     await renderWithOptions([reasoningOption, fastMode], modelOptions);
     await click('chat-model-selector-btn');
+    expect(document.body.querySelector('[data-testid="chat-model-selector-settings-fast"]')).toBeNull();
+    await click('chat-model-selector-settings-model');
     const fastRow = document.body.querySelector<HTMLButtonElement>('[role="menuitemcheckbox"]');
     expect(fastRow).not.toBeNull();
     vi.mocked(ACPClientAPI.setSessionConfigOption).mockResolvedValue({
@@ -539,7 +631,7 @@ describe('ModelSelector ACP mode picker', () => {
     expect(document.body.querySelector('[data-reasoning-mode="auto"]')).not.toBeNull();
     expect(document.body.querySelector('[data-testid="chat-model-selector-intensity-option"]')).toBeNull();
     expect(document.body.querySelector('[data-testid="chat-model-selector-settings-reasoning"]')?.textContent)
-      .toBe('reasoningSelector.thinking · reasoningSelector.auto');
+      .toBe('modelSelector.home.effortreasoningSelector.auto');
   });
 
   it('shows an advertised model when an older ACP payload omits the current model id', async () => {

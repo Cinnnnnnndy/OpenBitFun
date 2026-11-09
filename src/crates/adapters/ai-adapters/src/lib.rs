@@ -2,9 +2,13 @@
 
 pub mod client;
 pub mod diagnostics;
+#[cfg(feature = "local-tokenizer")]
+pub mod local_tokenizer;
+pub mod magpie;
 pub mod model_selector;
 pub mod models_dev;
 pub mod providers;
+pub mod round_router;
 pub mod stream;
 #[cfg(feature = "subscription-auth")]
 pub mod subscription_auth;
