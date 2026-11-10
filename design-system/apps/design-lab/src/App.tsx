@@ -122,10 +122,12 @@ function parseRoute(hash: string): LabRoute {
     return { page: "getting-started" };
   }
   if (route === "components") {
+    // The default component of this route: Web surface or Mobile surface (the rail's two tabs).
     return { page: "components" };
   }
   if (route === "brand" || route.startsWith("brand/")) return { page: "brand" };
   if (route === "mobile") {
+    // Same library page, mobile surface: the rail highlights the Mobile tab.
     return { page: "mobile" };
   }
   if (route === "patterns") {
