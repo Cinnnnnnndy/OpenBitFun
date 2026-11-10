@@ -33,6 +33,34 @@
 - 图标本身尺寸仍遵循上述层级
 - 通过容器 padding 实现触控区域，而非放大图标
 
+### 5. Lucide 图标的光学尺寸差异
+Lucide 图标库的 glyph 在统一 24×24 viewBox 内的实际占位差异较大：
+- **偏满**：`puzzle`、`terminal`、`folder`、`settings`、`browser`（占位 ~20-22px）
+- **中等**：`plus`、`x`、`check`、`search`、`chevron-*`（占位 ~16-18px）
+- **偏小**：`star`、`heart`、`bookmark`、`circle`（占位 ~14-16px）
+
+**后果**：即使所有图标都用同一个 `size` prop，视觉上仍会出现"大小不一"。
+
+**规则**：
+1. **同排图标必须放在固定尺寸的容器内**（`inline-size`/`block-size` 固定 + `display: grid; place-items: center`），让差异发生在容器内部而不是外部
+2. **容器内 svg 用 100% 填充**（`> svg { inline-size: 100%; block-size: 100%; }`），不要依赖 Lucide 自身的 inline 尺寸
+3. **同排图标避免混用"偏满"和"偏小"两类**——若必须混用，给"偏小"类加 12-15% 缩放补偿：
+   ```scss
+   .nav-item-icon > svg[data-glyph="star"] { transform: scale(1.15); }
+   ```
+4. **不要在图标上直接用 `margin` 调整视觉居中**——必须改容器
+5. **生产代码示例**：`src/web-ui/src/app/components/NavPanel/NavPanel.scss` 的 `&__item-icon`，以及 `sections/workspaces/WorkspaceListSection.scss` 的 `&__workspace-item-icon`
+
+### 6. 同一排图标尺寸跳档
+侧边栏、工具栏等**视觉权重相同**的同排图标，**禁止跨档使用尺寸 token**：
+- ❌ 错误：同一行混用 `size-sm` (14px) 与 `size-md` (16px)
+- ✅ 正确：同排统一 `sm` 或统一 `md`；层级差异通过颜色/透明度表达，不通过尺寸
+
+**例外**：当某一图标是"主要操作"需要强调时（例如工作区图标），允许跨一档，但必须满足：
+- 同排最多一个跨档图标
+- 跨档仅限相邻一档（sm → md，不能 sm → lg）
+- 跨档图标必须处于行的视觉起点（最左）
+
 ## 组件映射
 
 ### Web 端
@@ -69,3 +97,7 @@
 - [ ] 图标容器使用 grid 居中
 - [ ] 移动端触控区域 ≥ 44px
 - [ ] 描边宽度使用 token 控制
+- [ ] 同排图标放在固定尺寸容器内，svg 100% 填充容器
+- [ ] 同排视觉权重相同的图标不跨档使用尺寸 token
+- [ ] 偏小的 glyph（star/heart/bookmark/circle）通过容器而非 margin 对齐
+- [ ] Lucide glyph 选择时优先选视觉占位相近的（参考第 5 节分类）
