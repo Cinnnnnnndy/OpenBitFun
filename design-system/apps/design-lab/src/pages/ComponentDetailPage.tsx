@@ -8,6 +8,7 @@ import { MobileConversationExample, MobileDisclosureExample, MobileFloatingActio
 import { BrandPreview, brandCodeSample } from "../preview/BrandPreview";
 import { VoiceCallPreview } from "../components/VoiceCallPreview";
 import { Clipboard, List } from "lucide-react";
+import { editableTokenCatalog } from "../token-editor/catalog";
 import {
   ActionCard,
   ActionItem,
@@ -365,6 +366,21 @@ function NumberInputPreview({ state }: { state: string }) {
       onValueChange={setValue}
       value={value}
     />
+  );
+}
+
+function TokenChip({ name }: { name: string }) {
+  const entry = editableTokenCatalog.find(token => token.name === name);
+  const cssVar = entry?.cssVariable ?? name;
+  const values = entry?.values ?? {};
+  const firstValue = Object.values(values)[0] ?? "";
+  const description = entry?.description;
+  return (
+    <div className="component-token-chip" title={description ?? cssVar}>
+      <code className="component-token-chip-name">{name}</code>
+      <code className="component-token-chip-var">{cssVar}</code>
+      {firstValue && <span className="component-token-chip-value">{firstValue}</span>}
+    </div>
   );
 }
 
@@ -2328,7 +2344,7 @@ export function ComponentDetailPage({
   const Page = embedded ? "section" : "main";
 
   return (
-    <Page className={embedded ? "design-library-detail" : "lab-page lab-page--component-detail"} aria-labelledby="component-detail-title">
+    <Page className={embedded ? "design-library-detail openbitfun-reveal" : "lab-page lab-page--component-detail openbitfun-reveal"} aria-labelledby="component-detail-title">
       {!embedded && <nav className="component-breadcrumb" aria-label={t("detail.breadcrumbLabel")}>
         <Button onClick={onBack} variant="text" size="sm">
           {t(isFlowChatComponent ? "detail.backFlowChat" : "detail.back")}
@@ -2442,7 +2458,7 @@ export function ComponentDetailPage({
               </div>
               </ReferenceDisclosure>
           <ReferenceDisclosure label={t("detail.ownedTokens")}>
-          <div className="design-component-tokens"><div className="component-inspector-token-list">{component.tokens.map(token => <code key={token}>{token}</code>)}</div>
+          <div className="design-component-tokens"><div className="component-inspector-token-list">{component.tokens.map(token => <TokenChip key={token} name={token} />)}</div>
             <Button variant="text" onClick={() => onInspectTokens(component.name)} trailingIcon={<Icon name="arrow-right" />}>{t("detail.openWorkbench")}</Button>
           </div>
           </ReferenceDisclosure>

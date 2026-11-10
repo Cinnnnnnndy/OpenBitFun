@@ -45,7 +45,7 @@
    Sheets and scrims mount inside the screen (their portal target and their scrim are scoped
    here), so a demo sheet slides over the phone, not the Lab. */
 .design-phone-frame { display: flex; justify-content: center; inline-size: 100%; padding: var(--openbitfun-space-4) 0; }
-.design-phone-screen { position: relative; display: flex; flex-direction: column; inline-size: min(390px, 100%); aspect-ratio: 390 / 844; max-block-size: min(844px, 78vh); overflow: hidden; border: var(--openbitfun-border-width-default) solid var(--openbitfun-color-border-subtle); border-radius: 28px; background: var(--openbitfun-color-surface-canvas); box-shadow: var(--openbitfun-shadow-lg); }
+.design-phone-screen { position: relative; display: flex; flex-direction: column; inline-size: min(390px, 100%); aspect-ratio: 390 / 844; max-block-size: min(844px, 78vh); overflow: hidden; border: var(--openbitfun-border-width-default) solid var(--openbitfun-color-border-subtle); border-radius: 28px; background: var(--openbitfun-color-surface-canvas); box-shadow: var(--openbitfun-shadow-base); }
 .design-phone-status { display: flex; justify-content: space-between; padding: var(--openbitfun-space-3) var(--openbitfun-space-5) var(--openbitfun-space-1); color: var(--openbitfun-color-content-secondary); font-size: var(--openbitfun-type-label-sm-font-size); }
 .design-phone-thread { display: grid; gap: var(--openbitfun-space-3); padding: var(--openbitfun-space-3) var(--openbitfun-space-4); }
 .design-phone-body { position: relative; z-index: 0; flex: 1; display: flex; flex-direction: column; gap: var(--openbitfun-space-4); justify-content: center; min-block-size: 0; padding: var(--openbitfun-space-4); overflow: hidden; }

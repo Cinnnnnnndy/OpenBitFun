@@ -3,6 +3,7 @@ import { ComponentDetailPage } from "./ComponentDetailPage";
 import { BrandPreview } from "../preview/BrandPreview";
 import { CapsulePreview } from "../preview/CapsulePreview";
 import { ColorPickerPreview } from "../preview/ColorPickerPreview";
+import { MobileSceneGallery } from "../preview/MobileSceneGallery";
 import { AppWindow, Heading, Keyboard, List, Rows3, MousePointerClick, PanelTop, ToggleLeft } from "lucide-react";
 import { VoiceCallPreview, VoiceParticlePreview } from "../components/VoiceCallPreview";
 import {
@@ -848,7 +849,7 @@ export function ComponentsPage({
   const selectedComponent = component ?? defaultComponent(category);
 
   return (
-    <main className="lab-page design-component-library" id="components">
+    <main className="lab-page design-component-library openbitfun-reveal" id="components">
       {/* The component directory is the rail's tree now, so this column is the preview alone:
           one index for the whole section instead of a second one inside the page. */}
       {selectedComponent && (
@@ -862,6 +863,14 @@ export function ComponentsPage({
               {toolReferenceOpen && <ThemeRoot colorScheme={colorScheme} contrast={contrast} density={density} tokenOverrides={tokenOverrides}>
                 <FlowChatToolGallery onOpenComponent={onOpenComponent} />
               </ThemeRoot>}
+            </details>
+          )}
+          {selectedComponent.category === "mobile" && (
+            <details className="design-tool-reference">
+              <summary>{t("scenes.mobile.label")}</summary>
+              <ThemeRoot colorScheme={colorScheme} contrast={contrast} density={density} tokenOverrides={tokenOverrides}>
+                <MobileSceneGallery colorScheme={colorScheme} contrast={contrast} density={density} tokenOverrides={tokenOverrides} />
+              </ThemeRoot>
             </details>
           )}
           <div className="design-directory-footer">
