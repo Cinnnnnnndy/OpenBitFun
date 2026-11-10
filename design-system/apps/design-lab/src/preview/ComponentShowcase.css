@@ -19,7 +19,7 @@
 .design-component-overview .component-card-command-grid { grid-template-columns: repeat(auto-fit, minmax(min(100%, 160px), 1fr)); }
 .design-mobile-appearances .design-example-grid { margin-bottom: var(--openbitfun-space-6); }
 .design-mobile-appearances .design-example-grid > div { display: flex; flex-direction: column; align-items: flex-start; gap: var(--openbitfun-space-3); }
-.design-mobile-appearances span { color: var(--openbitfun-color-content-secondary); font-size: var(--openbitfun-type-body-xs-font-size); }
+.design-mobile-appearances .design-example-grid > div > span:first-child { color: var(--openbitfun-color-content-secondary); font-size: var(--openbitfun-type-body-xs-font-size); }
 .design-icon-directory { display: grid; grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); gap: var(--openbitfun-space-2); margin-top: var(--openbitfun-space-4); max-height: 480px; overflow-y: auto; padding: var(--openbitfun-space-1); }
 .design-icon-directory button { display: flex; flex-direction: column; align-items: center; gap: var(--openbitfun-space-3); min-width: 0; padding: var(--openbitfun-space-4) var(--openbitfun-space-2); border: 0; border-radius: var(--openbitfun-radius-md); background: transparent; color: var(--openbitfun-color-content-secondary); cursor: pointer; }
 .design-icon-directory button:hover, .design-icon-directory button[aria-pressed="true"] { background: var(--openbitfun-color-selection-surface); color: var(--openbitfun-color-content-primary); }
