@@ -11,7 +11,7 @@ import {
 import { LabComponentIndex } from "./LabComponentIndex";
 import { componentRegistry } from "@openbitfun/ui/registry";
 
-type Page = "components" | "foundations" | "brand" | "colors" | "tokens" | "getting-started" | "resources" | "patterns" | "flow-chat" | "flow-chat-mock" | "mobile" | "subagent-ip";
+type Page = "components" | "foundations" | "brand" | "colors" | "tokens" | "getting-started" | "resources" | "patterns" | "mobile-patterns" | "flow-chat" | "flow-chat-mock" | "mobile" | "subagent-ip";
 type NavigationProps = { page: string; componentName?: string; onNavigate: (page: Page) => void };
 function sectionFor(page: string) {
   return ["brand", "subagent-ip"].includes(page) ? "brand"
@@ -46,13 +46,19 @@ export function LabNavigation({ page, componentName, onNavigate }: NavigationPro
 export function LabSectionNavigation({ page, componentName, onNavigate }: NavigationProps) {
   const { t } = useI18n();
   const section = sectionFor(page);
+  /* Handheld surface keeps its own rail: the mobile component index plus the mobile-only
+     scenes pages. The Desktop rail lists the web catalog and web patterns instead. */
+  const mobileSurface = page === "mobile" || page === "mobile-patterns"
+    || (page === "component" && componentRegistry.find(item => item.name === componentName)?.category === "mobile");
   const activeChapter = useSyncExternalStore(subscribeFoundationSection, getActiveFoundationSection);
   const links: readonly [Page, MessageKey][] = section === "brand"
     ? [["brand", "design.identity"], ["subagent-ip", "design.characters"]]
     : section === "foundations"
       ? [["foundations", "design.foundations"], ["colors", "nav.colors"], ["tokens", "design.tokens"], ["getting-started", "nav.gettingStarted"], ["resources", "nav.resources"]]
       : section === "components"
-        ? [["components", page === "mobile" || (page === "component" && componentRegistry.find(item => item.name === componentName)?.category === "mobile") ? "design.mobile" : "design.web"], ["patterns", "design.contexts"], ["flow-chat-mock", "design.conversation"]]
+        ? (mobileSurface
+          ? [["components", "design.mobile"], ["mobile-patterns", "design.contexts"], ["flow-chat-mock", "design.conversation"]]
+          : [["components", "design.web"], ["patterns", "design.contexts"], ["flow-chat-mock", "design.conversation"]])
         : [];
   if (!links.length) return null;
   return <nav className="design-secondary-navigation" aria-label={t(`design.${section!}`)}>
@@ -70,7 +76,7 @@ export function LabSectionNavigation({ page, componentName, onNavigate }: Naviga
       {/* Both indexes hang under their route: one tree per section, so the rail and the page never
           show two competing lists of the same thing. The rail follows the topbar's active tab:
           Desktop lists the non-mobile catalog, Handheld lists the touch-first kit. */}
-      {target === "components" && <LabComponentIndex selected={componentName} scope={(page === "mobile" || (page === "component" && componentRegistry.find(item => item.name === componentName)?.category === "mobile")) ? "mobile" : "web"} />}
+      {target === "components" && <LabComponentIndex selected={componentName} scope={mobileSurface ? "mobile" : "web"} />}
       {target === "foundations" && <ul className="design-navigation-chapters" aria-label={t("foundations.contents")}>
         {foundationSections.map(chapter => <li key={chapter.id}>
           <a href={`#foundations/${chapter.id}`}

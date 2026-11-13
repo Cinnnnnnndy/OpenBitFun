@@ -3,7 +3,6 @@ import { ComponentDetailPage } from "./ComponentDetailPage";
 import { BrandPreview } from "../preview/BrandPreview";
 import { CapsulePreview } from "../preview/CapsulePreview";
 import { ColorPickerPreview } from "../preview/ColorPickerPreview";
-import { MobileSceneGallery } from "../preview/MobileSceneGallery";
 import { AppWindow, Heading, Keyboard, List, Rows3, MousePointerClick, PanelTop, ToggleLeft } from "lucide-react";
 import { VoiceCallPreview, VoiceParticlePreview } from "../components/VoiceCallPreview";
 import {
@@ -952,12 +951,9 @@ export function ComponentsPage({
             </details>
           )}
           {selectedComponent.category === "mobile" && (
-            <details className="design-tool-reference">
-              <summary>{t("scenes.mobile.label")}</summary>
-              <ThemeRoot colorScheme={colorScheme} contrast={contrast} density={density} tokenOverrides={tokenOverrides}>
-                <MobileSceneGallery colorScheme={colorScheme} contrast={contrast} density={density} tokenOverrides={tokenOverrides} />
-              </ThemeRoot>
-            </details>
+            <div className="design-directory-footer">
+              <Button onClick={() => window.location.hash = "#mobile-patterns"} trailingIcon={<CatalogIcon name="arrow-right" size="sm" />}>{t("scenes.mobile.label")}</Button>
+            </div>
           )}
           <div className="design-directory-footer">
             <Button onClick={() => onInspectTokens(selectedComponent.name)} trailingIcon={<CatalogIcon name="arrow-right" size="sm" />}>{t("design.tokens")}</Button>
