@@ -130,6 +130,14 @@ import {
   MobileSegmentedControl,
   MobileSelect,
   MobileSheet,
+  MobileSidebar,
+  MobileSidebarChildRow,
+  MobileSidebarEntryRow,
+  MobileSidebarHeader,
+  MobileSidebarSectionLabel,
+  MobileSidebarSessionRow,
+  MobileSidebarToolsFooter,
+  MobileSidebarWorkspaceRow,
   MobileStatus,
   MobileStepper,
   MobileSwitch,
@@ -1087,6 +1095,97 @@ export function ComponentDetailPage({
           supportingText={t("components.preview.fieldDescription")}
           trailing={<Icon name="chevron-right" aria-hidden="true" />}
         />
+      );
+    }
+
+    if (component.name === "MobileSidebar") {
+      return (
+        <MobileSidebar
+          className="lab-mobile-sidebar-preview"
+          footer={<MobileSidebarToolsFooter leading={t("scenes.mobile.sidebar.tools")} onSettingsClick={() => undefined} onToolsClick={() => undefined} settingsLabel={t("scenes.mobile.sidebar.settings")} />}
+          header={<MobileSidebarHeader brand={t("scenes.mobile.sidebar.brand")} trailing={<MobileIconButton aria-label={t("scenes.mobile.sidebar.search")} icon={<Icon name="search" aria-hidden="true" />} />} />}
+        >
+          <MobileSidebarSectionLabel>{t("scenes.mobile.sidebar.workspace")}</MobileSidebarSectionLabel>
+          <MobileSidebarWorkspaceRow expanded={state === "expanded"} label={t("scenes.mobile.sidebar.workspace1")} onExpandChange={() => undefined}>
+            <MobileSidebarChildRow label={t("scenes.mobile.sidebar.childRemote")} />
+            <MobileSidebarChildRow label={t("scenes.mobile.sidebar.childLocal")} />
+          </MobileSidebarWorkspaceRow>
+          <MobileSidebarSectionLabel>{t("scenes.mobile.sidebar.recent")}</MobileSidebarSectionLabel>
+          <MobileSidebarSessionRow label={t("scenes.mobile.sidebar.session1")} status="running" time="2m" />
+        </MobileSidebar>
+      );
+    }
+
+    if (component.name === "MobileSidebarChildRow") {
+      return <MobileSidebarChildRow data-openbitfun-preview-state={state === "hover" || state === "focus-visible" ? state : undefined} label={t("scenes.mobile.sidebar.childRemote")} selected={state === "selected"} />;
+    }
+
+    if (component.name === "MobileSidebarEntryRow") {
+      return <MobileSidebarEntryRow data-openbitfun-preview-state={state === "hover" || state === "focus-visible" ? state : undefined} icon={<Icon name="session" aria-hidden="true" />} label={t("scenes.mobile.sidebar.assistant")} />;
+    }
+
+    if (component.name === "MobileSidebarHeader") {
+      return (
+        <MobileSidebarHeader
+          brand={t("scenes.mobile.sidebar.brand")}
+          trailing={(
+            <>
+              <MobileIconButton aria-label={t("scenes.mobile.sidebar.search")} icon={<Icon name="search" aria-hidden="true" />} />
+              <MobileIconButton aria-label={t("scenes.mobile.sidebar.collapse")} icon={<Icon name="sidebar-left" aria-hidden="true" />} />
+            </>
+          )}
+        />
+      );
+    }
+
+    if (component.name === "MobileSidebarSectionLabel") {
+      return (
+        <MobileSidebarSectionLabel
+          action={state === "default" ? (
+            <button type="button" aria-label={t("scenes.mobile.sidebar.addWorkspace")}>
+              <Icon name="plus" aria-hidden="true" />
+            </button>
+          ) : undefined}
+        >
+          {t("scenes.mobile.sidebar.workspace")}
+        </MobileSidebarSectionLabel>
+      );
+    }
+
+    if (component.name === "MobileSidebarSessionRow") {
+      return (
+        <MobileSidebarSessionRow
+          data-openbitfun-preview-state={state === "hover" || state === "focus-visible" ? state : undefined}
+          label={t("scenes.mobile.sidebar.session1")}
+          selected={state === "selected"}
+          status={state === "error" ? "error" : "running"}
+          time={state === "hover" ? "2m" : undefined}
+        />
+      );
+    }
+
+    if (component.name === "MobileSidebarToolsFooter") {
+      return (
+        <MobileSidebarToolsFooter
+          leading={t("scenes.mobile.sidebar.tools")}
+          onSettingsClick={() => undefined}
+          onToolsClick={() => undefined}
+          settingsLabel={t("scenes.mobile.sidebar.settings")}
+        />
+      );
+    }
+
+    if (component.name === "MobileSidebarWorkspaceRow") {
+      return (
+        <MobileSidebarWorkspaceRow
+          data-openbitfun-preview-state={state === "hover" || state === "focus-visible" ? state : undefined}
+          expanded={state === "expanded" || state === "collapsed" ? state === "expanded" : true}
+          label={t("scenes.mobile.sidebar.workspace1")}
+          onExpandChange={() => undefined}
+        >
+          <MobileSidebarChildRow label={t("scenes.mobile.sidebar.childRemote")} />
+          <MobileSidebarChildRow label={t("scenes.mobile.sidebar.childLocal")} />
+        </MobileSidebarWorkspaceRow>
       );
     }
 

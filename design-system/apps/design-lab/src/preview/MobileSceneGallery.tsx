@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useI18n } from "../i18n";
 import {
   MobileButton,
@@ -8,6 +9,14 @@ import {
   MobilePageHeader,
   MobileSection,
   MobileSegmentedControl,
+  MobileSidebar,
+  MobileSidebarChildRow,
+  MobileSidebarEntryRow,
+  MobileSidebarHeader,
+  MobileSidebarSectionLabel,
+  MobileSidebarSessionRow,
+  MobileSidebarToolsFooter,
+  MobileSidebarWorkspaceRow,
   MobileStatus,
   MobileSwitch,
   MobileTabBar,
@@ -27,6 +36,18 @@ interface MobileSceneGalleryProps {
 export function MobileSceneGallery({ colorScheme, contrast, density, tokenOverrides }: MobileSceneGalleryProps) {
   const { t } = useI18n();
   const theme = { colorScheme, contrast, density, tokenOverrides };
+  const [expandedWorkspaces, setExpandedWorkspaces] = useState<Record<string, boolean>>({
+    [t("scenes.mobile.sidebar.workspace1")]: true,
+  });
+
+  const toggleWorkspace = (name: string) =>
+    setExpandedWorkspaces((current) => ({ ...current, [name]: !current[name] }));
+
+  const workspaceNames = [
+    t("scenes.mobile.sidebar.workspace1"),
+    t("scenes.mobile.sidebar.workspace2"),
+    t("scenes.mobile.sidebar.workspace3"),
+  ];
 
   return (
     <div className="design-mobile-scenes" role="img" aria-label={t("scenes.mobile.label")}>
@@ -47,18 +68,77 @@ export function MobileSceneGallery({ colorScheme, contrast, density, tokenOverri
         </div>
       </ThemeRoot>
 
-      {/* Scene 2: Session List */}
+      {/* Scene 2: Sidebar */}
       <ThemeRoot className="design-phone-frame" {...theme}>
-        <div className="design-phone-screen">
+        <div className="design-phone-screen design-mobile-sidebar-scene" data-color-scheme={colorScheme}>
           <div className="design-phone-status"><span>9:41</span><span>●●●</span></div>
-          <MobilePageHeader title={t("scenes.mobile.sessions.title")} subtitle={t("scenes.mobile.sessions.subtitle")} />
-          <MobileSegmentedControl aria-label={t("scenes.mobile.sessions.segmented")} onChange={() => undefined} options={[{ label: t("scenes.mobile.sessions.tabChats"), value: "chats" }, { label: t("scenes.mobile.sessions.tabAgents"), value: "agents" }]} value="chats" />
-          <div className="design-phone-thread">
-            <MobileListRow label={t("scenes.mobile.sessions.session1")} leading={<Icon name="message-square" />} selected />
-            <MobileListRow label={t("scenes.mobile.sessions.session2")} leading={<Icon name="code" />} />
-            <MobileListRow label={t("scenes.mobile.sessions.session3")} leading={<Icon name="folder" />} />
-          </div>
-          <MobileTabBar label={t("scenes.mobile.tabBar")} items={[{ icon: <Icon name="message-square" />, label: t("scenes.mobile.tabChats"), value: "chats" }, { icon: <Icon name="gear" />, label: t("scenes.mobile.tabSettings"), value: "settings" }]} value="chats" />
+          <MobileSidebar
+            header={
+              <MobileSidebarHeader
+                brand={t("scenes.mobile.sidebar.brand")}
+                trailing={
+                  <>
+                    <MobileIconButton icon={<Icon name="search" />} aria-label={t("scenes.mobile.sidebar.search")} />
+                    <MobileIconButton icon={<Icon name="sidebar-left" />} aria-label={t("scenes.mobile.sidebar.collapse")} />
+                  </>
+                }
+              />
+            }
+            footer={
+              <MobileSidebarToolsFooter
+                leading={t("scenes.mobile.sidebar.tools")}
+                onSettingsClick={() => undefined}
+                onToolsClick={() => undefined}
+                settingsLabel={t("scenes.mobile.sidebar.settings")}
+              />
+            }
+          >
+            <div className="design-mobile-sidebar-scroll">
+              <MobileSidebarEntryRow
+                icon={<img src="/assets/bitfun-mascot.svg" alt="" draggable={false} />}
+                label={t("scenes.mobile.sidebar.assistant")}
+              />
+              <MobileSidebarEntryRow
+                icon={(
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+                    <rect x="3.2" y="3.2" width="7.6" height="7.6" rx="2.2" />
+                    <circle cx="17" cy="7" r="3.8" />
+                    <rect x="3.2" y="13.2" width="7.6" height="7.6" rx="3.8" />
+                    <circle cx="17" cy="17" r="3.8" />
+                  </svg>
+                )}
+                label={t("scenes.mobile.sidebar.miniApps")}
+              />
+              <MobileSidebarSectionLabel
+                action={(
+                  <button type="button" aria-label={t("scenes.mobile.sidebar.addWorkspace")} className="design-mobile-sidebar-add">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                      <path d="M12 5v14M5 12h14" />
+                    </svg>
+                  </button>
+                )}
+              >
+                {t("scenes.mobile.sidebar.workspace")}
+              </MobileSidebarSectionLabel>
+              {workspaceNames.map((name) => (
+                <MobileSidebarWorkspaceRow
+                  key={name}
+                  expanded={Boolean(expandedWorkspaces[name])}
+                  label={name}
+                  onExpandChange={() => toggleWorkspace(name)}
+                >
+                  <MobileSidebarChildRow label={t("scenes.mobile.sidebar.childRemote")} />
+                  <MobileSidebarChildRow label={t("scenes.mobile.sidebar.childLocal")} />
+                </MobileSidebarWorkspaceRow>
+              ))}
+              <MobileSidebarSectionLabel>{t("scenes.mobile.sidebar.recent")}</MobileSidebarSectionLabel>
+              <MobileSidebarSessionRow label={t("scenes.mobile.sidebar.session1")} status="running" time="2m" />
+              <MobileSidebarSessionRow label={t("scenes.mobile.sidebar.session2")} time="1h" />
+              <MobileSidebarSessionRow label={t("scenes.mobile.sidebar.session3")} time="3h" />
+              <MobileSidebarSessionRow label={t("scenes.mobile.sidebar.session4")} status="error" time="1d" />
+              <MobileSidebarSessionRow label={t("scenes.mobile.sidebar.session5")} time="2d" selected />
+            </div>
+          </MobileSidebar>
           <div className="design-phone-gesture" />
         </div>
       </ThemeRoot>

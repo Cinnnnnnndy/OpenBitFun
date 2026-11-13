@@ -71,3 +71,12 @@
   .design-component-overview { padding: var(--openbitfun-space-4); }
   .design-component-overview:not([data-presentation="compact"]) .design-example-grid { grid-template-columns: minmax(0, 1fr); }
 }
+
+/* Mobile sidebar scene: the phone screen hosts the sidebar directly so it fills the frame,
+   matching the Fluid Functionalism drawer surface from the native app and the HTML demo. */
+.design-mobile-sidebar-scene { background: var(--openbitfun-color-sidebar-bg); }
+.design-mobile-sidebar-scene :where([data-openbitfun-component="mobile-sidebar"]) { flex: 1; min-block-size: 0; }
+.design-mobile-sidebar-scroll { display: grid; gap: 2px; padding: var(--openbitfun-space-2); }
+.design-mobile-sidebar-scroll :where([data-openbitfun-component="mobile-sidebar-section-label"]) { margin-top: var(--openbitfun-space-2); }
+.design-mobile-sidebar-scroll :where([data-openbitfun-component="mobile-sidebar-section-label"]):first-of-type { margin-top: var(--openbitfun-space-1); }
+.design-mobile-sidebar-add { display: flex; align-items: center; justify-content: center; }
