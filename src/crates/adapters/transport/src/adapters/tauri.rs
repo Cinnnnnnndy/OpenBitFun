@@ -8,10 +8,22 @@ use crate::traits::TransportAdapter;
 use async_trait::async_trait;
 use log::warn;
 use openbitfun_events::{project_agentic_frontend_event, AgenticEvent};
+#[cfg(feature = "tauri-adapter")]
+use serde::{Deserialize, Serialize};
 use std::fmt;
 
 #[cfg(feature = "tauri-adapter")]
 use tauri::{AppHandle, Emitter};
+
+#[cfg(feature = "tauri-adapter")]
+pub const TAURI_EVENT_BATCH_NAME: &str = "agentic://event-batch";
+
+#[cfg(feature = "tauri-adapter")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TauriBatchedEvent {
+    pub event: String,
+    pub payload: serde_json::Value,
+}
 
 #[cfg(feature = "tauri-adapter")]
 pub struct TauriTransportAdapter {
@@ -22,6 +34,23 @@ pub struct TauriTransportAdapter {
 impl TauriTransportAdapter {
     pub fn new(app_handle: AppHandle) -> Self {
         Self { app_handle }
+    }
+
+    /// Deliver one or more ordered frontend events across a single Tauri IPC
+    /// boundary when multiple events drain in the same window.
+    pub fn emit_batch(&self, mut events: Vec<TauriBatchedEvent>) -> anyhow::Result<()> {
+        match events.len() {
+            0 => Ok(()),
+            1 => {
+                let item = events.pop().expect("single item checked above");
+                self.app_handle.emit(&item.event, item.payload)?;
+                Ok(())
+            }
+            _ => {
+                self.app_handle.emit(TAURI_EVENT_BATCH_NAME, events)?;
+                Ok(())
+            }
+        }
     }
 }
 

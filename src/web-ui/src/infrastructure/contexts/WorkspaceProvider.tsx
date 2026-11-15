@@ -13,6 +13,34 @@ import {
 
 const log = createLogger('WorkspaceProvider');
 
+function sameWorkspaceInfoEntry(left: WorkspaceInfo | null, right: WorkspaceInfo | null): boolean {
+  if (left === right) return true;
+  if (!left || !right) return false;
+  return left.id === right.id
+    && left.name === right.name
+    && left.rootPath === right.rootPath
+    && left.workspaceKind === right.workspaceKind
+    && left.connectionId === right.connectionId
+    && left.sshHost === right.sshHost
+    && left.identity === right.identity
+    && left.relatedPaths === right.relatedPaths
+    && left.worktree === right.worktree;
+}
+
+function sameWorkspaceList(
+  left: readonly WorkspaceInfo[] | null,
+  right: readonly WorkspaceInfo[] | null,
+): boolean {
+  if (left === right) return true;
+  if (!left || !right || left.length !== right.length) return false;
+  for (let index = 0; index < left.length; index += 1) {
+    if (!sameWorkspaceInfoEntry(left[index], right[index])) {
+      return false;
+    }
+  }
+  return true;
+}
+
 interface WorkspaceProviderProps {
   children: ReactNode;
 }
@@ -150,11 +178,28 @@ export const WorkspaceProvider: React.FC<WorkspaceProviderProps> = ({ children }
         const activeWorkspace = nextState.currentWorkspace;
         const openedWorkspacesList = Array.from(nextState.openedWorkspaces.values());
 
+        if (
+          prev.activeWorkspaceId === nextState.activeWorkspaceId
+          && prev.lastUsedWorkspaceId === nextState.lastUsedWorkspaceId
+          && prev.primaryAssistantWorkspaceId === nextState.primaryAssistantWorkspaceId
+          && prev.loading === nextState.loading
+          && prev.error === nextState.error
+          && sameWorkspaceInfoEntry(prev.currentWorkspace, activeWorkspace)
+          && sameWorkspaceList(prev.openedWorkspacesList, openedWorkspacesList)
+          && sameWorkspaceList(prev.recentWorkspaces, nextState.recentWorkspaces)
+          && sameWorkspaceList(prev.assistantWorkspaces, nextState.assistantWorkspaces)
+        ) {
+          return prev;
+        }
+
         return {
           ...prev,
           ...nextState,
           activeWorkspace,
           openedWorkspacesList,
+          allAssistantWorkspacesList: nextState.assistantWorkspaces ?? openedWorkspacesList.filter(
+            workspace => workspace.workspaceKind === WorkspaceKind.Assistant
+          ),
           normalWorkspacesList: openedWorkspacesList.filter(
             (workspace) => workspace.workspaceKind !== WorkspaceKind.Assistant
           ),
