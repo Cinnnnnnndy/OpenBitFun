@@ -63,21 +63,19 @@ function closeSharedTauriEventListener(
 
 function dispatchSharedTauriEvent(event: string, rawPayload: unknown): void {
   const shared = sharedTauriEventListeners.get(event);
-  if (!shared || shared.closed) {
-    return;
-  }
 
   // Capture the logical listeners that owned the event when it arrived. A
   // Session read may hold delivery after accepting the write; those owners
   // may paint it if still subscribed when released; later subscribers must
   // not receive the native event retroactively.
-  const subscriptions = [...shared.subscriptions];
+  const subscriptions = shared && !shared.closed ? [...shared.subscriptions] : [];
 
   // Peer devices stay attached while the UI renders another device, so
-  // several product event streams share this bus. Only the rendered device
-  // surface may reach product listeners.
+  // several product event streams share this bus. Always route through surface
+  // observation first (even when unpacked from a batch with no local channel
+  // listener), while only the rendered device surface reaches product listeners.
   const route = routeSurfaceEvent(event, rawPayload);
-  if (!route.deliver) {
+  if (!route.deliver || !shared || shared.closed) {
     return;
   }
 

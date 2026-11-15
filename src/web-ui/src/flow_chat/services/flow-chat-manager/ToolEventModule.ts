@@ -376,11 +376,13 @@ function applyParamsPartial(
         if (typeof effectiveParams.payload === 'string') {
           effectiveParams.content = effectiveParams.payload;
         }
-        const extractedPath = extractFilePathFromJsonBuffer(newBuffer);
         const hasPath = ['file_path', 'filePath', 'filepath', 'target_file', 'targetFile', 'path', 'filename']
           .some((key) => typeof effectiveParams[key] === 'string' && effectiveParams[key].length > 0);
-        if (extractedPath && !hasPath) {
-          effectiveParams.file_path = extractedPath;
+        if (!hasPath) {
+          const extractedPath = extractFilePathFromJsonBuffer(newBuffer);
+          if (extractedPath) {
+            effectiveParams.file_path = extractedPath;
+          }
         }
       }
     }

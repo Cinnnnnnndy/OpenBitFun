@@ -56,6 +56,8 @@ const MarkdownMathRenderer = lazyWithRecovery(() => import('./MarkdownMathRender
 const ThinkingMarkdown = lazyWithRecovery(() => import('./ThinkingMarkdown'));
 const InlineFragment = ({ children }: { children?: ReactNode }) => <>{children}</>;
 
+const EMPTY_UNIFIED_PLUGINS: any[] = [];
+
 function hasRawHastNode(node: any): boolean {
   if (!node || typeof node !== 'object') return false;
   if (node.type === 'raw') return true;
@@ -201,8 +203,11 @@ function parseFenceLinePrefix(
   let indent = 0;
   while (cursor < lineEnd && indent < 4) {
     const ch = source.charCodeAt(cursor);
-    if (ch === 32 || ch === 9) {
+    if (ch === 32) {
       indent += 1;
+      cursor += 1;
+    } else if (ch === 9) {
+      indent += 4 - (indent % 4);
       cursor += 1;
     } else {
       break;
@@ -350,13 +355,30 @@ function stripMarkdownCodeForFeatureDetection(content: string): string {
     let runEnd = i + 1;
     while (runEnd < len && withoutFences.charCodeAt(runEnd) === 96) runEnd += 1;
     const runLen = runEnd - i;
+    // CommonMark inline code spans cannot cross a blank-line paragraph break.
+    let paragraphEnd = len;
+    let nlSearch = runEnd;
+    while (nlSearch < len) {
+      const nl = withoutFences.indexOf('\n', nlSearch);
+      if (nl < 0) break;
+      let cursor = nl + 1;
+      while (cursor < len && (withoutFences.charCodeAt(cursor) === 32 || withoutFences.charCodeAt(cursor) === 9)) {
+        cursor += 1;
+      }
+      if (cursor < len && withoutFences.charCodeAt(cursor) === 13) cursor += 1;
+      if (cursor < len && withoutFences.charCodeAt(cursor) === 10) {
+        paragraphEnd = nl;
+        break;
+      }
+      nlSearch = nl + 1;
+    }
     let search = runEnd;
     let closedAt = -1;
-    while (search < len) {
+    while (search < paragraphEnd) {
       const candidate = withoutFences.indexOf('`', search);
-      if (candidate < 0) break;
+      if (candidate < 0 || candidate >= paragraphEnd) break;
       let candidateEnd = candidate + 1;
-      while (candidateEnd < len && withoutFences.charCodeAt(candidateEnd) === 96) candidateEnd += 1;
+      while (candidateEnd < paragraphEnd && withoutFences.charCodeAt(candidateEnd) === 96) candidateEnd += 1;
       if (candidateEnd - candidate === runLen) {
         closedAt = candidateEnd;
         break;
@@ -1227,8 +1249,12 @@ const MarkdownSurface = React.memo<MarkdownRendererProps & { thinking?: boolean;
   const markdownContentRef = useLiveValueRef(markdownContent);
 
   const needsWorkspacePathForLinks = useMemo(
-    () => mayNeedWorkspacePathForMarkdownLinks(markdownContent),
-    [markdownContent],
+    () => (
+      thinking || fileActionsViaCallbackOnly || Boolean(currentWorkspacePath || basePath)
+        ? false
+        : mayNeedWorkspacePathForMarkdownLinks(markdownContent)
+    ),
+    [basePath, currentWorkspacePath, fileActionsViaCallbackOnly, markdownContent, thinking],
   );
 
   useEffect(() => {
@@ -1262,8 +1288,8 @@ const MarkdownSurface = React.memo<MarkdownRendererProps & { thinking?: boolean;
     : { contentLength: markdownContent.length, hasCodeBlock: false, hasTable: false }),
   [markdownContent, renderTraceEnabled]);
   const shouldUseMathRenderer = useMemo(
-    () => mayContainMarkdownMath(markdownContent),
-    [markdownContent],
+    () => (thinking ? false : mayContainMarkdownMath(markdownContent)),
+    [markdownContent, thinking],
   );
 
   // Parse line ranges like #L42 / 1-20
@@ -1995,24 +2021,24 @@ const MarkdownSurface = React.memo<MarkdownRendererProps & { thinking?: boolean;
     ) : basicFragment;
   }, [components, isStreaming]);
   const basicRemarkPlugins = useMemo(
-    () => [
+    () => (thinking ? EMPTY_UNIFIED_PLUGINS : [
       [remarkGfm, markdownGfmOptions],
       ...(!isStreaming ? [remarkCachedParse] : []),
       [remarkStreamingTableLinks, { isStreaming }],
       remarkAutolinkBoundaries,
       remarkAutolinkInternalLinks,
-    ] as any,
-    [isStreaming],
+    ] as any),
+    [isStreaming, thinking],
   );
   const basicRehypePlugins = useMemo(
-    () => [
+    () => (thinking ? EMPTY_UNIFIED_PLUGINS : [
       rehypeRawIfPresent,
       [rehypeWindowsDrivePaths, { markdownSource: markdownContent }],
       [rehypeSanitize, sanitizeSchema],
       [rehypeSourceRange, sourceRange],
       [rehypeImageThumbnails, { enabled: imageThumbnails }],
-    ] as any,
-    [markdownContent, sourceRange, imageThumbnails],
+    ] as any),
+    [markdownContent, sourceRange, imageThumbnails, thinking],
   );
   const basicMarkdownRenderer = (
     <ReactMarkdown

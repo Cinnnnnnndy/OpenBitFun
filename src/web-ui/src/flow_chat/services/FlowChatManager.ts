@@ -118,6 +118,7 @@ export class FlowChatManager {
   private navStatusCleanup: (() => void) | null = null;
   private surfaceActivationCleanup: (() => void) | null = null;
   private beforeSessionVisibleCleanup: (() => void) | null = null;
+  private sessionBuffersDiscardedCleanup: (() => void) | null = null;
   private eventListenerRetryTimer: ReturnType<typeof setTimeout> | null = null;
   private disposed = false;
 
@@ -166,6 +167,10 @@ export class FlowChatManager {
           silent: !notify,
           flushBatcher: true,
         });
+      }) ?? null;
+    this.sessionBuffersDiscardedCleanup =
+      this.context.flowChatStore.registerSessionBuffersDiscardedCallback?.(sessionId => {
+        cleanupSessionBuffers(this.context, sessionId);
       }) ?? null;
     installPendingQueueDrainListener(this.context);
     this.peerSessionRefreshCleanup = installPeerSessionRefresh(this.context);
@@ -624,6 +629,8 @@ export class FlowChatManager {
     this.surfaceActivationCleanup = null;
     this.beforeSessionVisibleCleanup?.();
     this.beforeSessionVisibleCleanup = null;
+    this.sessionBuffersDiscardedCleanup?.();
+    this.sessionBuffersDiscardedCleanup = null;
     this.peerSessionRefreshCleanup?.();
     this.peerSessionRefreshCleanup = null;
     this.dispatchJobObserverCleanup?.();

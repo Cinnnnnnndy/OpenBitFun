@@ -13,18 +13,37 @@ import {
 
 const log = createLogger('WorkspaceProvider');
 
+function sameStringList(left: readonly string[] | undefined, right: readonly string[] | undefined): boolean {
+  if (left === right) return true;
+  if (!left || !right || left.length !== right.length) return false;
+  for (let i = 0; i < left.length; i += 1) {
+    if (left[i] !== right[i]) return false;
+  }
+  return true;
+}
+
 function sameWorkspaceInfoEntry(left: WorkspaceInfo | null, right: WorkspaceInfo | null): boolean {
   if (left === right) return true;
   if (!left || !right) return false;
   return left.id === right.id
     && left.name === right.name
     && left.rootPath === right.rootPath
+    && left.workspaceType === right.workspaceType
     && left.workspaceKind === right.workspaceKind
+    && left.assistantId === right.assistantId
+    && left.defaultNameNumber === right.defaultNameNumber
+    && left.openedAt === right.openedAt
+    && left.lastAccessed === right.lastAccessed
+    && left.description === right.description
     && left.connectionId === right.connectionId
+    && left.connectionName === right.connectionName
     && left.sshHost === right.sshHost
+    && left.statistics === right.statistics
     && left.identity === right.identity
     && left.relatedPaths === right.relatedPaths
-    && left.worktree === right.worktree;
+    && left.worktree === right.worktree
+    && sameStringList(left.languages, right.languages)
+    && sameStringList(left.tags, right.tags);
 }
 
 function sameWorkspaceList(

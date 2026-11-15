@@ -2324,6 +2324,7 @@ export class FlowChatStore {
   private stateBatchInitialState?: FlowChatState;
   private stateBatchRestoreSilentMode = false;
   private beforeSessionVisibleCallbacks = new Set<(sessionId: string, options: { notify: boolean }) => void>();
+  private sessionBuffersDiscardedCallbacks = new Set<(sessionId: string) => void>();
   /**
    * Request dedup and negotiated capabilities outlive the switch that stranded
    * them, so their keys carry the surface instead of the container: an entry
@@ -2475,6 +2476,26 @@ export class FlowChatStore {
         callback(sessionId, options);
       } catch (error) {
         log.warn('Before-session-visible callback threw an error', { sessionId, error });
+      }
+    }
+  }
+
+  public registerSessionBuffersDiscardedCallback(
+    callback: (sessionId: string) => void,
+  ): () => void {
+    this.sessionBuffersDiscardedCallbacks.add(callback);
+    return () => {
+      this.sessionBuffersDiscardedCallbacks.delete(callback);
+    };
+  }
+
+  private notifySessionBuffersDiscarded(sessionId: string): void {
+    if (!sessionId || this.sessionBuffersDiscardedCallbacks.size === 0) return;
+    for (const callback of this.sessionBuffersDiscardedCallbacks) {
+      try {
+        callback(sessionId);
+      } catch (error) {
+        log.warn('Session-buffers-discarded callback threw an error', { sessionId, error });
       }
     }
   }
@@ -3563,6 +3584,7 @@ export class FlowChatStore {
   private clearRemovedSessionHistoryState(sessionIds: Iterable<string>, reason: string): void {
     const removedSessionIds = new Set(sessionIds);
     for (const id of removedSessionIds) {
+      this.notifySessionBuffersDiscarded(id);
       this.activeSurface.relaySessionHistory.get(id)?.close();
       this.activeSurface.relaySessionHistory.delete(id);
       this.activeSurface.relaySessionRecords.delete(id);
@@ -6047,6 +6069,24 @@ export class FlowChatStore {
     this.clearRemovedSessionHistoryState(removedSessionIds, 'session-removed');
     useBackgroundSubagentActivityStore.getState().removeSessions(removedSessionIds);
 
+    const preRemovedSet = new Set(removedSessionIds);
+    if (this.state.activeSessionId && preRemovedSet.has(this.state.activeSessionId)) {
+      let candidateNextActiveId: string | null = null;
+      if (resolvedOptions && 'nextActiveSessionId' in resolvedOptions) {
+        candidateNextActiveId = resolvedOptions.nextActiveSessionId ?? null;
+      } else {
+        for (const key of this.state.sessions.keys()) {
+          if (!preRemovedSet.has(key)) {
+            candidateNextActiveId = key;
+            break;
+          }
+        }
+      }
+      if (candidateNextActiveId) {
+        this.notifyBeforeSessionVisible(candidateNextActiveId, { notify: false });
+      }
+    }
+
     this.setState(prev => {
       const removedSessionIdSet = new Set(removedSessionIds);
       const newSessions = new Map(prev.sessions);
@@ -6113,6 +6153,8 @@ export class FlowChatStore {
   public clearSession(sessionId?: string): void {
     const targetSessionId = sessionId || this.state.activeSessionId;
     if (!targetSessionId) return;
+
+    this.notifySessionBuffersDiscarded(targetSessionId);
 
     this.setState(prev => {
       const session = prev.sessions.get(targetSessionId);
@@ -6584,6 +6626,7 @@ export class FlowChatStore {
    * Used for turn rollback: revert to before this turn and remove this turn and all subsequent history
    */
   public truncateDialogTurnsFrom(sessionId: string, turnIndex: number): void {
+    this.notifySessionBuffersDiscarded(sessionId);
 
     this.setState(prev => {
       const session = prev.sessions.get(sessionId);
@@ -7910,6 +7953,7 @@ export class FlowChatStore {
    * Called by SessionStateMachine side effects, updates all related states to cancelled
    */
   public cancelSessionTask(sessionId: string): void {
+    this.notifyBeforeSessionVisible(sessionId, { notify: false });
     this.setState(prev => {
       const session = prev.sessions.get(sessionId);
       if (!session) {

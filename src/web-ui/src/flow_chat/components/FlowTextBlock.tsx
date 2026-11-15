@@ -218,24 +218,36 @@ export const FlowTextBlock = React.memo<FlowTextBlockProps>(({
   trailingSectionLenRef.current = lastSection ? lastSection.end - lastSection.start : 0;
 
   const prewarmedSectionCountRef = useRef(0);
+  const prewarmedItemIdRef = useRef(textItem.id);
+  const prewarmCancelsRef = useRef<Array<() => void>>([]);
   useEffect(() => {
+    if (prewarmedItemIdRef.current !== textItem.id) {
+      prewarmedItemIdRef.current = textItem.id;
+      prewarmCancelsRef.current.forEach(cancel => cancel());
+      prewarmCancelsRef.current = [];
+      prewarmedSectionCountRef.current = 0;
+    }
     const sealedCount = Math.max(0, sections.length - 1);
+    if (sealedCount < prewarmedSectionCountRef.current) {
+      prewarmCancelsRef.current.forEach(cancel => cancel());
+      prewarmCancelsRef.current = [];
+      prewarmedSectionCountRef.current = 0;
+    }
     if (sealedCount <= prewarmedSectionCountRef.current) {
-      if (sealedCount === 0) prewarmedSectionCountRef.current = 0;
       return;
     }
-    const cancels: Array<() => void> = [];
     for (let i = prewarmedSectionCountRef.current; i < sealedCount; i += 1) {
       const sec = sections[i];
       if (sec) {
-        cancels.push(prewarmMarkdownParse(displayContent.slice(sec.start, sec.end)));
+        prewarmCancelsRef.current.push(prewarmMarkdownParse(displayContent.slice(sec.start, sec.end)));
       }
     }
     prewarmedSectionCountRef.current = sealedCount;
-    return () => {
-      cancels.forEach(cancel => cancel());
-    };
-  }, [sections, displayContent]);
+  }, [displayContent, sections, textItem.id]);
+  useEffect(() => () => {
+    prewarmCancelsRef.current.forEach(cancel => cancel());
+    prewarmCancelsRef.current = [];
+  }, []);
 
   const renderMarkdown = (markdownContent: string, key?: React.Key, streaming = markdownStreaming, continuation = false) => (
     <MarkdownRenderer

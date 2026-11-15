@@ -69,6 +69,7 @@ export async function activateMainSession(sessionId: string, options?: SessionAc
     // the switch below adopts the read already in flight.
     flowChatManager.prewarmHistoricalSession(sessionId);
   }
+  let activatedTarget = false;
   try {
     if (workspaceId) {
       // Workspace activation mutates the host as well as the frontend. Serialize
@@ -110,10 +111,22 @@ export async function activateMainSession(sessionId: string, options?: SessionAc
       syncSessionToModernStore(sessionId);
     }
 
+    activatedTarget = true;
     return true;
   } finally {
     if (needsWorkspaceSwitch) {
       clearPendingWorkspaceSessionActivation(request);
+      if (
+        !activatedTarget
+        && workspaceId
+        && isCurrent()
+        && workspaceManager.getState().activeWorkspaceId === workspaceId
+      ) {
+        const ws = workspaceManager.getState().currentWorkspace;
+        if (ws && ws.id === workspaceId) {
+          void flowChatManager.initialize?.(ws);
+        }
+      }
     }
   }
 }

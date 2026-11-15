@@ -31,26 +31,71 @@ pub struct TauriTransportAdapter {
 }
 
 #[cfg(feature = "tauri-adapter")]
+fn is_batchable_streaming_event(item: &TauriBatchedEvent) -> bool {
+    if item.event == "agentic://text-chunk" {
+        return true;
+    }
+    if item.event != "agentic://tool-event" {
+        return false;
+    }
+    let Some(tool_event) = item.payload.get("toolEvent") else {
+        return false;
+    };
+    let tool_name = tool_event
+        .get("effective_tool_name")
+        .and_then(|v| v.as_str())
+        .or_else(|| tool_event.get("tool_name").and_then(|v| v.as_str()));
+    if tool_name == Some("AskUserQuestion") {
+        return false;
+    }
+    matches!(
+        tool_event.get("event_type").and_then(|v| v.as_str()),
+        Some("ParamsPartial" | "Progress" | "Streaming" | "StreamChunk" | "GenUIStream")
+    )
+}
+
+#[cfg(feature = "tauri-adapter")]
 impl TauriTransportAdapter {
     pub fn new(app_handle: AppHandle) -> Self {
         Self { app_handle }
     }
 
-    /// Deliver one or more ordered frontend events across a single Tauri IPC
-    /// boundary when multiple events drain in the same window.
-    pub fn emit_batch(&self, mut events: Vec<TauriBatchedEvent>) -> anyhow::Result<()> {
-        match events.len() {
-            0 => Ok(()),
-            1 => {
-                let item = events.pop().expect("single item checked above");
-                self.app_handle.emit(&item.event, item.payload)?;
-                Ok(())
+    /// Deliver ordered frontend events while coalescing only contiguous runs of
+    /// high-frequency streaming chunk events onto `TAURI_EVENT_BATCH_NAME`.
+    /// Lifecycle and state-transition events always emit on their dedicated
+    /// channel in arrival order so standalone listeners receive them even when
+    /// `AgenticEventListener` is inactive.
+    pub fn emit_batch(&self, events: Vec<TauriBatchedEvent>) -> anyhow::Result<()> {
+        if events.is_empty() {
+            return Ok(());
+        }
+        let mut streaming_run: Vec<TauriBatchedEvent> = Vec::new();
+        let flush_run = |run: &mut Vec<TauriBatchedEvent>| -> anyhow::Result<()> {
+            match run.len() {
+                0 => Ok(()),
+                1 => {
+                    let single = run.pop().expect("single item checked above");
+                    self.app_handle.emit(&single.event, single.payload)?;
+                    Ok(())
+                }
+                _ => {
+                    let batch = std::mem::take(run);
+                    self.app_handle.emit(TAURI_EVENT_BATCH_NAME, batch)?;
+                    Ok(())
+                }
             }
-            _ => {
-                self.app_handle.emit(TAURI_EVENT_BATCH_NAME, events)?;
-                Ok(())
+        };
+
+        for item in events {
+            if is_batchable_streaming_event(&item) {
+                streaming_run.push(item);
+            } else {
+                flush_run(&mut streaming_run)?;
+                self.app_handle.emit(&item.event, item.payload)?;
             }
         }
+        flush_run(&mut streaming_run)?;
+        Ok(())
     }
 }
 
@@ -83,5 +128,44 @@ impl TransportAdapter for TauriTransportAdapter {
     ) -> anyhow::Result<()> {
         self.app_handle.emit(event_name, payload)?;
         Ok(())
+    }
+}
+
+#[cfg(all(test, feature = "tauri-adapter"))]
+mod tests {
+    use super::{is_batchable_streaming_event, TauriBatchedEvent};
+    use serde_json::json;
+
+    #[test]
+    fn only_high_frequency_streaming_events_are_batchable() {
+        assert!(is_batchable_streaming_event(&TauriBatchedEvent {
+            event: "agentic://text-chunk".to_string(),
+            payload: json!({ "sessionId": "s1", "text": "hi" }),
+        }));
+        assert!(is_batchable_streaming_event(&TauriBatchedEvent {
+            event: "agentic://tool-event".to_string(),
+            payload: json!({
+                "sessionId": "s1",
+                "toolEvent": { "event_type": "ParamsPartial", "tool_name": "Edit" }
+            }),
+        }));
+        assert!(!is_batchable_streaming_event(&TauriBatchedEvent {
+            event: "agentic://tool-event".to_string(),
+            payload: json!({
+                "sessionId": "s1",
+                "toolEvent": { "event_type": "ParamsPartial", "tool_name": "AskUserQuestion" }
+            }),
+        }));
+        assert!(!is_batchable_streaming_event(&TauriBatchedEvent {
+            event: "agentic://tool-event".to_string(),
+            payload: json!({
+                "sessionId": "s1",
+                "toolEvent": { "event_type": "Completed", "tool_name": "Edit" }
+            }),
+        }));
+        assert!(!is_batchable_streaming_event(&TauriBatchedEvent {
+            event: "agentic://dialog-turn-completed".to_string(),
+            payload: json!({ "sessionId": "s1", "turnId": "t1" }),
+        }));
     }
 }

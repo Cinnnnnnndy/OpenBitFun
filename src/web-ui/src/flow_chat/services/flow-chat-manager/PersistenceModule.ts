@@ -160,9 +160,12 @@ function fingerprintValue(value: unknown, depth: number): readonly [number, numb
   }
 
   const obj = value as object;
-  const cached = objectFingerprintCache.get(obj);
-  if (cached) {
-    return cached;
+  const canCacheObject = depth === MAX_HASH_OBJECT_DEPTH;
+  if (canCacheObject) {
+    const cached = objectFingerprintCache.get(obj);
+    if (cached) {
+      return cached;
+    }
   }
 
   let h1 = FNV_OFFSET_1;
@@ -193,7 +196,46 @@ function fingerprintValue(value: unknown, depth: number): readonly [number, numb
   }
 
   const pair: readonly [number, number] = [h1, h2];
-  objectFingerprintCache.set(obj, pair);
+  if (canCacheObject) {
+    objectFingerprintCache.set(obj, pair);
+  }
+  return pair;
+}
+
+type TurnModelRound = DialogTurn['modelRounds'][number];
+const settledRoundFingerprintCache = new WeakMap<TurnModelRound, readonly [number, number]>();
+
+function fingerprintModelRound(round: TurnModelRound): readonly [number, number] {
+  const isSettled = !round.isStreaming && Boolean(round.isComplete);
+  if (isSettled) {
+    const cached = settledRoundFingerprintCache.get(round);
+    if (cached) {
+      return cached;
+    }
+  }
+  let r1 = FNV_OFFSET_1;
+  let r2 = FNV_OFFSET_2;
+  [r1, r2] = mixStringSampled(r1, r2, round.id);
+  [r1, r2] = mixStringSampled(r1, r2, round.status || '');
+  [r1, r2] = mixUint32(r1, r2, (round.isStreaming ? 1 : 0) | (round.isComplete ? 2 : 0));
+  [r1, r2] = mixUint32(r1, r2, round.endTime ?? 0);
+  [r1, r2] = mixUint32(r1, r2, round.attemptCount ?? 0);
+  [r1, r2] = mixStringSampled(r1, r2, round.effectiveModelName || '');
+  [r1, r2] = mixUint32(r1, r2, round.items.length);
+  for (let i = 0; i < round.items.length; i += 1) {
+    const [i1, i2] = fingerprintValue(round.items[i], MAX_HASH_OBJECT_DEPTH);
+    [r1, r2] = mixUint32(r1, r2, i1);
+    [r1, r2] = mixUint32(r1, r2, i2);
+  }
+  if (round.attemptDiagnostics?.length) {
+    const [d1, d2] = fingerprintValue(round.attemptDiagnostics, 3);
+    [r1, r2] = mixUint32(r1, r2, d1);
+    [r1, r2] = mixUint32(r1, r2, d2);
+  }
+  const pair: readonly [number, number] = [r1, r2];
+  if (isSettled) {
+    settledRoundFingerprintCache.set(round, pair);
+  }
   return pair;
 }
 
@@ -218,31 +260,25 @@ export function calculateTurnHash(dialogTurn: DialogTurn): string {
     [h1, h2] = mixUint32(h1, h2, dialogTurn.tokenUsage.cachedTokens ?? -1);
   }
 
-  const lastRound = dialogTurn.modelRounds[dialogTurn.modelRounds.length - 1];
-  if (lastRound) {
-    [h1, h2] = mixStringSampled(h1, h2, lastRound.id);
-    [h1, h2] = mixStringSampled(h1, h2, lastRound.status || '');
-    [h1, h2] = mixUint32(h1, h2, (lastRound.isStreaming ? 1 : 0) | (lastRound.isComplete ? 2 : 0));
-    [h1, h2] = mixUint32(h1, h2, lastRound.endTime ?? 0);
-    [h1, h2] = mixUint32(h1, h2, lastRound.attemptCount ?? 0);
-    [h1, h2] = mixStringSampled(h1, h2, lastRound.effectiveModelName || '');
-    [h1, h2] = mixUint32(h1, h2, lastRound.items.length);
-    for (let i = 0; i < lastRound.items.length; i += 1) {
-      const [i1, i2] = fingerprintValue(lastRound.items[i], MAX_HASH_OBJECT_DEPTH);
-      [h1, h2] = mixUint32(h1, h2, i1);
-      [h1, h2] = mixUint32(h1, h2, i2);
-    }
-    if (lastRound.attemptDiagnostics?.length) {
-      const [d1, d2] = fingerprintValue(lastRound.attemptDiagnostics, 3);
-      [h1, h2] = mixUint32(h1, h2, d1);
-      [h1, h2] = mixUint32(h1, h2, d2);
-    }
+  for (let r = 0; r < dialogTurn.modelRounds.length; r += 1) {
+    const [r1, r2] = fingerprintModelRound(dialogTurn.modelRounds[r]);
+    [h1, h2] = mixUint32(h1, h2, r1);
+    [h1, h2] = mixUint32(h1, h2, r2);
   }
 
   return `${h1.toString(36)}_${h2.toString(36)}`;
 }
 
-const syncedUiSessionMetadataKeys = new Map<string, string>();
+const syncedUiSessionMetadataByContext = new WeakMap<FlowChatContext, Map<string, string>>();
+
+function getSyncedUiMetadataMap(context: FlowChatContext): Map<string, string> {
+  let map = syncedUiSessionMetadataByContext.get(context);
+  if (!map) {
+    map = new Map<string, string>();
+    syncedUiSessionMetadataByContext.set(context, map);
+  }
+  return map;
+}
 
 function isPeerProjectedNonAcpSession(session: any): boolean {
   if (isLocalSurface(getActiveSurfaceScope().surfaceId)) {
@@ -257,9 +293,11 @@ function computeUiMetadataSyncFingerprint(session: any): string {
     {
       title: session?.title ?? '',
       titleSource: session?.titleSource ?? '',
+      titleKey: session?.titleKey ?? '',
+      titleParams: session?.titleParams ?? null,
       externalPlaceholder: Boolean(session?.externalPlaceholder),
-      needsUserAttention: Boolean(session?.needsUserAttention),
-      hasUnreadCompletion: Boolean(session?.hasUnreadCompletion),
+      needsUserAttention: String(session?.needsUserAttention ?? ''),
+      hasUnreadCompletion: String(session?.hasUnreadCompletion ?? ''),
       tags: session?.tags ?? null,
       todos: session?.todos ?? null,
     },
@@ -426,9 +464,12 @@ export function cleanupSaveState(
       context.deferredStorageIdentitySaves?.delete(key);
       context.turnSaveInFlight.delete(key);
     });
-    for (const metaKey of syncedUiSessionMetadataKeys.keys()) {
-      if (metaKey.endsWith(`:${sessionId}`)) {
-        syncedUiSessionMetadataKeys.delete(metaKey);
+    const syncedUiSessionMetadataKeys = syncedUiSessionMetadataByContext.get(context);
+    if (syncedUiSessionMetadataKeys) {
+      for (const metaKey of syncedUiSessionMetadataKeys.keys()) {
+        if (metaKey.endsWith(`:${sessionId}`)) {
+          syncedUiSessionMetadataKeys.delete(metaKey);
+        }
       }
     }
   }
@@ -464,7 +505,7 @@ async function performSaveDialogTurnToDisk(
     const { sessionAPI } = await import('@/infrastructure/api/service-api/SessionAPI');
 
     scope.assertCurrent();
-    context.materializeStagedSession?.(sessionId, { silent: true });
+    context.materializeStagedSession?.(sessionId, { silent: true, flushBatcher: true });
     const session = context.flowChatStore.getState().sessions.get(sessionId);
     if (!session) {
       skip('GenUI session is unavailable');
@@ -514,6 +555,7 @@ async function performSaveDialogTurnToDisk(
     // metadata.json activity/counts/last_turn atomically. Skip the extra
     // load+save metadata double-IPC on mid-turn checkpoints unless UI-owned
     // session metadata changed or the turn reached a terminal state.
+    const syncedUiSessionMetadataKeys = getSyncedUiMetadataMap(context);
     const metaSyncKey = `${scope.surfaceId}:${sessionId}`;
     const uiMetaFingerprint = computeUiMetadataSyncFingerprint(session);
     const shouldSyncMetadata =
@@ -521,8 +563,8 @@ async function performSaveDialogTurnToDisk(
       isTerminalDialogTurnStatus(dialogTurn.status) ||
       syncedUiSessionMetadataKeys.get(metaSyncKey) !== uiMetaFingerprint;
     if (shouldSyncMetadata) {
-      await updateSessionMetadata(context, sessionId);
-      if (scope.isCurrent()) {
+      const persistedMetadata = await performUpdateSessionMetadata(context, sessionId);
+      if (persistedMetadata && scope.isCurrent()) {
         syncedUiSessionMetadataKeys.set(metaSyncKey, uiMetaFingerprint);
       }
     }
@@ -793,17 +835,26 @@ export async function updateSessionMetadata(
   fields?: UiSessionMetadataField[],
   options?: { unreadReceipt?: SessionLastTurn },
 ): Promise<void> {
+  await performUpdateSessionMetadata(context, sessionId, fields, options);
+}
+
+async function performUpdateSessionMetadata(
+  context: FlowChatContext,
+  sessionId: string,
+  fields?: UiSessionMetadataField[],
+  options?: { unreadReceipt?: SessionLastTurn },
+): Promise<boolean> {
   const scope = getActiveSurfaceScope();
   // Runtime checkpoints already update host activity and counts. A peer
   // controller writes presentation metadata only for an explicit UI change.
-  if (!fields && !isLocalSurface(scope.surfaceId)) return;
+  if (!fields && !isLocalSurface(scope.surfaceId)) return true;
   try {
     const { sessionAPI } = await import('@/infrastructure/api/service-api/SessionAPI');
-    if (!scope.isCurrent()) return;
+    if (!scope.isCurrent()) return false;
 
     const session = context.flowChatStore.getState().sessions.get(sessionId);
-    if (!session) return;
-    if (isTransientSession(session) || isObserverOnlyDispatchSession(sessionId, session)) return;
+    if (!session) return false;
+    if (isTransientSession(session) || isObserverOnlyDispatchSession(sessionId, session)) return true;
 
 
     let existingMetadata: any = null;
@@ -818,9 +869,9 @@ export async function updateSessionMetadata(
       // unreachable remote workspace, a transient read failure) the write
       // would reset tags and title facts; the next checkpoint retries.
       log.debug('Skipped session metadata checkpoint: stored record unreadable', { sessionId, error });
-      return;
+      return false;
     }
-    if (!scope.isCurrent()) return;
+    if (!scope.isCurrent()) return false;
 
     const metadata = buildSessionMetadata(session, existingMetadata);
     if (fields?.includes('unreadCompletion')) {
@@ -846,8 +897,10 @@ export async function updateSessionMetadata(
       metadata,
       requireSessionOwningWorkspaceId(session),
       fields ?? defaultFields);
+    return true;
   } catch (error) {
     log.warn('Failed to update session metadata', { sessionId, error });
+    return false;
   }
 }
 

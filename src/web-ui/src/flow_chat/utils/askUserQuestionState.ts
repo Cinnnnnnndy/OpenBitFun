@@ -17,14 +17,7 @@ const TERMINAL_TOOL_STATUSES = new Set<FlowToolItem['status']>([
   'rejected',
 ]);
 
-const roundPendingAskUserQuestionCache = new WeakMap<ModelRound, FlowToolItem | null>();
-
 function findPendingAskUserQuestionInRound(round: ModelRound): FlowToolItem | undefined {
-  const cached = roundPendingAskUserQuestionCache.get(round);
-  if (cached !== undefined) {
-    return cached ?? undefined;
-  }
-
   for (let itemIndex = round.items.length - 1; itemIndex >= 0; itemIndex -= 1) {
     const item = round.items[itemIndex];
     if (
@@ -44,12 +37,10 @@ function findPendingAskUserQuestionInRound(round: ModelRound): FlowToolItem | un
       ? (effective.input as Record<string, unknown>).questions
       : undefined;
     if (Array.isArray(questions) && questions.length > 0) {
-      roundPendingAskUserQuestionCache.set(round, item);
       return item;
     }
   }
 
-  roundPendingAskUserQuestionCache.set(round, null);
   return undefined;
 }
 
