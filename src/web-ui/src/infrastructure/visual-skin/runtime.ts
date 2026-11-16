@@ -413,6 +413,11 @@ export class VisualSkinRuntime {
     await this.applySelection(id);
   }
 
+  async deactivate(): Promise<void> {
+    await this.initialize();
+    await this.applySelection(null);
+  }
+
   async preview(id: string): Promise<void> {
     await this.initialize();
     const skin = await this.storage.get(id);
@@ -458,28 +463,25 @@ export class VisualSkinRuntime {
     this.replaceStyle(this.skinCss(skin));
   }
 
-  private async applySelection(id: string): Promise<void> {
+  private async applySelection(id: string | null): Promise<void> {
     const before = this.snapshot;
     const previousSkin = this.appliedSkin;
     let committed = false;
     try {
-      const skin = await this.storage.get(id);
-      if (!skin) throw new Error(`Visual skin is not installed: ${id}`);
-      this.partImages.ensure(skin);
+      const skin = id === null ? null : await this.storage.get(id);
+      if (id !== null && !skin) throw new Error(`Visual skin is not installed: ${id}`);
+      if (skin) this.partImages.ensure(skin);
       // Selection writes are transactional. Do not touch the visible skin
       // until IndexedDB confirms that the selection has committed.
       this.setSnapshot({ status: 'applying', error: undefined });
       await this.storage.setSelection(id);
       committed = true;
-      this.appliedSkin = skin;
-      document.documentElement.setAttribute(ACTIVE_ID_ATTRIBUTE, id);
-      this.syncSurfaceMarkers(skin);
-      this.replaceStyle(this.skinCss(skin));
-      this.setSnapshot({ initialized: true, activeSkinId: id, activeSkin: skin, previewSkinId: null, projection: createProjectionReport(skin), status: 'ready', error: undefined });
+      this.restoreDisplay(skin);
+      this.setSnapshot({ initialized: true, activeSkinId: id, activeSkin: skin, previewSkinId: null, projection: skin ? createProjectionReport(skin) : null, status: 'ready', error: undefined });
       this.collectPartImages();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      log.error('Visual skin activation failed', { skinId: id, error: message });
+      log.error('Visual skin selection failed', { skinId: id, error: message });
       if (committed) {
         await this.storage.setSelection(before.activeSkinId);
         this.clearAppliedSkin();

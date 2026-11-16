@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { VisualSkinConfigSection } from './VisualSkinConfigSection';
 
 const activateMock = vi.hoisted(() => vi.fn());
+const deactivateMock = vi.hoisted(() => vi.fn());
 const previewMock = vi.hoisted(() => vi.fn());
 const cancelPreviewMock = vi.hoisted(() => vi.fn());
 const importMock = vi.hoisted(() => vi.fn());
@@ -43,6 +44,7 @@ vi.mock('@/infrastructure/visual-skin', () => ({
     watchProjection: watchProjectionMock,
     importPackage: importMock,
     activate: activateMock,
+    deactivate: deactivateMock,
     preview: previewMock,
     cancelPreview: cancelPreviewMock,
     remove: removeMock,
@@ -62,6 +64,7 @@ describe('VisualSkinConfigSection', () => {
   beforeEach(() => {
     globalThis.IS_REACT_ACT_ENVIRONMENT = true;
     activateMock.mockReset();
+    deactivateMock.mockReset();
     previewMock.mockReset();
     cancelPreviewMock.mockReset();
     importMock.mockReset();
@@ -95,6 +98,46 @@ describe('VisualSkinConfigSection', () => {
     skinState.activeSkinId = null;
     const html = renderToStaticMarkup(<VisualSkinConfigSection />);
     expect(html).toContain('data-testid="visual-skin-empty"');
+  });
+
+  it.each(['active', 'preview'] as const)('offers deactivation while %s without removing imported skins', async state => {
+    if (state === 'preview') {
+      skinState.activeSkinId = null;
+      skinState.previewSkinId = 'sample.skin';
+    }
+    await mount();
+    const button = container.querySelector<HTMLButtonElement>('[data-testid="visual-skin-deactivate"]')!;
+    expect(button.textContent).toBe('skin.deactivate');
+    await act(async () => button.click());
+    expect(deactivateMock).toHaveBeenCalledTimes(1);
+    expect(removeMock).not.toHaveBeenCalled();
+    expect(container.querySelector('[data-skin-id="sample.skin"]')).not.toBeNull();
+  });
+
+  it('disables deactivation once no skin or preview is selected', async () => {
+    skinState.activeSkinId = null;
+    await mount();
+    const button = container.querySelector<HTMLButtonElement>('[data-testid="visual-skin-deactivate"]')!;
+    expect(button.disabled).toBe(true);
+    await act(async () => button.click());
+    expect(deactivateMock).not.toHaveBeenCalled();
+  });
+
+  it('prevents duplicate deactivation while persistence is pending and allows retry after failure', async () => {
+    let reject!: (error: Error) => void;
+    deactivateMock.mockImplementationOnce(() => new Promise<void>((_, rejectAction) => { reject = rejectAction; }));
+    await mount();
+    const button = container.querySelector<HTMLButtonElement>('[data-testid="visual-skin-deactivate"]')!;
+    await act(async () => button.click());
+    expect(button.disabled).toBe(true);
+    await act(async () => button.click());
+    expect(deactivateMock).toHaveBeenCalledTimes(1);
+    await act(async () => reject(new Error('Unable to clear selection')));
+    expect(button.disabled).toBe(false);
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain('Unable to clear selection');
+    await act(async () => button.click());
+    expect(deactivateMock).toHaveBeenCalledTimes(2);
+    expect(container.querySelector('[role="alert"]')).toBeNull();
   });
   it('distinguishes the saved skin from a temporary preview and keeps every card action reachable', async () => {
     skinState.skins.push({ id: 'other.skin', name: 'Other skin', description: 'A long reference description', version: '2', author: 'Artist' });

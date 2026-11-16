@@ -31,6 +31,7 @@ export function VisualSkinConfigSection() {
     error: runtimeError,
     importPackage,
     activate,
+    deactivate,
     preview,
     cancelPreview,
     previewSkinId,
@@ -73,6 +74,15 @@ export function VisualSkinConfigSection() {
       data-openbitfun-state={disabled ? 'disabled' : undefined}
       extra={(
         <>
+          <Button
+            variant="quiet"
+            size="sm"
+            disabled={disabled || (!activeSkinId && !previewSkinId)}
+            data-testid="visual-skin-deactivate"
+            onClick={() => void handleAction(deactivate)}
+          >
+            {t('skin.deactivate')}
+          </Button>
           <input
             ref={fileInputRef}
             type="file"
