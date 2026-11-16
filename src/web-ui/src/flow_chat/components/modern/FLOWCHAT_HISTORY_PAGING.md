@@ -242,6 +242,15 @@ no pending ticket; errors/cancellation require a new reader action rather than
 a render-driven retry loop. Exhaustion is forgotten when its window/boundary
 changes. Session instances isolate the controller across session switches.
 
+Explicit source synchronization reserves the pager's presentation commit before
+reading the host: publishing the snapshot can move the rendered boundary, and
+must not cancel its own retry ticket. A cancelled request clears only its own
+loading state, fenced by the request slot, surface, Session and presentation
+owner. Errors remain retryable. Recovery accepts a changed host catalog revision
+even when its previews are incomplete; a cached complete catalog from an older
+revision cannot override that response. Same-revision complete previews and the
+ordinary Peer snapshot merge policy remain intact.
+
 An adjacent read can adopt a newer catalog and retire the store's active range
 even when its stale-response retry returns ready. The container reacquires the
 displayed reader range and confirms the adjacent page again before preparing

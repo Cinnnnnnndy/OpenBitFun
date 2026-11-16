@@ -97,6 +97,7 @@ vi.mock('@/infrastructure/api/service-api/AgentAPI', () => ({ agentAPI: {
 } }));
 
 import { ModernFlowChatContainer } from './ModernFlowChatContainer';
+import { FlowChatHistoryPager } from './flowChatHistoryPager';
 import { registerConversationReader, stageConversationViewTransfer } from './flowChatViewHandoff';
 import { activateSurface, getActiveSurfaceScope, LOCAL_SURFACE_ID } from '@/infrastructure/peer-device/deviceSurface';
 
@@ -295,6 +296,87 @@ describe('FlowChat reader restoration across history rewrites', () => {
     expect(messages().dataset.presentationMode).toBe('tail');
     expect(host.querySelector('[data-turn-id="turn-0"]')).toBeNull();
     expect(fixture.restore).not.toHaveBeenCalled();
+  });
+
+  it('keeps the retry ticket when the host snapshot moves the rendered boundary', async () => {
+    stageBookmark();
+    await render();
+    const pager = new FlowChatHistoryPager();
+    pager.commitLayout('4:8', { before: 'turn-4', after: 'turn-7' });
+    const ticket = pager.begin('before')!;
+    const read = deferred<void>();
+    fixture.synchronize.mockReturnValueOnce(read.promise);
+    fixture.loadTurnWindow.mockResolvedValue({ status: 'ready', isCurrent: true });
+    fixture.extend.mockReturnValue(presentation(0, 8));
+    let request!: Promise<unknown>;
+    await act(async () => {
+      request = fixture.listProps!.onHistoryWindowBoundaryIntent!('before', {
+        synchronizeHistory: true, isCurrent: () => pager.isCurrent(ticket),
+        prepareViewportForPresentationCommit: () => pager.prepareCommit(ticket),
+      });
+    });
+    pager.commitLayout('3:8', { before: 'turn-3', after: 'turn-7' });
+    await act(async () => {
+      read.resolve();
+      expect(await request).toBe('applied');
+    });
+    expect(fixture.listProps!.historyBoundaryState?.before).toBe('idle');
+    expect(host.querySelector('[data-turn-id="turn-0"]')).not.toBeNull();
+  });
+
+  it.each(['resolve', 'reject'] as const)('settles loading when a synchronization ticket is cancelled before %s', async settlement => {
+    stageBookmark();
+    await render();
+    const read = deferred<void>();
+    fixture.synchronize.mockReturnValueOnce(read.promise);
+    let current = true;
+    let request!: Promise<unknown>;
+    await act(async () => {
+      request = fixture.listProps!.onHistoryWindowBoundaryIntent!('before', {
+        synchronizeHistory: true, isCurrent: () => current,
+      });
+    });
+    expect(fixture.listProps!.historyBoundaryState?.before).toBe('loading');
+    current = false;
+    await act(async () => {
+      if (settlement === 'reject') read.reject(new Error('Read failed after cancellation'));
+      else read.resolve();
+      expect(await request).toBe('cancelled');
+    });
+    expect(fixture.listProps!.historyBoundaryState?.before).toBe('idle');
+  });
+
+  it('does not clear a newer retry when a cancelled synchronization fails late', async () => {
+    stageBookmark();
+    await render();
+    const first = deferred<void>();
+    const second = deferred<void>();
+    fixture.synchronize.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+    let firstCurrent = true;
+    let older!: Promise<unknown>;
+    let newer!: Promise<unknown>;
+    await act(async () => {
+      older = fixture.listProps!.onHistoryWindowBoundaryIntent!('before', {
+        synchronizeHistory: true, isCurrent: () => firstCurrent,
+      });
+    });
+    firstCurrent = false;
+    await act(async () => {
+      newer = fixture.listProps!.onHistoryWindowBoundaryIntent!('before', {
+        synchronizeHistory: true, isCurrent: () => true,
+      });
+    });
+    await act(async () => {
+      first.reject(new Error('Superseded source read failed'));
+      expect(await older).toBe('cancelled');
+    });
+    expect(fixture.listProps!.historyBoundaryState?.before).toBe('loading');
+    await act(async () => {
+      second.reject(new Error('Owning host unavailable'));
+      expect(await newer).toBe('not-ready');
+    });
+    expect(fixture.listProps!.historyBoundaryState?.before).toBe('error');
+    expect(host.querySelector('[data-turn-id="turn-4"]')).not.toBeNull();
   });
 
   it.each([false, true])('retries an orphaned reader after a failed read (explicit sync: %s)', async synchronizeHistory => {

@@ -2047,6 +2047,7 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
       return existingRequest;
     }
 
+    let ownsBoundaryStatus = () => false;
     const request = (async () => {
       const currentViewportIntent = viewportIntentRef.current;
       const presentation = currentViewportIntent?.kind === 'turn'
@@ -2060,13 +2061,20 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
       }
 
       const scope = getActiveSurfaceScope();
-      const isCurrent = () => scope.isCurrent()
+      ownsBoundaryStatus = () => scope.isCurrent()
         && activeSessionIdRef.current === sessionId
-        && historyPresentationOwnerGenerationRef.current === presentationOwnerGeneration
-        && options?.isCurrent?.() !== false;
+        && historyPresentationOwnerGenerationRef.current === presentationOwnerGeneration;
+      const isCurrent = () => ownsBoundaryStatus() && options?.isCurrent?.() !== false;
+      let synchronizationPrepared = false;
       if (options?.synchronizeHistory) {
         setHistoryBoundaryState(previous => ({ ...previous, [direction]: 'loading' }));
         try {
+          // The host snapshot can itself move the rendered boundary. Reserve
+          // its commit before publishing it, otherwise the pager cancels this
+          // recovery as if an unrelated navigation had replaced the reader.
+          const prepared = await options.prepareViewportForPresentationCommit?.();
+          if (prepared === false || !isCurrent()) return 'cancelled';
+          synchronizationPrepared = Boolean(options.prepareViewportForPresentationCommit);
           await flowChatStore.synchronizeSessionHistory(sessionId, isCurrent);
           if (!isCurrent()) return 'cancelled';
         } catch (error) {
@@ -2327,7 +2335,9 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
 
         const preparedHistoryView = flowChatStore.getSessionHistoryViewState(sessionId);
         viewportPreparationStarted = Boolean(options?.prepareViewportForPresentationCommit);
-        const preparationResult = await options?.prepareViewportForPresentationCommit?.();
+        const preparationResult = synchronizationPrepared
+          ? true
+          : await options?.prepareViewportForPresentationCommit?.();
         const activeSessionIsCurrent = activeSessionIdRef.current === sessionId;
         const presentationOwnerIsCurrent = (
           historyPresentationOwnerGenerationRef.current === presentationOwnerGeneration
@@ -2434,6 +2444,11 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
       // Only the request that owns the slot may release it.
       if (historyBoundaryRequestsRef.current[direction] === request) {
         historyBoundaryRequestsRef.current[direction] = null;
+        // A pager ticket may be cancelled without replacing the reader. The
+        // request still owns its loading indicator, but never a newer reader's.
+        setHistoryBoundaryState(previous => ownsBoundaryStatus() && previous[direction] === 'loading'
+          ? { ...previous, [direction]: 'idle' }
+          : previous);
       }
     });
     historyBoundaryRequestsRef.current[direction] = request;

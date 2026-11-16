@@ -57,6 +57,7 @@ each missing what the other had.
 | `flowChatViewportGeometry.test.ts` | actual gutter centring, symmetric/omitted leading gutter and origin handoff without accumulated horizontal offset |
 | `../../services/RelaySessionHistory.test.ts`, `../../store/FlowChatStore.test.ts`, `../../services/flow-chat-manager/SessionModule.test.ts` | local/SSH one-Turn restore, paint-gated adjacent prefetch without tail replacement, partial reopen without full-history drain, replay staging, live updates during older reads, failed-read retention and retry; transport fixtures, not live remote evidence |
 | `flowChatHistoryPager.test.ts` | request/layout ordering, coalesced demand, prefetch without physical arrival, stale tickets, exhaustion and retry eligibility |
+| `../../store/FlowChatStore.test.ts`, `ModernFlowChatContainer.history-restore.test.tsx` | explicit retry reserves the commit before a host snapshot moves the boundary; cancelled synchronization success/failure releases its loading state; changed host revisions replace stale complete catalogs while same-revision complete previews survive; controlled IO/pager fixtures, not live remote evidence |
 | `useFlowChatViewportOwner.test.tsx` | top/native coordinate conversion, older-range growth creates no reader demand, synchronous write/shift accounting preserves reader travel and actual clamping |
 | `flowChatLiveTailWindow.test.ts` | "does the transcript still reach the newest Turn" |
 | `flowChatViewportAnchor.test.ts` | anchor geometry and the DOM contract |
