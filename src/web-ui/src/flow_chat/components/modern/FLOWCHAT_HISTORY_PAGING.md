@@ -242,6 +242,16 @@ no pending ticket; errors/cancellation require a new reader action rather than
 a render-driven retry loop. Exhaustion is forgotten when its window/boundary
 changes. Session instances isolate the controller across session switches.
 
+An adjacent read can adopt a newer catalog and retire the store's active range
+even when its stale-response retry returns ready. The container reacquires the
+displayed reader range and confirms the adjacent page again before preparing
+the viewport. This uses the existing window reader and cache, not a full-history
+reload. Catalog, navigation-generation or range changes during preparation
+cancel the old commit and leave the boundary available for fresh reader demand.
+Repeated invalidation does not start a recursive retry. Actual read failures
+retain the displayed content and expose explicit synchronization; the error
+sentinel restores pointer interaction so its recovery button can be clicked.
+
 Opening and follow-output guards remain synchronous (`isFollowingOutputNow`),
 so the gesture that releases follow is evaluated against the new owner. Geometry
 with no visible range remains a diagnostic refusal. Request/refusal diagnostics
