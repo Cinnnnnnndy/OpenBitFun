@@ -138,7 +138,8 @@ jobs:
           for asset in \
             "release-updater-assets/OpenBitFun_${RELEASE_VERSION}_windows-x86_64-setup.exe" \
             "release-manual-assets/OpenBitFun_${RELEASE_VERSION}_windows-x86_64-installer.exe"; do
-            minisign -Vm "$asset" -p existing-key/minisign.pub -x "$asset.sig"
+            base64 -d < "$asset.sig" > verify.minisig
+            minisign -Vm "$asset" -p existing-key/minisign.pub -x verify.minisig
           done
       - name: Replace Windows assets and updater manifest
         shell: bash
@@ -164,10 +165,12 @@ jobs:
             gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --pattern "$name" --dir readback --clobber
             test -s "readback/$name"
           done
+          base64 -d < "readback/OpenBitFun_${RELEASE_VERSION}_windows-x86_64-setup.exe.sig" > verify-setup.minisig
           minisign -Vm "readback/OpenBitFun_${RELEASE_VERSION}_windows-x86_64-setup.exe" \
-            -p existing-key/minisign.pub -x "readback/OpenBitFun_${RELEASE_VERSION}_windows-x86_64-setup.exe.sig"
+            -p existing-key/minisign.pub -x verify-setup.minisig
+          base64 -d < "readback/OpenBitFun_${RELEASE_VERSION}_windows-x86_64-installer.exe.sig" > verify-installer.minisig
           minisign -Vm "readback/OpenBitFun_${RELEASE_VERSION}_windows-x86_64-installer.exe" \
-            -p existing-key/minisign.pub -x "readback/OpenBitFun_${RELEASE_VERSION}_windows-x86_64-installer.exe.sig"
+            -p existing-key/minisign.pub -x verify-installer.minisig
           node scripts/verify-tauri-latest-json.mjs \
             --manifest readback/latest-v1.json --version "$RELEASE_VERSION" \
             --required-platforms windows-x86_64,darwin-x86_64,darwin-aarch64,linux-x86_64,linux-aarch64,linux-x86_64-deb,linux-aarch64-deb,linux-x86_64-rpm,linux-aarch64-rpm \
