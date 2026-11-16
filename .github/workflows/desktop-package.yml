@@ -50,16 +50,6 @@ on:
         required: false
         default: false
         type: boolean
-      allow_source_override:
-        description: "Temporary signed Windows backfill from a newer main commit for an existing release tag."
-        required: false
-        default: false
-        type: boolean
-      backfill_source_run_id:
-        description: "Publish a signed Windows backfill from a completed Desktop Package run."
-        required: false
-        default: ''
-        type: string
 
 permissions:
   actions: read
@@ -102,8 +92,6 @@ jobs:
           INPUT_RELEASE_CHANNEL: ${{ inputs.release_channel }}
           INPUT_UPLOAD_TO_RELEASE: ${{ inputs.upload_to_release }}
           INPUT_RELAY_IMAGE_ONLY: ${{ inputs.relay_image_only }}
-          INPUT_ALLOW_SOURCE_OVERRIDE: ${{ inputs.allow_source_override }}
-          INPUT_TARGET_PLATFORM: ${{ inputs.target_platform }}
         run: |
           set -euo pipefail
 
@@ -155,11 +143,7 @@ jobs:
             exit 1
           fi
           TAG_SHA="$(git rev-parse --verify --quiet "${TAG}^{commit}" || true)"
-          if [[ "${INPUT_ALLOW_SOURCE_OVERRIDE:-false}" == "true" && "${INPUT_TARGET_PLATFORM:-all}" != "windows-x64" ]]; then
-            echo "Source override is restricted to a signed Windows-only backfill." >&2
-            exit 1
-          fi
-          if [[ -n "${TAG_SHA}" && "${TAG_SHA}" != "${CHECKOUT_SHA}" && "${INPUT_ALLOW_SOURCE_OVERRIDE:-false}" != "true" ]]; then
+          if [[ -n "${TAG_SHA}" && "${TAG_SHA}" != "${CHECKOUT_SHA}" ]]; then
             echo "Existing tag ${TAG} points to ${TAG_SHA}, not requested commit ${CHECKOUT_SHA}." >&2
             exit 1
           fi
@@ -215,7 +199,7 @@ jobs:
     name: Package (${{ matrix.platform.name }})
     runs-on: ${{ matrix.platform.os }}
     needs: prepare
-    if: needs.prepare.outputs.relay_image_only != 'true' && !inputs.artifact_run_ids && !inputs.verification_recovery_run_id && !inputs.backfill_source_run_id
+    if: needs.prepare.outputs.relay_image_only != 'true' && !inputs.artifact_run_ids && !inputs.verification_recovery_run_id
     env:
       NODE_OPTIONS: --max-old-space-size=6144
       OPENBITFUN_ENABLE_UPDATER_ARTIFACTS: ${{ needs.prepare.outputs.upload_to_release }}
@@ -833,15 +817,6 @@ jobs:
             relay-image.json
             relay-image.json.sig
           fail_on_unmatched_files: true
-
-  windows-backfill-publish:
-    name: Publish Windows Backfill
-    if: inputs.backfill_source_run_id != ''
-    uses: ./.github/workflows/windows-backfill-publish.yml
-    with:
-      source_run_id: ${{ inputs.backfill_source_run_id }}
-      tag_name: ${{ inputs.tag_name || 'v1.0.11' }}
-    secrets: inherit
 
   # ── Upload assets to GitHub Release ────────────────────────────────
   upload-release-assets:
