@@ -4,11 +4,8 @@ import {
   MobileButton,
   MobileComposer,
   MobileIconButton,
-  MobileListRow,
   MobileMessage,
   MobilePageHeader,
-  MobileSection,
-  MobileSegmentedControl,
   MobileSidebar,
   MobileSidebarChildRow,
   MobileSidebarEntryRow,
@@ -18,8 +15,6 @@ import {
   MobileSidebarToolsFooter,
   MobileSidebarWorkspaceRow,
   MobileStatus,
-  MobileSwitch,
-  MobileTabBar,
   MobileTextField,
   MobileToolbar,
 } from "@openbitfun/ui/mobile";
@@ -143,18 +138,39 @@ export function MobileSceneGallery({ colorScheme, contrast, density, tokenOverri
         </div>
       </ThemeRoot>
 
-      {/* Scene 3: Settings */}
+      {/* Scene 3: Home (recent-home from the demo: brand mark + greeting + session list) */}
       <ThemeRoot className="design-phone-frame" {...theme}>
         <div className="design-phone-screen">
           <div className="design-phone-status"><span>9:41</span><span>●●●</span></div>
-          <MobilePageHeader title={t("scenes.mobile.settings.title")} />
-          <MobileSection title={t("scenes.mobile.settings.sectionGeneral")}>
-            <MobileSwitch label={t("scenes.mobile.settings.notifications")} description={t("scenes.mobile.settings.notificationsDesc")} />
-            <MobileSwitch label={t("scenes.mobile.settings.darkMode")} description={t("scenes.mobile.settings.darkModeDesc")} />
-          </MobileSection>
-          <MobileSection title={t("scenes.mobile.settings.sectionModel")}>
-            <MobileListRow label={t("scenes.mobile.settings.model")} leading={<Icon name="settings" />} />
-          </MobileSection>
+          <div className="design-phone-body design-mobile-home-scene">
+            <div className="design-mobile-home-inner">
+              <img src="/assets/openbitfun-mark.svg" alt="" className="design-mobile-home-mark" draggable={false} />
+              <div className="design-mobile-home-title">{t("scenes.mobile.home.greeting")}</div>
+            </div>
+            <div className="design-mobile-home-list">
+              <div className="design-mobile-home-list-head">
+                <span className="design-mobile-home-list-label">{t("scenes.mobile.home.recent")}</span>
+                <a href="#" className="design-mobile-home-list-all" onClick={(e) => e.preventDefault()}>{t("scenes.mobile.home.all")}</a>
+              </div>
+              <div className="design-mobile-home-session">
+                <div className="design-mobile-home-session-title">{t("scenes.mobile.home.session1")}</div>
+                <div className="design-mobile-home-session-meta">{t("scenes.mobile.home.session1Meta")}</div>
+              </div>
+              <div className="design-mobile-home-divider" />
+              <div className="design-mobile-home-session">
+                <div className="design-mobile-home-session-title">{t("scenes.mobile.home.session2")}</div>
+                <div className="design-mobile-home-session-meta">{t("scenes.mobile.home.session2Meta")}</div>
+              </div>
+              <div className="design-mobile-home-divider" />
+              <div className="design-mobile-home-session">
+                <div className="design-mobile-home-session-title">{t("scenes.mobile.home.session3")}</div>
+                <div className="design-mobile-home-session-meta">{t("scenes.mobile.home.session3Meta")}</div>
+              </div>
+            </div>
+          </div>
+          <MobileComposer aria-label={t("scenes.mobile.chat.placeholder")}>
+            <span className="design-home-preview-placeholder">{t("scenes.mobile.chat.placeholder")}</span>
+          </MobileComposer>
           <div className="design-phone-gesture" />
         </div>
       </ThemeRoot>
