@@ -21,6 +21,7 @@ export function useVisualSkin() {
     watchProjection: skinRuntime.watchProjection,
     skins: snapshot.catalog,
     activate: (id: string) => skinRuntime.activate(id),
+    deactivate: () => skinRuntime.deactivate(),
     preview: (id: string) => skinRuntime.preview(id),
     cancelPreview: () => skinRuntime.cancelPreview(),
     importPackage: (source: ArrayBuffer) => skinRuntime.importPackage(source),
