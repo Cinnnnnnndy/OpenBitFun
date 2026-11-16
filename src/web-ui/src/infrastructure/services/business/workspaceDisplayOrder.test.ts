@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   getWorkspaceDisplayOrderRevision,
   noteWorkspaceActivated,
+  noteWorkspaceOrderPersisted,
   orderWorkspacesForDisplay,
   resetWorkspaceDisplayOrdersForTest,
   setWorkspaceDisplayOrder,
@@ -70,5 +71,29 @@ describe('stableWorkspaceOrder', () => {
     expect(ids(orderWorkspacesForDisplay('other', list('a', 'b')))).toEqual(['a', 'b']);
     expect(getWorkspaceDisplayOrderRevision()).toBe(revision);
     expect(ids(stableWorkspaceOrder('peer', list('a', 'b')))).toEqual(['b', 'a']);
+  });
+
+  it('preserves an unpersisted local promotion across activations on a static-order host', () => {
+    stableWorkspaceOrder('peer', list('assistant', 'a', 'b', 'c'));
+    // Promotion updated shown order, while persistence failed on the host.
+    setWorkspaceDisplayOrder('peer', ['assistant', 'b', 'a', 'c']);
+    noteWorkspaceActivated('peer', 'c');
+    noteWorkspaceActivated('peer', 'a');
+
+    // A static-order host still returns its original order on refresh.
+    expect(ids(stableWorkspaceOrder('peer', list('assistant', 'a', 'b', 'c'))))
+      .toEqual(['assistant', 'b', 'a', 'c']);
+    // Deliberate multi-row reorder on another controller is still adopted.
+    expect(ids(stableWorkspaceOrder('peer', list('assistant', 'c', 'b', 'a'))))
+      .toEqual(['assistant', 'c', 'b', 'a']);
+  });
+
+  it('adopts a deliberate external reorder after persisting a local reorder', () => {
+    stableWorkspaceOrder('local', list('assistant', 'a', 'b', 'c'));
+    setWorkspaceDisplayOrder('local', ['assistant', 'b', 'a', 'c']);
+    noteWorkspaceOrderPersisted('local', ['assistant', 'b', 'a', 'c']);
+
+    expect(ids(stableWorkspaceOrder('local', list('assistant', 'a', 'c', 'b'))))
+      .toEqual(['assistant', 'a', 'c', 'b']);
   });
 });

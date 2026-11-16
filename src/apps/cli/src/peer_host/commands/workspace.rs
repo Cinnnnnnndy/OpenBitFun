@@ -8,7 +8,9 @@ use openbitfun_core::service::workspace::{
 use openbitfun_runtime_ports::SessionStoragePathRequest;
 use serde_json::{json, Value};
 
-use crate::peer_host::args::{get_string, optional_bool, optional_string, request_value};
+use crate::peer_host::args::{
+    get_string, get_string_vec, optional_bool, optional_string, request_value,
+};
 use crate::peer_host::state::PeerHostState;
 use crate::peer_host::workspace_dto::{workspace_info_to_json, workspace_list_to_json};
 
@@ -68,6 +70,19 @@ pub(crate) async fn set_active_workspace(
         .await
         .ok_or_else(|| "Active workspace not found after switching".to_string())?;
     Ok(workspace_info_to_json(&workspace))
+}
+
+pub(crate) async fn reorder_opened_workspaces(
+    state: &PeerHostState,
+    args: &Value,
+) -> Result<Value, String> {
+    let workspace_ids = get_string_vec(request_value(args), "workspaceIds")?;
+    state
+        .workspace_service
+        .reorder_opened_workspaces(workspace_ids)
+        .await
+        .map_err(|error| format!("Failed to reorder opened workspaces: {error}"))?;
+    Ok(Value::Null)
 }
 
 pub(crate) async fn open_workspace(state: &PeerHostState, args: &Value) -> Result<Value, String> {
