@@ -12,6 +12,21 @@ on:
         required: true
         type: string
         default: v1.0.11
+  workflow_call:
+    inputs:
+      source_run_id:
+        required: true
+        type: string
+      tag_name:
+        required: true
+        type: string
+    secrets:
+      TAURI_SIGNING_PRIVATE_KEY:
+        required: true
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD:
+        required: true
+      TAURI_UPDATER_PUBKEY:
+        required: true
 
 permissions:
   actions: read
