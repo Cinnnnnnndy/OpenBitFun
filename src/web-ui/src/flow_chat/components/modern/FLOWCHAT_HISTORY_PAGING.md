@@ -3,10 +3,10 @@
 ## History loading presentation
 
 `HistorySessionLoadingBoundary` covers open intents, cold hydration and bookmark
-restoration with seven 24px lines and a rounded user bubble. Session loading
-indicators appear after 200 ms, including reduced-motion mode and new-session
-creation. The boundary retains the loading surface until the complete Turn and
-`data-open-viewport-settled` are ready. It then
+restoration with a centered muted `md` brand `Spinner`, matching the new-session
+and device-switch curtains. Session loading indicators appear after 200 ms,
+including reduced-motion mode and new-session creation. The boundary retains the
+loading surface until the complete Turn and `data-open-viewport-settled` are ready. It then
 publishes the transcript immediately in the same React commit. Warm session
 switches also pass through the viewport gate and display settled content immediately.
 
@@ -23,8 +23,8 @@ Session and surface-activation changes disconnect old readiness observers.
 Failures, inactive scenes and hidden documents release the loading surface.
 Streaming updates and virtual-window remounts retain the settled presentation.
 The old `historyOpenIntentSpinner` appearance part remains a hidden compatibility
-slot so installed appearance packages still validate. The skeleton is exposed
-through `historySkeleton`.
+slot so installed appearance packages still validate. The loading indicator
+container continues to be exposed through `historySkeleton`.
 
 ## Last-Turn opening
 
