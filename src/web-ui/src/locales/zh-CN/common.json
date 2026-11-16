@@ -1787,6 +1787,7 @@
     "scrollPrevious": "向左滚动标签页",
     "scrollNext": "向右滚动标签页",
     "closeTab": "关闭{{label}}",
+    "closeDeviceTabs": "关闭该设备全部标签页",
     "workspaceUnavailable": "此会话所属的工作区尚未打开，请先重新打开该工作区，再切换到此会话。"
   },
   "loading": {
