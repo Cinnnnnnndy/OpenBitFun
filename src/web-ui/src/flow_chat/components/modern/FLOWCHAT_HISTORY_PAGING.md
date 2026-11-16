@@ -242,6 +242,25 @@ no pending ticket; errors/cancellation require a new reader action rather than
 a render-driven retry loop. Exhaustion is forgotten when its window/boundary
 changes. Session instances isolate the controller across session switches.
 
+Explicit source synchronization reserves the pager's presentation commit before
+reading the host: publishing the snapshot can move the rendered boundary, and
+must not cancel its own retry ticket. A cancelled request clears only its own
+loading state, fenced by the request slot, surface, Session and presentation
+owner. Errors remain retryable. Recovery accepts a changed host catalog revision
+even when its previews are incomplete; a cached complete catalog from an older
+revision cannot override that response. Same-revision complete previews and the
+ordinary Peer snapshot merge policy remain intact.
+
+An adjacent read can adopt a newer catalog and retire the store's active range
+even when its stale-response retry returns ready. The container reacquires the
+displayed reader range and confirms the adjacent page again before preparing
+the viewport. This uses the existing window reader and cache, not a full-history
+reload. Catalog, navigation-generation or range changes during preparation
+cancel the old commit and leave the boundary available for fresh reader demand.
+Repeated invalidation does not start a recursive retry. Actual read failures
+retain the displayed content and expose explicit synchronization; the error
+sentinel restores pointer interaction so its recovery button can be clicked.
+
 Opening and follow-output guards remain synchronous (`isFollowingOutputNow`),
 so the gesture that releases follow is evaluated against the new owner. Geometry
 with no visible range remains a diagnostic refusal. Request/refusal diagnostics
