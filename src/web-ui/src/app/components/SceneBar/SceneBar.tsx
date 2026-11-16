@@ -136,6 +136,7 @@ const SceneBar: React.FC<SceneBarProps> = ({
   const canAcceptTab = canAcceptCanvasTab || offeredSceneTab;
   const activeCanvasDrop = canAcceptTab ? canvasDrop : null;
   const sceneBarClassName = `openbitfun-scene-bar ${className}`.trim();
+  const openTabIds = useMemo(() => shownTabs.map(tab => tab.id), [shownTabs]);
   const {
     tabRegionRef,
     tabsRef,
@@ -146,7 +147,7 @@ const SceneBar: React.FC<SceneBarProps> = ({
   } = useSceneTabNavigation({
     activeTabId: selectedTabId,
     navigationMotion,
-    openTabIds: shownTabs.map(tab => tab.id),
+    openTabIds,
   });
 
   /**
