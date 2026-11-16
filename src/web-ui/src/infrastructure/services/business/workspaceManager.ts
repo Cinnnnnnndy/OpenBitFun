@@ -1057,6 +1057,42 @@ class WorkspaceManager {
     this.surfaceContainers.delete(surfaceId);
   }
 
+  /**
+   * Move an already-opened workspace to the front of this device's opened list
+   * when the user explicitly adds/opens it again, without changing device order.
+   */
+  private async promoteExistingOpenedWorkspace(
+    surface: SurfaceCapture,
+    workspace: WorkspaceInfo,
+    openedWorkspaces: WorkspaceInfo[],
+    wasAlreadyOpened: boolean,
+  ): Promise<WorkspaceInfo[]> {
+    const orderedOpened = this.preserveOpenedWorkspaceOrder(openedWorkspaces);
+    if (!wasAlreadyOpened || orderedOpened.length <= 1 || orderedOpened[0]?.id === workspace.id) {
+      return orderedOpened;
+    }
+
+    const target = orderedOpened.find(item => item.id === workspace.id) ?? workspace;
+    const promoted = [target, ...orderedOpened.filter(item => item.id !== workspace.id)];
+    const promotedIds = promoted.map(item => item.id);
+    setWorkspaceDisplayOrder(surface.scope.surfaceId, promotedIds);
+
+    try {
+      await globalStateAPI.reorderOpenedWorkspaces(promotedIds);
+      this.assertSurfaceUnchanged(surface, 'promote opened workspace');
+    } catch (error) {
+      if (!this.isSurfaceUnchanged(surface)) {
+        throw error;
+      }
+      log.warn('Failed to persist promoted workspace order', {
+        workspaceId: workspace.id,
+        error,
+      });
+    }
+
+    return promoted;
+  }
+
   public async openWorkspace(path: string): Promise<WorkspaceInfo> {
     const surface = this.captureSurface();
     try {
@@ -1072,10 +1108,19 @@ class WorkspaceManager {
       ]);
       this.assertSurfaceUnchanged(surface, 'open workspace');
 
+      const wasAlreadyOpened = this.state.openedWorkspaces.has(workspace.id);
+      const orderedOpened = await this.promoteExistingOpenedWorkspace(
+        surface,
+        workspace,
+        openedWorkspaces,
+        wasAlreadyOpened,
+      );
+      this.assertSurfaceUnchanged(surface, 'open workspace');
+
       this.updateWorkspaceState(
         workspace,
         recentWorkspaces,
-        openedWorkspaces,
+        orderedOpened,
         false,
         null,
         { type: 'workspace:opened', workspace }
@@ -1122,10 +1167,19 @@ class WorkspaceManager {
       ]);
       this.assertSurfaceUnchanged(surface, 'open remote workspace');
 
+      const wasAlreadyOpened = this.state.openedWorkspaces.has(workspace.id);
+      const orderedOpened = await this.promoteExistingOpenedWorkspace(
+        surface,
+        workspace,
+        openedWorkspaces,
+        wasAlreadyOpened,
+      );
+      this.assertSurfaceUnchanged(surface, 'open remote workspace');
+
       this.updateWorkspaceState(
         workspace,
         recentWorkspaces,
-        openedWorkspaces,
+        orderedOpened,
         false,
         null,
         { type: 'workspace:opened', workspace }

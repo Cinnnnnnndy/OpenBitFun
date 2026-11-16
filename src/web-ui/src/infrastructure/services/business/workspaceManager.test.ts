@@ -7,7 +7,10 @@ const globalStateMocks = vi.hoisted(() => ({
   getRecentWorkspaces: vi.fn(),
   getOpenedWorkspaces: vi.fn(),
   getAssistantWorkspaces: vi.fn(),
+  openWorkspace: vi.fn(),
+  openRemoteWorkspace: vi.fn(),
   openWorkspaceById: vi.fn(),
+  reorderOpenedWorkspaces: vi.fn(),
   setActiveWorkspace: vi.fn(),
   closeWorkspace: vi.fn(),
   deleteAssistantWorkspace: vi.fn(),
@@ -1122,5 +1125,194 @@ describe('WorkspaceManager state-quiet loading and error events', () => {
 
     expect(types).toContain('workspace:error');
     expect(manager.getState().error).toBe('scan failed');
+  });
+});
+
+describe('WorkspaceManager openWorkspace promotion', () => {
+  const workspaceA = {
+    id: 'workspace-a',
+    name: 'Repo A',
+    rootPath: '/repo/a',
+    workspaceKind: 'normal',
+    identity: null,
+  };
+  const workspaceB = {
+    id: 'workspace-b',
+    name: 'Repo B',
+    rootPath: '/repo/b',
+    workspaceKind: 'normal',
+    identity: null,
+  };
+  const workspaceC = {
+    id: 'workspace-c',
+    name: 'Repo C',
+    rootPath: '/repo/c',
+    workspaceKind: 'remote',
+    identity: null,
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    configureGlobalState();
+    globalStateMocks.initializeWorkspaceStartupState.mockResolvedValue({
+      cleanupRemovedCount: 0,
+      recentWorkspaces: [workspaceA, workspaceB, workspaceC],
+      openedWorkspaces: [workspaceA, workspaceB, workspaceC],
+      currentWorkspace: workspaceA,
+      legacyRemoteWorkspace: null,
+    });
+    globalStateMocks.getCurrentWorkspace.mockResolvedValue(workspaceA);
+    globalStateMocks.getRecentWorkspaces.mockResolvedValue([workspaceA, workspaceB, workspaceC]);
+    globalStateMocks.getOpenedWorkspaces.mockResolvedValue([workspaceA, workspaceB, workspaceC]);
+    globalStateMocks.reorderOpenedWorkspaces.mockResolvedValue(undefined);
+  });
+
+  it('moves an already-opened local workspace to the top of the current device list', async () => {
+    const manager = await getFreshWorkspaceManager();
+    await manager.initialize();
+
+    globalStateMocks.openWorkspace.mockResolvedValue(workspaceB);
+    await manager.openWorkspace(workspaceB.rootPath);
+
+    expect(Array.from(manager.getState().openedWorkspaces.keys())).toEqual([
+      workspaceB.id,
+      workspaceA.id,
+      workspaceC.id,
+    ]);
+    expect(globalStateMocks.reorderOpenedWorkspaces).toHaveBeenCalledWith([
+      workspaceB.id,
+      workspaceA.id,
+      workspaceC.id,
+    ]);
+  });
+
+  it('moves an already-opened remote workspace to the top of the current device list', async () => {
+    const manager = await getFreshWorkspaceManager();
+    await manager.initialize();
+
+    globalStateMocks.openRemoteWorkspace.mockResolvedValue(workspaceC);
+    await manager.openRemoteWorkspace({
+      connectionId: 'conn-1',
+      connectionName: 'Remote',
+      remotePath: '/repo/c',
+    });
+
+    expect(Array.from(manager.getState().openedWorkspaces.keys())).toEqual([
+      workspaceC.id,
+      workspaceA.id,
+      workspaceB.id,
+    ]);
+    expect(globalStateMocks.reorderOpenedWorkspaces).toHaveBeenCalledWith([
+      workspaceC.id,
+      workspaceA.id,
+      workspaceB.id,
+    ]);
+  });
+
+  it('keeps the promoted display order even if host reorder persistence fails', async () => {
+    const manager = await getFreshWorkspaceManager();
+    await manager.initialize();
+
+    globalStateMocks.openWorkspace.mockResolvedValue(workspaceB);
+    globalStateMocks.reorderOpenedWorkspaces.mockRejectedValue(new Error('unsupported on cli peer'));
+
+    await manager.openWorkspace(workspaceB.rootPath);
+
+    expect(Array.from(manager.getState().openedWorkspaces.keys())).toEqual([
+      workspaceB.id,
+      workspaceA.id,
+      workspaceC.id,
+    ]);
+    expect(manager.getState().error).toBeNull();
+  });
+
+  it('keeps local and peer display orders independent, including identical workspace IDs', async () => {
+    const { manager, deviceSurface } = await getFreshWorkspaceHarness();
+    await manager.initialize();
+
+    deviceSurface.activateSurface('peer-b');
+    globalStateMocks.initializeWorkspaceStartupState.mockResolvedValueOnce({
+      cleanupRemovedCount: 0,
+      recentWorkspaces: [workspaceC, workspaceA, workspaceB],
+      openedWorkspaces: [workspaceC, workspaceA, workspaceB],
+      currentWorkspace: workspaceC,
+      legacyRemoteWorkspace: null,
+    });
+    await manager.initialize();
+    globalStateMocks.getOpenedWorkspaces.mockResolvedValue([workspaceC, workspaceA, workspaceB]);
+
+    globalStateMocks.openWorkspace.mockResolvedValue(workspaceB);
+    await manager.openWorkspace(workspaceB.rootPath);
+
+    expect(Array.from(manager.getState().openedWorkspaces.keys())).toEqual([
+      workspaceB.id,
+      workspaceC.id,
+      workspaceA.id,
+    ]);
+    expect(manager.getSurfaceOpenedWorkspaces(deviceSurface.LOCAL_SURFACE_ID).map(w => w.id))
+      .toEqual([workspaceA.id, workspaceB.id, workspaceC.id]);
+    deviceSurface.activateSurface(deviceSurface.LOCAL_SURFACE_ID);
+    expect(Array.from(manager.getState().openedWorkspaces.keys()))
+      .toEqual([workspaceA.id, workspaceB.id, workspaceC.id]);
+    deviceSurface.activateSurface('peer-b');
+    expect(Array.from(manager.getState().openedWorkspaces.keys()))
+      .toEqual([workspaceB.id, workspaceC.id, workspaceA.id]);
+  });
+
+  it.each(['local', 'remote'] as const)(
+    'does not apply a completed %s promotion after the device changes',
+    async kind => {
+      const { manager, deviceSurface } = await getFreshWorkspaceHarness();
+      await manager.initialize();
+      let finishReorder!: () => void;
+      const reordered = new Promise<void>(resolve => { finishReorder = resolve; });
+      globalStateMocks.reorderOpenedWorkspaces.mockReturnValueOnce(reordered);
+      globalStateMocks.openWorkspace.mockResolvedValue(workspaceB);
+      globalStateMocks.openRemoteWorkspace.mockResolvedValue(workspaceC);
+
+      const opening = (kind === 'local'
+        ? manager.openWorkspace(workspaceB.rootPath)
+        : manager.openRemoteWorkspace({
+          connectionId: 'conn-1', connectionName: 'Remote', remotePath: workspaceC.rootPath,
+        })).catch(error => error);
+      await flushAsyncWork();
+      expect(globalStateMocks.reorderOpenedWorkspaces).toHaveBeenCalledTimes(1);
+
+      // The promotion's await resumes first; activation then precedes its caller's continuation.
+      const switched = reordered.then(() => deviceSurface.activateSurface('peer-b'));
+      finishReorder();
+      await switched;
+
+      expect(isSurfaceChangedError(await opening)).toBe(true);
+      expect(manager.getState().openedWorkspaces.size).toBe(0);
+      expect(manager.getState().currentWorkspace).toBeNull();
+      expect(manager.getState().error).toBeNull();
+    },
+  );
+
+  it('does not persist a reorder when the workspace is already first', async () => {
+    const manager = await getFreshWorkspaceManager();
+    await manager.initialize();
+    globalStateMocks.openWorkspace.mockResolvedValue(workspaceA);
+
+    await manager.openWorkspace(workspaceA.rootPath);
+
+    expect(Array.from(manager.getState().openedWorkspaces.keys()))
+      .toEqual([workspaceA.id, workspaceB.id, workspaceC.id]);
+    expect(globalStateMocks.reorderOpenedWorkspaces).not.toHaveBeenCalled();
+  });
+
+  it('keeps the host insertion order for a newly opened workspace', async () => {
+    const manager = await getFreshWorkspaceManager();
+    await manager.initialize();
+    const added = { ...workspaceA, id: 'workspace-new', rootPath: '/repo/new' };
+    globalStateMocks.openWorkspace.mockResolvedValue(added);
+    globalStateMocks.getOpenedWorkspaces.mockResolvedValue([added, workspaceA, workspaceB, workspaceC]);
+
+    await manager.openWorkspace(added.rootPath);
+
+    expect(Array.from(manager.getState().openedWorkspaces.keys()))
+      .toEqual([added.id, workspaceA.id, workspaceB.id, workspaceC.id]);
+    expect(globalStateMocks.reorderOpenedWorkspaces).not.toHaveBeenCalled();
   });
 });
