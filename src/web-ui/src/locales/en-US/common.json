@@ -1787,6 +1787,7 @@
     "scrollPrevious": "Scroll tabs left",
     "scrollNext": "Scroll tabs right",
     "closeTab": "Close {{label}}",
+    "closeDeviceTabs": "Close all tabs for this device",
     "workspaceUnavailable": "This session's workspace is not open. Reopen its workspace to switch to this session."
   },
   "loading": {
