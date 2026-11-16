@@ -77,6 +77,12 @@ interface WorkspaceIdentityChangedEvent {
 
 export type WorkspaceEvent =
   | { type: 'workspace:opened'; workspace: WorkspaceInfo }
+  /**
+   * An explicit add moved an already opened workspace to the front of its
+   * sidebar section. Emitted before the reordered state is published so views
+   * can measure the old layout and bring the row into view.
+   */
+  | { type: 'workspace:promoted'; workspaceId: string }
   | { type: 'workspace:closed'; workspaceId: string }
   | { type: 'workspace:removed'; workspaceId: string }
   | { type: 'workspace:switched'; workspace: WorkspaceInfo }
@@ -103,6 +109,16 @@ export interface WorkspaceState {
 }
 
 export type WorkspaceSection = 'all' | 'assistants' | 'projects';
+
+export interface OpenRemoteWorkspaceRequestOptions extends OpenRemoteWorkspaceOptions {
+  /**
+   * Move a record this device already has open to the front of its section.
+   * Explicit selections keep the default; background restore passes false so
+   * reconnecting never rearranges the sidebar.
+   */
+  promoteIfOpened?: boolean;
+}
+
 export type WorkspaceReorderPosition = 'before' | 'after';
 
 /**
@@ -1058,30 +1074,72 @@ class WorkspaceManager {
   }
 
   /**
-   * Move an already-opened workspace to the front of this device's opened list
-   * when the user explicitly adds/opens it again, without changing device order.
+   * The opened list with `workspaceId` first within its sidebar section
+   * (projects or assistants), or null when it is already first or not listed.
+   * The other section keeps its slots, like a drag reorder, so the pinned
+   * assistant's stored position is untouched. The list is one device's, so the
+   * device order never changes.
    */
-  private async promoteExistingOpenedWorkspace(
+  private buildPromotedOpenedWorkspaces(
+    workspaceId: string,
+    orderedOpened: WorkspaceInfo[],
+  ): WorkspaceInfo[] | null {
+    const target = orderedOpened.find(item => item.id === workspaceId);
+    if (!target) {
+      return null;
+    }
+    const section: WorkspaceSection = this.isWorkspaceInSection(target, 'assistants') ? 'assistants' : 'projects';
+    const sectionWorkspaces = orderedOpened.filter(item => this.isWorkspaceInSection(item, section));
+    if (sectionWorkspaces[0]?.id === workspaceId) {
+      return null;
+    }
+    const promotedSection = [target, ...sectionWorkspaces.filter(item => item.id !== workspaceId)];
+    let cursor = 0;
+    return orderedOpened.map(item => (
+      this.isWorkspaceInSection(item, section) ? promotedSection[cursor++] : item
+    ));
+  }
+
+  /**
+   * Publish a workspace the host just opened. When the user explicitly added a
+   * workspace this device already had open, it moves to the front of its
+   * section so the add has a visible effect; the order is shown first and
+   * persisted afterwards, and a host that cannot persist it keeps the shown
+   * order for this window.
+   */
+  private async publishOpenedWorkspace(
     surface: SurfaceCapture,
+    action: string,
     workspace: WorkspaceInfo,
+    recentWorkspaces: WorkspaceInfo[],
     openedWorkspaces: WorkspaceInfo[],
-    wasAlreadyOpened: boolean,
-  ): Promise<WorkspaceInfo[]> {
-    const orderedOpened = this.preserveOpenedWorkspaceOrder(openedWorkspaces);
-    if (!wasAlreadyOpened || orderedOpened.length <= 1 || orderedOpened[0]?.id === workspace.id) {
-      return orderedOpened;
+    promote: boolean,
+  ): Promise<void> {
+    const promoted = promote
+      ? this.buildPromotedOpenedWorkspaces(workspace.id, this.preserveOpenedWorkspaceOrder(openedWorkspaces))
+      : null;
+    const promotedIds = promoted?.map(item => item.id) ?? null;
+    if (promotedIds) {
+      setWorkspaceDisplayOrder(surface.scope.surfaceId, promotedIds);
+      this.emit({ type: 'workspace:promoted', workspaceId: workspace.id });
     }
 
-    const target = orderedOpened.find(item => item.id === workspace.id) ?? workspace;
-    const promoted = [target, ...orderedOpened.filter(item => item.id !== workspace.id)];
-    const promotedIds = promoted.map(item => item.id);
-    setWorkspaceDisplayOrder(surface.scope.surfaceId, promotedIds);
+    this.updateWorkspaceState(
+      workspace,
+      recentWorkspaces,
+      promoted ?? openedWorkspaces,
+      false,
+      null,
+      { type: 'workspace:opened', workspace }
+    );
 
+    if (!promotedIds) {
+      return;
+    }
     try {
       await globalStateAPI.reorderOpenedWorkspaces(promotedIds);
-      this.assertSurfaceUnchanged(surface, 'promote opened workspace');
     } catch (error) {
-      if (!this.isSurfaceUnchanged(surface)) {
+      if (isSurfaceChangedError(error) || !this.isSurfaceUnchanged(surface)) {
         throw error;
       }
       log.warn('Failed to persist promoted workspace order', {
@@ -1089,12 +1147,19 @@ class WorkspaceManager {
         error,
       });
     }
-
-    return promoted;
+    this.assertSurfaceUnchanged(surface, action);
   }
 
+  /**
+   * Open a local folder as a workspace. Every caller is an explicit user open,
+   * so a workspace this device already has open moves to the front of its
+   * section instead of the add appearing to do nothing.
+   */
   public async openWorkspace(path: string): Promise<WorkspaceInfo> {
     const surface = this.captureSurface();
+    // Read before the host call: a list refresh that lands meanwhile may
+    // already contain a workspace this call is adding for the first time.
+    const openedBefore = new Set(this.state.openedWorkspaces.keys());
     try {
       this.setLoading(true);
       this.setError(null);
@@ -1108,22 +1173,13 @@ class WorkspaceManager {
       ]);
       this.assertSurfaceUnchanged(surface, 'open workspace');
 
-      const wasAlreadyOpened = this.state.openedWorkspaces.has(workspace.id);
-      const orderedOpened = await this.promoteExistingOpenedWorkspace(
+      await this.publishOpenedWorkspace(
         surface,
-        workspace,
-        openedWorkspaces,
-        wasAlreadyOpened,
-      );
-      this.assertSurfaceUnchanged(surface, 'open workspace');
-
-      this.updateWorkspaceState(
+        'open workspace',
         workspace,
         recentWorkspaces,
-        orderedOpened,
-        false,
-        null,
-        { type: 'workspace:opened', workspace }
+        openedWorkspaces,
+        openedBefore.has(workspace.id),
       );
 
       return workspace;
@@ -1143,8 +1199,10 @@ class WorkspaceManager {
     connectionName: string;
     remotePath: string;
     sshHost?: string;
-  }, options: OpenRemoteWorkspaceOptions = {}): Promise<WorkspaceInfo> {
+  }, options: OpenRemoteWorkspaceRequestOptions = {}): Promise<WorkspaceInfo> {
+    const { promoteIfOpened = true, ...hostOptions } = options;
     const surface = this.captureSurface();
+    const openedBefore = new Set(this.state.openedWorkspaces.keys());
     try {
       this.setLoading(true);
       this.setError(null);
@@ -1158,7 +1216,7 @@ class WorkspaceManager {
         remoteWorkspace.connectionId,
         remoteWorkspace.connectionName,
         remoteWorkspace.sshHost,
-        options,
+        hostOptions,
       );
 
       const [recentWorkspaces, openedWorkspaces] = await Promise.all([
@@ -1167,22 +1225,13 @@ class WorkspaceManager {
       ]);
       this.assertSurfaceUnchanged(surface, 'open remote workspace');
 
-      const wasAlreadyOpened = this.state.openedWorkspaces.has(workspace.id);
-      const orderedOpened = await this.promoteExistingOpenedWorkspace(
+      await this.publishOpenedWorkspace(
         surface,
-        workspace,
-        openedWorkspaces,
-        wasAlreadyOpened,
-      );
-      this.assertSurfaceUnchanged(surface, 'open remote workspace');
-
-      this.updateWorkspaceState(
+        'open remote workspace',
         workspace,
         recentWorkspaces,
-        orderedOpened,
-        false,
-        null,
-        { type: 'workspace:opened', workspace }
+        openedWorkspaces,
+        promoteIfOpened && openedBefore.has(workspace.id),
       );
 
       return workspace;

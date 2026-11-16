@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useI18n } from '@/infrastructure/i18n';
 import { useWorkspaceContext } from '@/infrastructure/contexts/WorkspaceContext';
+import { workspaceManager } from '@/infrastructure/services/business/workspaceManager';
 import { useSceneStore } from '@/app/stores/sceneStore';
 import { useContentResourceStore } from '@/app/workbench/contentResourceStore';
 import { getActiveSurfaceId, onSurfaceActivated } from '@/infrastructure/peer-device/deviceSurface';
@@ -92,6 +93,7 @@ const WorkspaceListSection: React.FC<WorkspaceListSectionProps> = ({ variant, sc
   const pendingDragEndRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const workspaceRowRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const pendingDropRectsRef = useRef<Map<string, DOMRect> | null>(null);
+  const pendingRevealWorkspaceIdRef = useRef<string | null>(null);
   const dropAnimationsRef = useRef<Map<string, Animation>>(new Map());
 
   const sectionWorkspaces = variant === 'all'
@@ -165,7 +167,24 @@ const WorkspaceListSection: React.FC<WorkspaceListSectionProps> = ({ variant, sc
   useLayoutEffect(() => {
     resetDragState();
     pendingDropRectsRef.current = null;
+    pendingRevealWorkspaceIdRef.current = null;
   }, [grouping, surfaceId, variant, resetDragState]);
+
+  const measureWorkspaceRows = useCallback(() => new Map(
+    Array.from(workspaceRowRefs.current, ([id, element]) => (
+      [id, element.getBoundingClientRect()] as const
+    )),
+  ), []);
+
+  // Re-adding an opened workspace moves it to the top of this device's list.
+  // The event arrives before the new order renders, so the rows can slide like
+  // a drop, and the row is brought into view: a move the user cannot see reads
+  // as the add doing nothing.
+  useEffect(() => workspaceManager.addEventListener(event => {
+    if (event.type !== 'workspace:promoted' || !workspaceRowRefs.current.has(event.workspaceId)) return;
+    pendingDropRectsRef.current = measureWorkspaceRows();
+    pendingRevealWorkspaceIdRef.current = event.workspaceId;
+  }), [measureWorkspaceRows]);
 
   useLayoutEffect(() => {
     if (draggedWorkspaceId && !canContinueDrag) {
@@ -222,6 +241,14 @@ const WorkspaceListSection: React.FC<WorkspaceListSectionProps> = ({ variant, sc
   }, []);
 
   useLayoutEffect(() => {
+    const revealWorkspaceId = pendingRevealWorkspaceIdRef.current;
+    pendingRevealWorkspaceIdRef.current = null;
+    if (revealWorkspaceId) {
+      const row = workspaceRowRefs.current.get(revealWorkspaceId);
+      const header = row?.querySelector<HTMLElement>('.openbitfun-nav-panel__workspace-item-card') ?? row;
+      header?.scrollIntoView?.({ block: 'nearest' });
+    }
+
     const previousRects = pendingDropRectsRef.current;
     if (!previousRects) return;
     pendingDropRectsRef.current = null;
@@ -339,11 +366,7 @@ const WorkspaceListSection: React.FC<WorkspaceListSectionProps> = ({ variant, sc
     event.stopPropagation();
 
     // Keep the slot measured by dragover, before the drop line changed layout.
-    pendingDropRectsRef.current = new Map(
-      Array.from(workspaceRowRefs.current, ([id, element]) => (
-        [id, element.getBoundingClientRect()] as const
-      )),
-    );
+    pendingDropRectsRef.current = measureWorkspaceRows();
 
     try {
       await reorderOpenedWorkspacesInSection(reorderSection, payload.workspaceId, workspaceId, position);
@@ -354,7 +377,7 @@ const WorkspaceListSection: React.FC<WorkspaceListSectionProps> = ({ variant, sc
         { duration: 4000 }
       );
     }
-  }, [reorderOpenedWorkspacesInSection, reorderSection, resetDragState, t, variant]);
+  }, [measureWorkspaceRows, reorderOpenedWorkspacesInSection, reorderSection, resetDragState, t, variant]);
 
   /**
    * One session-group row. Pinned assistants and project workspaces share the
