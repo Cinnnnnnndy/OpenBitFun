@@ -19,8 +19,17 @@ const state = vi.hoisted(() => {
     workspaces: [assistant, project],
     defaultWorkspaces: [assistant, project],
     reorder: vi.fn<(...args: unknown[]) => Promise<void>>().mockResolvedValue(undefined),
+    managerListeners: new Set<(event: { type: string; workspaceId?: string }) => void>(),
   };
 });
+vi.mock('@/infrastructure/services/business/workspaceManager', () => ({
+  workspaceManager: {
+    addEventListener: (listener: (event: { type: string; workspaceId?: string }) => void) => {
+      state.managerListeners.add(listener);
+      return () => { state.managerListeners.delete(listener); };
+    },
+  },
+}));
 vi.mock('@/infrastructure/i18n', () => ({ useI18n: () => ({ t: (key: string) => key }) }));
 vi.mock('@/shared/notification-system', () => ({ notificationService: { error: vi.fn() } }));
 vi.mock('@/infrastructure/contexts/WorkspaceContext', () => ({
@@ -422,6 +431,40 @@ describe('assistant pinning', () => {
       expect(list.container.querySelector('[data-testid="nav-workspace-list-empty"]')).not.toBeNull();
     } finally {
       list.unmount();
+    }
+  });
+});
+
+describe('re-added workspace promotion', () => {
+  it('brings the promoted row into view once the new order renders', () => {
+    state.grouping = 'grouped';
+    const first = { id: 'first-project', name: 'First', workspaceKind: 'normal' };
+    const second = { id: 'second-project', name: 'Second', workspaceKind: 'normal' };
+    state.workspaces = [first, second];
+    const scrolled: Array<string | null> = [];
+    const scrollIntoView = vi.fn(function (this: HTMLElement) {
+      scrolled.push(this.getAttribute('data-workspace-id'));
+    });
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: scrollIntoView });
+
+    const list = renderList();
+    try {
+      // An unrelated re-render does not scroll.
+      list.render();
+      expect(scrollIntoView).not.toHaveBeenCalled();
+
+      act(() => state.managerListeners.forEach(listener => listener({
+        type: 'workspace:promoted', workspaceId: second.id,
+      })));
+      state.workspaces = [second, first];
+      list.render();
+
+      expect(list.ownerRows()).toEqual([second.id, first.id]);
+      expect(scrolled).toEqual([second.id]);
+      expect(scrollIntoView).toHaveBeenCalledWith({ block: 'nearest' });
+    } finally {
+      list.unmount();
+      delete (HTMLElement.prototype as { scrollIntoView?: unknown }).scrollIntoView;
     }
   });
 });
