@@ -2,6 +2,7 @@ import { useSyncExternalStore } from 'react';
 import { VisualSkinRuntime } from './runtime';
 
 export * from './types';
+export * from './archive';
 export * from './contract';
 export * from './validator';
 export * from './parser';

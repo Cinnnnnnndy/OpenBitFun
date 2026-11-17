@@ -204,4 +204,36 @@ describe('VisualSkinConfigSection', () => {
     expect(watchProjectionMock).not.toHaveBeenCalled();
   });
 
+  it('renders an MP4 preview as a muted looping blob video and revokes it on unmount', async () => {
+    const createObjectURL = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:skin-preview');
+    const revokeObjectURL = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
+    try {
+      const mp4 = Buffer.from([0, 0, 0, 16, 0x66, 0x74, 0x79, 0x70, 0x69, 0x73, 0x6f, 0x6d, 0, 0, 2, 0]).toString('base64');
+      skinState.skins = [{
+        id: 'video.skin',
+        name: 'Video Skin',
+        description: 'Looping MP4 backdrop',
+        version: '1.0.0',
+        author: 'AI',
+        previewAsset: `data:video/mp4;base64,${mp4}`,
+      } as (typeof skinState.skins)[number]];
+      await mount();
+      const preview = container.querySelector<HTMLDivElement>('.visual-skin-config__preview')!;
+      const video = preview.querySelector<HTMLVideoElement>('video')!;
+      expect(preview.style.backgroundImage).toBe('');
+      expect(video).not.toBeNull();
+      expect(video.getAttribute('src')).toBe('blob:skin-preview');
+      expect(video.muted && video.loop && video.autoplay).toBe(true);
+      expect(video.hasAttribute('disablepictureinpicture')).toBe(true);
+      expect(video.tabIndex).toBe(-1);
+      await act(async () => root!.unmount());
+      root = null;
+      container.remove();
+      expect(revokeObjectURL).toHaveBeenCalledWith('blob:skin-preview');
+    } finally {
+      createObjectURL.mockRestore();
+      revokeObjectURL.mockRestore();
+    }
+  });
+
 });
