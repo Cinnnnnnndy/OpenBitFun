@@ -3162,13 +3162,15 @@ const ModelSettingsPage: React.FC = () => {
         ? aiModels.filter(model => model.channel_routing?.fallback_model_ids.includes(savedModelId))
         : [];
       if (backupFor.length > 0 && fallbackIds.length === 0) {
-        return renderModelField(
-          t('channelRouting.label'),
-          <span className="openbitfun-model-settings__connection-value">
-            {t('channelRouting.isBackupOf', {
+        return (
+          <ConfigPageRow
+            label={t('channelRouting.label')}
+            description={t('channelRouting.isBackupOf', {
               names: backupFor.map(model => `${getProviderDisplayName(model)} · ${model.model_name}`).join(', '),
             })}
-          </span>,
+          >
+            {null}
+          </ConfigPageRow>
         );
       }
       const modelLabel = (id: string) => {
@@ -3195,67 +3197,109 @@ const ModelSettingsPage: React.FC = () => {
       return (
         <>
           <ConfigPageRow
+            className="openbitfun-model-settings__channel-route-row"
+            data-has-fallbacks={fallbackIds.length > 0 ? 'true' : undefined}
             label={t('channelRouting.label')}
             description={t('channelRouting.hint')}
-            align="start"
+            align="center"
           >
             <div className="openbitfun-model-settings__channel-route" data-testid="settings-model-channel-route">
+              <div className="openbitfun-model-settings__channel-route-picker">
+                {candidates.length > 0 || fallbackIds.length > 0 ? (
+                  <Select
+                    aria-label={t('channelRouting.add')}
+                    placeholder={t('channelRouting.add')}
+                    leading={<Icon name="plus" size="sm" />}
+                    popupWidth="content"
+                    disabled={isEditorSaving || candidates.length === 0}
+                    value=""
+                    onValueChange={value => {
+                      const id = String(value);
+                      if (id) updateRouting({ fallback_model_ids: [...fallbackIds, id] });
+                    }}
+                    options={candidates.map(model => ({
+                      value: model.id as string,
+                      label: `${getProviderDisplayName(model)} · ${model.model_name}`,
+                    }))}
+                    size="sm"
+                  />
+                ) : (
+                  <span className="openbitfun-model-settings__channel-route-empty">
+                    {t('channelRouting.noCandidates')}
+                  </span>
+                )}
+              </div>
               {fallbackIds.length > 0 && (
-                <FieldGroup>
-                  {fallbackIds.map((id, index) => (
-                    <div key={id} className="openbitfun-model-settings__account-pool-item">
-                      <span className="openbitfun-model-settings__channel-route-index">{index + 1}.</span>
-                      <OverflowText className="openbitfun-model-settings__subscription-account-name">
-                        {modelLabel(id)}
-                      </OverflowText>
-                      <ToolbarGroup>
-                        <IconButton
-                          size="xs"
-                          variant="quiet"
-                          aria-label={t('subscriptionAuth.pool.moveUp')}
-                          icon={<Icon name="arrow-up" size="sm" />}
-                          disabled={index === 0}
-                          onClick={() => updateRouting({ fallback_model_ids: moveItem(fallbackIds, index, -1) })}
-                        />
-                        <IconButton
-                          size="xs"
-                          variant="quiet"
-                          aria-label={t('subscriptionAuth.pool.moveDown')}
-                          icon={<Icon name="arrow-down" size="sm" />}
-                          disabled={index === fallbackIds.length - 1}
-                          onClick={() => updateRouting({ fallback_model_ids: moveItem(fallbackIds, index, 1) })}
-                        />
-                        <IconButton
-                          size="xs"
-                          variant="quiet"
-                          aria-label={t('channelRouting.remove')}
-                          icon={<Icon name="delete" size="sm" />}
-                          onClick={() => updateRouting({ fallback_model_ids: fallbackIds.filter(item => item !== id) })}
-                        />
-                      </ToolbarGroup>
-                    </div>
-                  ))}
-                </FieldGroup>
-              )}
-              {candidates.length > 0 ? (
-                <Select
-                  aria-label={t('channelRouting.add')}
-                  placeholder={t('channelRouting.add')}
-                  value=""
-                  onValueChange={value => {
-                    const id = String(value);
-                    if (id) updateRouting({ fallback_model_ids: [...fallbackIds, id] });
-                  }}
-                  options={candidates.map(model => ({
-                    value: model.id as string,
-                    label: `${getProviderDisplayName(model)} · ${model.model_name}`,
-                  }))}
-                  size="sm"
-                />
-              ) : (
-                <span className="openbitfun-model-settings__connection-value">
-                  {t('channelRouting.noCandidates')}
-                </span>
+                <ol className="openbitfun-model-settings__channel-route-list">
+                  {fallbackIds.map((id, index) => {
+                    const model = aiModels.find(item => item.id === id);
+                    const providerName = model ? getProviderDisplayName(model) : undefined;
+                    const fullLabel = model ? `${providerName} · ${model.model_name}` : id;
+                    return (
+                      <li key={id} className="openbitfun-model-settings__channel-route-item">
+                        <span className="openbitfun-model-settings__channel-route-index" aria-hidden="true">
+                          {i18nService.formatNumber(index + 1)}
+                        </span>
+                        <div className="openbitfun-model-settings__channel-route-summary">
+                          {model ? (
+                            <OverflowText
+                              behavior="marquee"
+                              title={fullLabel}
+                              className="openbitfun-model-settings__channel-route-name"
+                            >
+                              <span className="openbitfun-model-settings__channel-route-provider">{providerName}</span>
+                              <span className="openbitfun-model-settings__channel-route-separator" aria-hidden="true">·</span>
+                              <span className="openbitfun-model-settings__channel-route-model">{model.model_name}</span>
+                            </OverflowText>
+                          ) : (
+                            <>
+                              <OverflowText className="openbitfun-model-settings__channel-route-name is-missing">
+                                {id}
+                              </OverflowText>
+                              <StatusPill tone="warning">{t('channelRouting.missing')}</StatusPill>
+                            </>
+                          )}
+                        </div>
+                        <ToolbarGroup className="openbitfun-model-settings__channel-route-actions">
+                          {fallbackIds.length > 1 && (
+                            <>
+                              <Tooltip content={t('subscriptionAuth.pool.moveUp')}>
+                                <IconButton
+                                  size="xs"
+                                  variant="quiet"
+                                  aria-label={t('subscriptionAuth.pool.moveUp')}
+                                  icon={<Icon name="arrow-up" size="sm" />}
+                                  disabled={isEditorSaving || index === 0}
+                                  onClick={() => updateRouting({ fallback_model_ids: moveItem(fallbackIds, index, -1) })}
+                                />
+                              </Tooltip>
+                              <Tooltip content={t('subscriptionAuth.pool.moveDown')}>
+                                <IconButton
+                                  size="xs"
+                                  variant="quiet"
+                                  aria-label={t('subscriptionAuth.pool.moveDown')}
+                                  icon={<Icon name="arrow-down" size="sm" />}
+                                  disabled={isEditorSaving || index === fallbackIds.length - 1}
+                                  onClick={() => updateRouting({ fallback_model_ids: moveItem(fallbackIds, index, 1) })}
+                                />
+                              </Tooltip>
+                            </>
+                          )}
+                          <Tooltip content={t('channelRouting.remove')}>
+                            <IconButton
+                              size="xs"
+                              variant="quiet"
+                              aria-label={t('channelRouting.remove')}
+                              icon={<Icon name="delete" size="sm" />}
+                              disabled={isEditorSaving}
+                              onClick={() => updateRouting({ fallback_model_ids: fallbackIds.filter(item => item !== id) })}
+                            />
+                          </Tooltip>
+                        </ToolbarGroup>
+                      </li>
+                    );
+                  })}
+                </ol>
               )}
             </div>
           </ConfigPageRow>
@@ -3263,6 +3307,8 @@ const ModelSettingsPage: React.FC = () => {
             t('channelRouting.mode'),
             <Select
               aria-label={t('channelRouting.mode')}
+              popupWidth="content"
+              disabled={isEditorSaving}
               value={routing?.manual_channel || '__auto__'}
               onValueChange={value => updateRouting({ manual_channel: value === '__auto__' ? null : String(value) })}
               options={modeOptions}
