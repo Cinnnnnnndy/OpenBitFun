@@ -1,7 +1,7 @@
 {
   "schemaVersion": 2,
   "generatedFrom": "src/shared/interactive-capabilities/catalog.json",
-  "catalogDigest": "778506ae9a8c979c4cea4de5c575be1bde0517def6ee5854dba203665098fa29",
+  "catalogDigest": "4b8a786017df37df61ff4c749771e0af19c851b6be51ed46504425c9bdf992bd",
   "commandCount": 705,
   "coverage": {
     "commandCount": 705,
@@ -9702,12 +9702,14 @@
     {
       "id": "speech_get_realtime_config",
       "moduleId": "speech",
-      "capabilityId": "feature.voice-input",
+      "capabilityId": null,
       "capabilityIds": [
-        "feature.voice-input"
+        "feature.voice-input",
+        "setting.application.pet"
       ],
       "documentedItemIds": [
-        "feature.voice-input:realtime-assistant-config"
+        "feature.voice-input:realtime-assistant-config",
+        "setting.application.pet:realtime-voice-call"
       ],
       "visibility": "documented",
       "rustPath": "speech_get_realtime_config",
@@ -9734,12 +9736,14 @@
     {
       "id": "speech_save_realtime_config",
       "moduleId": "speech",
-      "capabilityId": "feature.voice-input",
+      "capabilityId": null,
       "capabilityIds": [
-        "feature.voice-input"
+        "feature.voice-input",
+        "setting.application.pet"
       ],
       "documentedItemIds": [
-        "feature.voice-input:realtime-assistant-config"
+        "feature.voice-input:realtime-assistant-config",
+        "setting.application.pet:realtime-voice-call"
       ],
       "visibility": "documented",
       "rustPath": "speech_save_realtime_config",
