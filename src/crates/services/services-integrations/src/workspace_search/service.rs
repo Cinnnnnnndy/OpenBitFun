@@ -706,7 +706,9 @@ impl WorkspaceSearchService {
         };
         let _repo_guard = repo_guard.lock().await;
 
-        if let Some(existing) = self.sessions.read().await.get(&repo_root).cloned() {
+        // Release the cache lock before checking daemon health or evicting a stale session.
+        let existing = self.sessions.read().await.get(&repo_root).cloned();
+        if let Some(existing) = existing {
             existing.activity_epoch.fetch_add(1, Ordering::Relaxed);
             if existing.session.status().await.is_ok() {
                 return Ok(existing.session);
@@ -1462,6 +1464,55 @@ mod tests {
     use super::*;
     use crate::workspace_search::flashgrep::SearchResults;
     use crate::workspace_search::{ContentSearchOutputMode, WorkspaceSearchRepoStatus};
+
+    #[tokio::test]
+    #[ignore = "spawns the flashgrep daemon against a temporary repository"]
+    async fn unhealthy_cached_session_reopens_and_allows_shutdown() {
+        let directory = tempfile::tempdir().unwrap();
+        let repo_root = directory.path();
+        for args in [
+            vec!["init", "--quiet"],
+            vec![
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.invalid",
+                "-c",
+                "commit.gpgsign=false",
+                "commit",
+                "--quiet",
+                "--allow-empty",
+                "-m",
+                "fixture",
+            ],
+        ] {
+            let output = openbitfun_services_core::process_manager::create_command("git")
+                .current_dir(repo_root)
+                .args(args)
+                .output()
+                .expect("git should be available");
+            assert!(output.status.success(), "{output:?}");
+        }
+
+        let service = WorkspaceSearchService::new();
+        let original = service.get_or_open_session(repo_root).await.unwrap();
+        // Close only the backend session so the cache retains an unhealthy entry.
+        original.close().await.unwrap();
+
+        let reopened = tokio::time::timeout(
+            Duration::from_secs(5),
+            service.get_or_open_session(repo_root),
+        )
+        .await
+        .expect("an unhealthy cached session must reopen without deadlocking")
+        .expect("the backend session should reopen");
+        reopened.status().await.unwrap();
+
+        tokio::time::timeout(Duration::from_secs(5), service.shutdown_all_daemons())
+            .await
+            .expect("shutdown must not be blocked by an unhealthy cached session");
+        assert!(service.sessions.read().await.is_empty());
+    }
 
     fn empty_search_results() -> SearchResults {
         serde_json::from_value(serde_json::json!({
