@@ -10,6 +10,7 @@ const mockUpdateSessionModelName = vi.fn();
 const mockUpdateSessionReasoningPreset = vi.fn();
 const mockEnsureBackendSession = vi.fn();
 const mockUpdateSessionModelPool = vi.fn();
+const mockLoadRelaySessionHistory = vi.fn();
 
 const sessions = new Map<string, any>();
 
@@ -26,6 +27,7 @@ vi.mock('../store/FlowChatStore', () => ({
   flowChatStore: {
     getState: () => ({ sessions }),
     updateSessionModelPool: (...args: any[]) => mockUpdateSessionModelPool(...args),
+    loadRelaySessionHistory: (...args: any[]) => mockLoadRelaySessionHistory(...args),
     addExternalSession: (...args: any[]) => mockAddExternalSession(...args),
     updateSessionRelationship: (...args: any[]) => mockUpdateSessionRelationship(...args),
     updateSessionBtwOrigin: (...args: any[]) => mockUpdateSessionBtwOrigin(...args),
@@ -64,6 +66,7 @@ import {
   sendMessageToBtwSession,
   startBtwThread,
 } from './BtwThreadService';
+import { activateSurface, surfaceIdForDevice } from '@/infrastructure/peer-device/deviceSurface';
 
 describe('BtwThreadService', () => {
   beforeEach(() => {
@@ -87,6 +90,7 @@ describe('BtwThreadService', () => {
       ],
     });
     mockAskStream.mockResolvedValue({ ok: true });
+    mockLoadRelaySessionHistory.mockResolvedValue(undefined);
     mockCreateSession.mockResolvedValue({
       sessionId: 'child-1',
     });
@@ -336,6 +340,35 @@ describe('BtwThreadService', () => {
       }),
       'btw',
     );
+  });
+
+  it('subscribes to the side question stream once a peer host accepts it', async () => {
+    sessions.set('btw-child', { sessionId: 'btw-child', sessionKind: 'btw', config: {}, dialogTurns: [] });
+    activateSurface(surfaceIdForDevice('peer-device-1'));
+    try {
+      await sendMessageToBtwSession({ parentSessionId: 'parent-1', childSessionId: 'btw-child', question: 'Any news?' });
+    } finally {
+      activateSurface(surfaceIdForDevice(null));
+    }
+    expect(mockLoadRelaySessionHistory).toHaveBeenCalledWith('btw-child');
+    expect(mockAskStream.mock.invocationCallOrder[0])
+      .toBeLessThan(mockLoadRelaySessionHistory.mock.invocationCallOrder[0]);
+  });
+
+  it('does not open a relay subscription on the local surface or after a refused question', async () => {
+    sessions.set('btw-child', { sessionId: 'btw-child', sessionKind: 'btw', config: {}, dialogTurns: [] });
+    await sendMessageToBtwSession({ parentSessionId: 'parent-1', childSessionId: 'btw-child', question: 'Any news?' });
+    expect(mockLoadRelaySessionHistory).not.toHaveBeenCalled();
+
+    mockAskStream.mockRejectedValueOnce(new Error('host refused'));
+    activateSurface(surfaceIdForDevice('peer-device-1'));
+    try {
+      await expect(sendMessageToBtwSession({ parentSessionId: 'parent-1', childSessionId: 'btw-child', question: 'Again?' }))
+        .rejects.toThrow('host refused');
+    } finally {
+      activateSurface(surfaceIdForDevice(null));
+    }
+    expect(mockLoadRelaySessionHistory).not.toHaveBeenCalled();
   });
 
   it('discards the local placeholder when the first /btw request fails', async () => {
