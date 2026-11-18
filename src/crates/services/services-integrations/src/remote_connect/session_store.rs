@@ -78,6 +78,7 @@ pub fn save_session(
     save_session_with_device(token, user_id, master_key, relay_url, None)
 }
 
+use super::account::{AccountClient, AccountSession};
 pub use crate::remote_persistence::AccountSessionRecord as LoadedSession;
 
 pub const WEEK: std::time::Duration = std::time::Duration::from_secs(7 * 86400);
@@ -86,8 +87,11 @@ const DEVICE_TOKEN_LIFETIME: i64 = 30 * 86400;
 
 impl LoadedSession {
     pub fn replaces(&self, session: &super::account::AccountSession, relay: &str) -> bool {
-        self.token != session.token
-            && self.user_id == session.user_id
+        self.token != session.token && self.same_device(session, relay)
+    }
+
+    fn same_device(&self, session: &AccountSession, relay: &str) -> bool {
+        self.user_id == session.user_id
             && self.master_key == session.master_key
             && openbitfun_product_domains::account::same_relay_deployment(&self.relay_url, relay)
     }
@@ -132,35 +136,6 @@ pub fn save_session_with_device(
     relay_url: &str,
     device_id: Option<&str>,
 ) -> Result<()> {
-    save_record(token, user_id, master_key, relay_url, device_id, None)
-}
-
-/// Store the issue time only after a successful identity exchange.
-pub fn save_issued_session(
-    token: &str,
-    user_id: &str,
-    master_key: &[u8; 32],
-    relay_url: &str,
-    device_id: Option<&str>,
-) -> Result<()> {
-    save_record(
-        token,
-        user_id,
-        master_key,
-        relay_url,
-        device_id,
-        Some(chrono::Utc::now().timestamp()),
-    )
-}
-
-fn save_record(
-    token: &str,
-    user_id: &str,
-    master_key: &[u8; 32],
-    relay_url: &str,
-    device_id: Option<&str>,
-    issued_at: Option<i64>,
-) -> Result<()> {
     let _guard = state_lock()?;
     write_record(&LoadedSession {
         token: token.to_owned(),
@@ -168,25 +143,80 @@ fn save_record(
         master_key: *master_key,
         relay_url: relay_url.to_owned(),
         device_id: device_id.map(str::to_owned),
-        issued_at,
+        issued_at: None,
+        superseded_tokens: Vec::new(),
     })
 }
 
+/// An interactive login replaces the previous credential family. The host
+/// separately revokes its in-memory token, which may lag behind the disk.
+pub async fn save_issued_session(
+    session: &AccountSession,
+    relay: &str,
+    device_id: Option<&str>,
+    previous_host_token: Option<&str>,
+) -> Result<()> {
+    let previous = {
+        let _guard = state_lock()?;
+        let previous = load_session_detailed()?;
+        write_record(&LoadedSession {
+            token: session.token.clone(),
+            user_id: session.user_id.clone(),
+            master_key: session.master_key,
+            relay_url: relay.to_owned(),
+            device_id: device_id.map(str::to_owned),
+            issued_at: Some(chrono::Utc::now().timestamp()),
+            superseded_tokens: Vec::new(),
+        })?;
+        previous
+    };
+    if let Some(previous) = previous {
+        revoke_saved_tokens(previous, previous_host_token, Some(&session.token)).await;
+    }
+    Ok(())
+}
+
+async fn revoke_saved_tokens(
+    saved: LoadedSession,
+    host_token: Option<&str>,
+    new_token: Option<&str>,
+) {
+    let now = chrono::Utc::now().timestamp();
+    let tokens = std::iter::once(saved.token).chain(
+        saved
+            .superseded_tokens
+            .into_iter()
+            .filter(|prior| prior.expires_at > now)
+            .map(|prior| prior.token),
+    );
+    let client = AccountClient::new();
+    for token in tokens {
+        if Some(token.as_str()) == host_token || Some(token.as_str()) == new_token {
+            continue;
+        }
+        let credential = AccountSession::new(token, saved.user_id.clone(), saved.master_key);
+        if let Err(error) = client.revoke_token(&saved.relay_url, &credential).await {
+            log::warn!("Failed to revoke previous device credential: {error}");
+        }
+    }
+}
+
 /// AuthOk can arrive long after issuance and after another host rotated the token.
-pub fn record_authenticated_device(token: &str, device_id: &str) -> Result<()> {
+pub fn record_authenticated_device(token: &str, device_id: &str) -> Result<bool> {
     let _guard = state_lock()?;
     if let Some(mut saved) = load_session_detailed()? {
         if saved.token == token && saved.device_id.as_deref() != Some(device_id) {
             saved.device_id = Some(device_id.to_owned());
             write_record(&saved)?;
+            return Ok(renewal_due(saved.issued_at, chrono::Utc::now().timestamp()));
         }
     }
-    Ok(())
+    Ok(false)
 }
 
 /// Refresh a persisted device using the host's existing signed-in account.
 pub async fn renew_session_if_due(host_is_cli: bool) -> Result<Option<LoadedSession>> {
-    use super::account::{persisted_relay_requires_migration, AccountClient, AccountSession};
+    use super::account::persisted_relay_requires_migration;
     let Some(saved) = load_session_detailed()? else {
         return Ok(None);
     };
@@ -205,14 +235,16 @@ pub async fn renew_session_if_due(host_is_cli: bool) -> Result<Option<LoadedSess
     {
         return Ok(current);
     }
+    let device_id = saved
+        .device_id
+        .as_ref()
+        .ok_or_else(|| anyhow!("Waiting for the Relay to confirm the session device ID"))?;
     let client = AccountClient::new();
     let session = AccountSession::new(saved.token.clone(), saved.user_id.clone(), saved.master_key);
     // Never silently re-register a device whose credential has been revoked.
     client.list_devices(&saved.relay_url, &session).await?;
     let mut device = super::DeviceIdentity::from_current_machine()?;
-    if let Some(id) = saved.device_id.as_ref() {
-        device.device_id.clone_from(id);
-    }
+    device.device_id.clone_from(device_id);
     let kind = client
         .reported_device_kind(&saved.relay_url, host_is_cli)
         .await;
@@ -243,6 +275,23 @@ fn replace_renewed_session(
     let _guard = state_lock()?;
     let mut current = load_session_detailed()?;
     if let Some(saved) = current.as_mut().filter(|saved| saved.token == previous) {
+        // A supported older host may still be using the previous token. Keep
+        // its encrypted revocation handle through logout or account switch.
+        saved
+            .superseded_tokens
+            .retain(|prior| prior.expires_at > issued_at);
+        let expires_at = saved
+            .issued_at
+            .unwrap_or(issued_at)
+            .saturating_add(DEVICE_TOKEN_LIFETIME);
+        if expires_at > issued_at {
+            saved
+                .superseded_tokens
+                .push(crate::remote_persistence::SupersededDeviceToken {
+                    token: saved.token.clone(),
+                    expires_at,
+                });
+        }
         saved.token = token.to_owned();
         saved.device_id = Some(device.to_owned());
         saved.issued_at = Some(issued_at);
@@ -297,10 +346,45 @@ pub fn load_session_detailed() -> Result<Option<LoadedSession>> {
     )
 }
 
-/// Remove the persisted session file (called on logout).
-pub fn clear_session() {
-    if let (Ok(_guard), Ok(path)) = (state_lock(), session_file_path()) {
-        let _ = std::fs::remove_file(&path);
+/// Atomically retire the saved credential before network revocation. A racing
+/// renewal then either appears in this record or discards its own candidate.
+fn take_session_for_logout(
+    active: Option<&(AccountSession, String)>,
+) -> Result<Option<LoadedSession>> {
+    let _guard = state_lock()?;
+    let Some(saved) = load_session_detailed()? else {
+        return Ok(None);
+    };
+    if active.is_some_and(|(session, relay)| !saved.same_device(session, relay)) {
+        return Ok(None);
+    }
+    std::fs::remove_file(session_file_path()?)?;
+    Ok(Some(saved))
+}
+
+pub async fn logout_session(active: Option<(AccountSession, String)>, revoke: bool) {
+    let saved = match take_session_for_logout(active.as_ref()) {
+        Ok(saved) => saved,
+        Err(error) => {
+            log::warn!("Failed to clear saved device credential: {error}");
+            None
+        }
+    };
+    if !revoke {
+        return;
+    }
+    if let Some(saved) = saved {
+        revoke_saved_tokens(
+            saved,
+            active.as_ref().map(|(session, _)| session.token.as_str()),
+            None,
+        )
+        .await;
+    }
+    if let Some((session, relay)) = active {
+        if let Err(error) = AccountClient::new().revoke_token(&relay, &session).await {
+            log::warn!("Failed to revoke active device credential: {error}");
+        }
     }
 }
 
@@ -389,7 +473,14 @@ mod renewal_tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let relay = format!("http://{}", listener.local_addr().unwrap());
         let id = "0123456789abcdef0123456789abcdef";
-        save_issued_session("fresh", "me", &[2; 32], &relay, Some(id)).unwrap();
+        save_issued_session(
+            &AccountSession::new("fresh".into(), "me".into(), [2; 32]),
+            &relay,
+            Some(id),
+            None,
+        )
+        .await
+        .unwrap();
         assert_eq!(
             renew_session_if_due(true).await.unwrap().unwrap().token,
             "fresh"
@@ -421,6 +512,110 @@ mod renewal_tests {
         TEST_STORE.with(|dir| *dir.borrow_mut() = None);
     }
 
+    #[tokio::test]
+    async fn legacy_renewal_waits_for_the_authenticated_device_id() {
+        let temp = tempfile::tempdir().unwrap();
+        TEST_STORE.with(|dir| *dir.borrow_mut() = Some(temp.path().to_owned()));
+        save_session("legacy", "me", &[2; 32], "http://127.0.0.1:1").unwrap();
+        let error = renew_session_if_due(true).await.unwrap_err();
+        assert!(error.to_string().contains("confirm the session device ID"));
+        assert!(!record_authenticated_device("stale", "other").unwrap());
+        assert!(load_session_detailed()
+            .unwrap()
+            .unwrap()
+            .device_id
+            .is_none());
+        assert!(record_authenticated_device("legacy", "0123456789abcdef0123456789abcdef").unwrap());
+        assert!(
+            !record_authenticated_device("legacy", "0123456789abcdef0123456789abcdef").unwrap()
+        );
+        TEST_STORE.with(|dir| *dir.borrow_mut() = None);
+    }
+
+    #[tokio::test]
+    async fn logout_from_a_stale_host_revokes_all_live_rotations_once() {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        let temp = tempfile::tempdir().unwrap();
+        TEST_STORE.with(|dir| *dir.borrow_mut() = Some(temp.path().to_owned()));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let relay = format!("http://{}", listener.local_addr().unwrap());
+        let now = chrono::Utc::now().timestamp();
+        save_session_with_device(
+            "expired",
+            "me",
+            &[2; 32],
+            &relay,
+            Some("0123456789abcdef0123456789abcdef"),
+        )
+        .unwrap();
+        for (old, new, age) in [
+            ("expired", "first", 32),
+            ("first", "second", 16),
+            ("second", "current", 0),
+        ] {
+            replace_renewed_session(
+                old,
+                new,
+                "0123456789abcdef0123456789abcdef",
+                now - age * 86400,
+            )
+            .unwrap();
+        }
+        let other = AccountSession::new("different".into(), "me".into(), [3; 32]);
+        assert!(take_session_for_logout(Some(&(other, relay.clone())))
+            .unwrap()
+            .is_none());
+        let saved = load_session_detailed().unwrap().unwrap();
+        assert_eq!(saved.superseded_tokens.len(), 1);
+        assert_eq!(saved.superseded_tokens[0].token, "second");
+
+        let server = tokio::spawn(async move {
+            let mut revoked = Vec::new();
+            for _ in 0..2 {
+                let (socket, _) = listener.accept().await.unwrap();
+                let mut stream = BufReader::new(socket);
+                let mut request = String::new();
+                while !request.ends_with("\r\n\r\n") {
+                    assert!(stream.read_line(&mut request).await.unwrap() > 0);
+                }
+                assert!(request.starts_with("POST /api/auth/logout "));
+                let token = request
+                    .lines()
+                    .find_map(|line| {
+                        let (name, value) = line.split_once(':')?;
+                        name.eq_ignore_ascii_case("authorization")
+                            .then_some(value.trim())
+                    })
+                    .unwrap();
+                revoked.push(token.to_owned());
+                stream
+                    .get_mut()
+                    .write_all(b"HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n")
+                    .await
+                    .unwrap();
+            }
+            revoked.sort();
+            revoked
+        });
+        let stale = AccountSession::new("second".into(), "me".into(), [2; 32]);
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            logout_session(Some((stale, relay)), true).await;
+            assert_eq!(server.await.unwrap(), ["Bearer current", "Bearer second"]);
+        })
+        .await
+        .unwrap();
+        assert!(load_session_detailed().unwrap().is_none());
+        assert!(replace_renewed_session(
+            "current",
+            "late",
+            "0123456789abcdef0123456789abcdef",
+            now
+        )
+        .unwrap()
+        .is_none());
+        TEST_STORE.with(|dir| *dir.borrow_mut() = None);
+    }
+
     #[test]
     fn auth_ok_and_stale_hosts_cannot_overwrite_a_renewal_or_logout() {
         let temp = tempfile::tempdir().unwrap();
@@ -445,7 +640,7 @@ mod renewal_tests {
             replace_renewed_session("old", "stale", id, 9999).unwrap(),
             Some(renewed)
         );
-        clear_session();
+        take_session_for_logout(None).unwrap();
         assert!(replace_renewed_session("new", "stale", id, 9999)
             .unwrap()
             .is_none());

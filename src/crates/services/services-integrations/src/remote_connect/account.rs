@@ -12,6 +12,35 @@ use crate::remote_connect::relay_http::{
     relay_http_client, send_with_retry, BufferedRelayResponse, RelayHttpRetry,
 };
 
+/// An explicit routing request follows credential rotation for this account.
+/// A user stop or a later login invalidates pending connection retries.
+#[derive(Default)]
+pub struct RoutingIntent(AtomicU64);
+
+impl RoutingIntent {
+    pub const fn new() -> Self {
+        Self(AtomicU64::new(0))
+    }
+
+    pub fn request(&self, generation: u64) {
+        self.0.store(generation, Ordering::SeqCst);
+    }
+
+    pub fn cancel(&self) {
+        self.request(0);
+    }
+
+    pub fn requested(&self, generation: u64) -> bool {
+        generation != 0 && self.0.load(Ordering::SeqCst) == generation
+    }
+
+    pub fn rotated(&self, previous: u64, current: u64) {
+        let _ = self
+            .0
+            .compare_exchange(previous, current, Ordering::SeqCst, Ordering::SeqCst);
+    }
+}
+
 pub const MASTER_KEY_LEN: usize = 32;
 
 /// A retired official deployment has its own credential database. Authenticate
@@ -1110,6 +1139,23 @@ fn project_device_list_entry(entry: DeviceListEntry) -> DeviceInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_requested_routing_follows_credential_rotation() {
+        let intent = RoutingIntent::new();
+        intent.rotated(1, 3);
+        assert!(!intent.requested(3));
+        intent.request(3);
+        intent.rotated(3, 5);
+        assert!(intent.requested(5));
+        assert!(!intent.requested(3));
+        intent.cancel();
+        intent.rotated(5, 7);
+        assert!(!intent.requested(7));
+        intent.request(9);
+        intent.rotated(5, 7);
+        assert!(intent.requested(9));
+    }
 
     #[test]
     fn legacy_embedded_session_migrates_without_capturing_other_private_relays() {
