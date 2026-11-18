@@ -327,8 +327,8 @@ export class SessionStateMachineImpl {
           });
         } else {
           const { agentAPI } = await import('@/infrastructure/api/service-api/AgentAPI');
-          const { isPeerDeviceModeActive } = await import(
-            '@/infrastructure/peer-device/peerModeFlag'
+          const { renderedHostInterruptsRecoverably } = await import(
+            '@/infrastructure/peer-device/renderedHostCapabilities'
           );
           scope.assertCurrent('cancel dialog turn');
           if (this.context.currentDialogTurnId !== dialogTurnId
@@ -344,7 +344,7 @@ export class SessionStateMachineImpl {
             && !session.config?.dispatchJobId
             && goalStatus !== 'active'
             && goalStatus !== 'paused'
-            && !isPeerDeviceModeActive();
+            && renderedHostInterruptsRecoverably();
           if (supportsRecoverableInterruption) {
             await agentAPI.interruptDialogTurn(sessionId, dialogTurnId);
           } else {
