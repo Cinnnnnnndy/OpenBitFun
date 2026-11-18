@@ -1000,10 +1000,15 @@ body {
 
 .miniapp-body {
   flex: 1; overflow-y: auto;
-  padding: 0 16px;
+  padding: 0 20px;
   display: flex; flex-direction: column;
   align-items: flex-start;
   max-width: 1000px; width: 100%; margin: 0 auto;
+}
+@container app (min-width: 840px) {
+  .miniapp-body {
+    padding: 0 28px;
+  }
 }
 /* ============ 小应用 · 列表卡片视图 ============ */
 /* ============ 小应用 · 列表卡片视图 ============ */
@@ -1054,30 +1059,38 @@ body {
 .app-info {
   flex: 1;
   display: flex;
+  align-items: center;
+  padding: 14px 18px;
+  text-align: left;
+}
+.app-info > .app-text {
+  width: 100%;
+  display: flex;
   flex-direction: column;
   justify-content: center;
-  gap: 8px;
-  padding: 24px;
-  text-align: left;
 }
 .app-name {
   font: var(--title-large);
-  font-weight: 700;
+  font-weight: 600;
   color: var(--ink);
   display: block;
   text-align: left;
-  font-size: 20px;
+  font-size: 18px;
+  line-height: 1.3;
+  letter-spacing: -0.01em;
+  margin: 0;
 }
 .app-desc {
   font: var(--body-large);
   color: var(--muted);
   line-height: 1.5;
   text-align: left;
-  font-size: 15px;
+  font-size: 14px;
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
+  margin: 4px 0 0;
 }
 /* hover 效果 - 不变蓝 */
 .app-card:hover .app-name {
@@ -1099,14 +1112,14 @@ body {
     min-height: 160px;
   }
   .app-info {
-    gap: 10px;
-    padding: 28px;
+    padding: 14px 18px;
   }
   .app-name {
-    font-size: 22px;
+    font-size: 18px;
   }
   .app-desc {
-    font-size: 16px;
+    font-size: 14px;
+    margin-top: 4px;
   }
 }
 
@@ -1203,26 +1216,32 @@ body {
   z-index: 2;
 }
 .swiper-card .card-info {
-  padding: 20px;
+  padding: 18px 20px;
   height: 35%;
   display: flex;
   flex-direction: column;
   justify-content: center;
+  gap: 4px;
 }
 .swiper-card .card-name {
   font: var(--title-large);
   font-weight: 600;
   color: var(--ink);
-  margin-bottom: 8px;
+  font-size: 17px;
+  line-height: 1.3;
+  letter-spacing: -0.01em;
+  margin-bottom: 0;
 }
 .swiper-card .card-desc {
-  font: var(--body-medium);
+  font: var(--body-large);
   color: var(--muted);
+  font-size: 14px;
   line-height: 1.5;
   display: -webkit-box;
   -webkit-line-clamp: 3;
   -webkit-box-orient: vertical;
   overflow: hidden;
+  margin-top: 4px;
 }
 /* 卡片状态 */
 .swiper-card.card-active {
@@ -1815,7 +1834,7 @@ body {
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
               </button>
               <button class="sidebar-icon-btn sidebar-collapse-btn" aria-label="收起侧栏" id="collapseSidebarBtn" style="display:none">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M8 4v16"/></svg>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="5" width="16" height="14" rx="2.5"/><path d="M14.5 5v14"/></svg>
               </button>
             </div>
           </div>
@@ -1927,7 +1946,7 @@ body {
           <!-- 页面一：RecentRemoteHome -->
           <section class="page active recent-home" id="pageHome">
             <button class="drawer-fab" id="openDrawer" aria-label="打开侧栏">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M12 4v16"/></svg>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="5" width="16" height="14" rx="2.5"/><path d="M9.5 5v14"/></svg>
             </button>
             <div class="recent-home-inner">
               <!-- WelcomeBrandFlow (sweep 动画) -->
@@ -2040,8 +2059,10 @@ document.getElementById('appGrid').innerHTML = miniApps.map(a => `
       <img src="${a.cover}" alt="${a.name}" loading="lazy">
     </div>
     <div class="app-info">
-      <span class="app-name">${a.name}</span>
-      <span class="app-desc">${appDescriptions[a.id] || ''}</span>
+      <div class="app-text">
+        <span class="app-name">${a.name}</span>
+        <span class="app-desc">${appDescriptions[a.id] || ''}</span>
+      </div>
     </div>
   </button>
 `).join('');
@@ -2335,6 +2356,18 @@ function updateSidebarWidth() {
 
 function openDrawer() {
   updateSidebarWidth();
+  // 双折/三折叠：侧栏处于 collapsed 时，点击悬浮按钮直接展开常驻侧栏
+  if (sidebarPanel.classList.contains('collapsed')) {
+    sidebarPanel.classList.remove('collapsed');
+    if (collapseSidebarBtn) {
+      collapseSidebarBtn.innerHTML = collapseIconCollapse;
+      collapseSidebarBtn.setAttribute('aria-label', '收起侧栏');
+      collapseSidebarBtn.style.display = 'flex';
+    }
+    const fab = document.getElementById('openDrawer');
+    if (fab) fab.style.display = 'none';
+    return;
+  }
   sidebarFloor.classList.add('visible');
   sidebarPanel.classList.add('open');
   contentCard.classList.add('drawer-open');
@@ -2352,13 +2385,20 @@ document.getElementById('openDrawer').addEventListener('click', openDrawer);
 drawerScrim.addEventListener('click', closeDrawer);
 window.addEventListener('resize', updateSidebarWidth);
 
+// 侧栏收起/展开图标
+const collapseIconCollapse = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="5" width="16" height="14" rx="2.5"/><path d="M14.5 5v14"/></svg>';
+const collapseIconExpand = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="5" width="16" height="14" rx="2.5"/><path d="M9.5 5v14"/></svg>';
+
 // 侧栏收起按钮（双折/三折叠）
 const collapseSidebarBtn = document.getElementById('collapseSidebarBtn');
 if (collapseSidebarBtn) {
   collapseSidebarBtn.addEventListener('click', () => {
     sidebarPanel.classList.toggle('collapsed');
+    const isCollapsed = sidebarPanel.classList.contains('collapsed');
+    collapseSidebarBtn.innerHTML = isCollapsed ? collapseIconExpand : collapseIconCollapse;
+    collapseSidebarBtn.setAttribute('aria-label', isCollapsed ? '展开侧栏' : '收起侧栏');
     // 收起后显示 drawer-fab 以便重新打开
-    if (sidebarPanel.classList.contains('collapsed')) {
+    if (isCollapsed) {
       document.getElementById('openDrawer').style.display = 'flex';
     } else {
       document.getElementById('openDrawer').style.display = 'none';
