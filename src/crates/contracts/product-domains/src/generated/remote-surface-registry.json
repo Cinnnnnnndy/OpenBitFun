@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "digest": "fnv1a64:722cf3ac8fe0f4bb",
+  "digest": "fnv1a64:975d66aad34aa784",
   "retiredCommandPrefixes": [
     {
       "prefix": "lsp_",
@@ -1766,42 +1766,6 @@
       }
     },
     {
-      "id": "dispatch_install_cli_cancel",
-      "surface": "tauri_command",
-      "remoteWorkspace": "WorkspaceAgnostic",
-      "peer": {
-        "kind": "controller_local"
-      },
-      "cliPeer": {
-        "kind": "unsupported",
-        "reason": "the controller keeps this command; peer hosts refuse it before dispatch"
-      }
-    },
-    {
-      "id": "dispatch_install_cli_poll",
-      "surface": "tauri_command",
-      "remoteWorkspace": "WorkspaceAgnostic",
-      "peer": {
-        "kind": "controller_local"
-      },
-      "cliPeer": {
-        "kind": "unsupported",
-        "reason": "the controller keeps this command; peer hosts refuse it before dispatch"
-      }
-    },
-    {
-      "id": "dispatch_install_cli_start",
-      "surface": "tauri_command",
-      "remoteWorkspace": "WorkspaceAgnostic",
-      "peer": {
-        "kind": "controller_local"
-      },
-      "cliPeer": {
-        "kind": "unsupported",
-        "reason": "the controller keeps this command; peer hosts refuse it before dispatch"
-      }
-    },
-    {
       "id": "dispatch_list_jobs",
       "surface": "tauri_command",
       "remoteWorkspace": "WorkspaceAgnostic",
@@ -1839,18 +1803,6 @@
     },
     {
       "id": "dispatch_probe_target",
-      "surface": "tauri_command",
-      "remoteWorkspace": "WorkspaceAgnostic",
-      "peer": {
-        "kind": "controller_local"
-      },
-      "cliPeer": {
-        "kind": "unsupported",
-        "reason": "the controller keeps this command; peer hosts refuse it before dispatch"
-      }
-    },
-    {
-      "id": "dispatch_provision_target",
       "surface": "tauri_command",
       "remoteWorkspace": "WorkspaceAgnostic",
       "peer": {

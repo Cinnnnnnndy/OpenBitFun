@@ -6768,7 +6768,6 @@ dependencies = [
  "log",
  "mac_address",
  "md5",
- "minisign-verify",
  "notify",
  "openbitfun-agent-runtime",
  "openbitfun-agent-tools",

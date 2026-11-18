@@ -8,7 +8,7 @@ import {
 import React, { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { DispatchInstallDialog } from './DispatchInstallDialog';
+import { DispatchTargetDialog } from './DispatchTargetDialog';
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -26,10 +26,6 @@ const READY_CAPABILITIES = [
 
 const mocks = vi.hoisted(() => ({
   probeTarget: vi.fn(),
-  installCliStart: vi.fn(),
-  installCliPoll: vi.fn(),
-  installCliCancel: vi.fn(),
-  provisionTarget: vi.fn(),
   getFreshConfig: vi.fn(),
   resolveRevision: vi.fn(),
   dialogOnOpenChange: null as ((open: boolean) => void) | null,
@@ -42,10 +38,6 @@ const mocks = vi.hoisted(() => ({
 vi.mock('./dispatchApi', () => ({
   dispatchApi: {
     probeTarget: mocks.probeTarget,
-    installCliStart: mocks.installCliStart,
-    installCliPoll: mocks.installCliPoll,
-    installCliCancel: mocks.installCliCancel,
-    provisionTarget: mocks.provisionTarget,
   },
 }));
 
@@ -148,7 +140,7 @@ function createDeferred<T>() {
   return { promise, reject, resolve };
 }
 
-describe('DispatchInstallDialog target preparation', () => {
+describe('DispatchTargetDialog target preparation', () => {
   let container: HTMLDivElement;
   let root: Root;
 
@@ -168,23 +160,6 @@ describe('DispatchInstallDialog target preparation', () => {
         sha256: 'abc123',
       },
     });
-    mocks.installCliStart.mockResolvedValue({
-      scriptPath: '/tmp/install.sh',
-      version: '1.2.3',
-      target: 'x86_64-unknown-linux-gnu',
-      url: 'https://example.test/openbitfun',
-      sha256: 'abc123',
-    });
-    mocks.installCliPoll.mockResolvedValue({
-      cursor: 1,
-      output: '',
-      status: 'succeeded',
-    });
-    mocks.installCliCancel.mockResolvedValue(undefined);
-    mocks.provisionTarget.mockResolvedValue({
-      accountStatus: 'skipped_not_logged_in',
-      daemonInstalled: false,
-    });
     mocks.getFreshConfig.mockResolvedValue(undefined);
     mocks.resolveRevision.mockResolvedValue('a'.repeat(40));
     container = document.createElement('div');
@@ -197,211 +172,13 @@ describe('DispatchInstallDialog target preparation', () => {
     container.remove();
   });
 
-  it('deploys the verified release with one click and follows the worktree copy setting', async () => {
-    const onReady = vi.fn();
-    mocks.getFreshConfig.mockResolvedValue({ copyLocalChanges: true });
-    let installed = false;
-    mocks.installCliPoll.mockImplementation(async () => {
-      installed = true;
-      return { cursor: 1, output: '', status: 'succeeded' };
-    });
-    mocks.probeTarget.mockImplementation(async () => installed
-      ? {
-          cliInstalled: true,
-          os: 'linux',
-          arch: 'x86_64',
-          installSupported: false,
-          protocol: {
-            productId: 'openbitfun',
-            dataNamespace: 'openbitfun',
-            protocolVersion: DISPATCH_PROTOCOL_VERSION,
-            cliVersion: '1.2.3',
-            os: 'linux',
-            arch: 'x86_64',
-            capabilities: READY_CAPABILITIES,
-            modelConfigured: true,
-            availableModels: ['model-a'],
-          },
-        }
-      : {
-          cliInstalled: false,
-          os: 'linux',
-          arch: 'x86_64',
-          installSupported: true,
-          release: {
-            version: '1.2.3',
-            target: 'x86_64-unknown-linux-gnu',
-            url: 'https://example.test/openbitfun',
-            sha256: 'abc123',
-          },
-        });
-
-    await act(async () => {
-      root.render(
-        <DispatchInstallDialog
-          open
-          target={{
-            kind: 'ssh',
-            connectionId: 'ssh-1',
-            displayName: 'build-host',
-          }}
-          sourceWorkspacePath="/home/me/project"
-          sourceWorkspaceId="workspace-source"
-          onClose={vi.fn()}
-          onReady={onReady}
-        />,
-      );
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-
-    expect(container.textContent).toContain('dispatch.oneClickDeployDescription');
-    expect(container.textContent).toContain('dispatch.oneClickDeploy');
-    expect(container.textContent).toContain('1.2.3');
-    expect(container.textContent).toContain('abc123');
-    expect(container.querySelector('[data-openbitfun-component="disclosure"] button[aria-expanded]')?.getAttribute('aria-expanded')).toBe('false');
-    expect(container.textContent).not.toContain('dispatch.installAutomaticDescription');
-    expect(mocks.dialogLifecycleProps).toEqual({
-      closeOnPointerOutside: true,
-      showCloseButton: true,
-    });
-    const includeUncommitted = container.querySelector<HTMLInputElement>('input[type="checkbox"]');
-    expect(includeUncommitted?.checked).toBe(true);
-
-    const useTargetBeforeSetup = Array.from(container.querySelectorAll('button'))
-      .find(button => button.textContent?.includes('dispatch.useTarget'));
-    expect(useTargetBeforeSetup?.disabled).toBe(true);
-
-    await act(async () => {
-      Array.from(container.querySelectorAll('button'))
-        .find(button => button.textContent?.includes('dispatch.oneClickDeploy'))
-        ?.click();
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-
-    expect(mocks.installCliStart).toHaveBeenCalledWith(
-      'ssh-1',
-      expect.objectContaining({ version: '1.2.3', sha256: 'abc123' }),
-    );
-    expect(mocks.installCliPoll).toHaveBeenCalledWith('ssh-1', 0);
-    expect(mocks.provisionTarget).toHaveBeenCalledWith('ssh-1');
-    expect(container.textContent).toContain('dispatch.prepareSucceededCliOnly');
-
-    await act(async () => {
-      Array.from(container.querySelectorAll('button'))
-        .find(button => button.textContent?.includes('dispatch.useTarget'))
-        ?.click();
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-
-    expect(mocks.getFreshConfig).toHaveBeenCalledWith('app.worktrees', {
-      skipRetryOnNotFound: true,
-    });
-    expect(mocks.resolveRevision).toHaveBeenCalledWith(
-      { workspaceId: 'workspace-source', repositoryPath: '/home/me/project' },
-      'HEAD',
-    );
-    expect(onReady).toHaveBeenCalledWith(expect.objectContaining({
-      baseRef: 'HEAD',
-      includeUncommitted: true,
-      request: { kind: 'ssh', connectionId: 'ssh-1', workspacePath: '' },
-    }));
-    expect(onReady.mock.calls[0][0]).not.toHaveProperty('approvalPolicy');
-  });
-
-  it('retries only account and service provisioning after the CLI is installed', async () => {
-    let installed = false;
-    mocks.installCliPoll.mockImplementation(async () => {
-      installed = true;
-      return { cursor: 1, output: '', status: 'succeeded' };
-    });
-    mocks.probeTarget.mockImplementation(async () => installed
-      ? {
-          cliInstalled: true,
-          os: 'linux',
-          arch: 'x86_64',
-          installSupported: false,
-          protocol: {
-            productId: 'openbitfun',
-            dataNamespace: 'openbitfun',
-            protocolVersion: DISPATCH_PROTOCOL_VERSION,
-            cliVersion: '1.2.3',
-            os: 'linux',
-            arch: 'x86_64',
-            capabilities: READY_CAPABILITIES,
-            modelConfigured: true,
-            availableModels: ['model-a'],
-          },
-        }
-      : {
-          cliInstalled: false,
-          os: 'linux',
-          arch: 'x86_64',
-          installSupported: true,
-          release: {
-            version: '1.2.3',
-            target: 'x86_64-unknown-linux-gnu',
-            url: 'https://example.test/openbitfun',
-            sha256: 'abc123',
-          },
-        });
-    mocks.provisionTarget
-      .mockRejectedValueOnce(new Error('relay temporarily unavailable'))
-      .mockResolvedValueOnce({ accountStatus: 'synced', daemonInstalled: true });
-
-    await act(async () => {
-      root.render(
-        <DispatchInstallDialog
-          open
-          target={{ kind: 'ssh', connectionId: 'ssh-1', displayName: 'build-host' }}
-          sourceWorkspacePath="/home/me/project"
-          sourceWorkspaceId="workspace-source"
-          onClose={vi.fn()}
-          onReady={vi.fn()}
-        />,
-      );
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-
-    await act(async () => {
-      Array.from(container.querySelectorAll('button'))
-        .find(button => button.textContent?.includes('dispatch.oneClickDeploy'))
-        ?.click();
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-
-    expect(mocks.installCliStart).toHaveBeenCalledTimes(1);
-    expect(container.textContent).toContain('dispatch.retryProvisionDescription');
-
-    await act(async () => {
-      Array.from(container.querySelectorAll('button'))
-        .find(button => button.textContent?.includes('dispatch.retryProvision'))
-        ?.click();
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-
-    expect(mocks.installCliStart).toHaveBeenCalledTimes(1);
-    expect(mocks.provisionTarget).toHaveBeenCalledTimes(2);
-    expect(container.textContent).toContain('dispatch.prepareSucceededWithAccount');
-  });
-
   it('does not overwrite a user choice when the worktree default resolves late', async () => {
     const worktreeSettings = createDeferred<{ copyLocalChanges: boolean }>();
     mocks.getFreshConfig.mockReturnValue(worktreeSettings.promise);
 
     await act(async () => {
       root.render(
-        <DispatchInstallDialog
+        <DispatchTargetDialog
           open
           target={{ kind: 'ssh', connectionId: 'ssh-1', displayName: 'build-host' }}
           sourceWorkspacePath="/home/me/project"
@@ -455,7 +232,7 @@ describe('DispatchInstallDialog target preparation', () => {
 
     await act(async () => {
       root.render(
-        <DispatchInstallDialog
+        <DispatchTargetDialog
           open
           target={{ kind: 'ssh', connectionId: 'ssh-1', displayName: 'build-host' }}
           sourceWorkspacePath="/home/me/project"
@@ -498,21 +275,18 @@ describe('DispatchInstallDialog target preparation', () => {
     expect(container.querySelector('.dispatch-install-dialog')).not.toBeNull();
   });
 
-  it('never offers to compile on the target and explains why it cannot be prepared', async () => {
-    // A target no published binary fits. Preparing it is not something this
-    // controller can do, so the dialog says so instead of offering to build
-    // OpenBitFun on someone else's machine.
+  it('blocks a missing CLI even when an older host advertises one-click setup', async () => {
     mocks.probeTarget.mockResolvedValue({
       cliInstalled: false,
       os: 'linux',
       arch: 'x86_64',
-      installSupported: false,
+      installSupported: true,
       prebuiltIncompatible: 'target uses musl libc',
     });
 
     await act(async () => {
       root.render(
-        <DispatchInstallDialog
+        <DispatchTargetDialog
           open
           target={{ kind: 'ssh', connectionId: 'ssh-1', displayName: 'alpine-host' }}
           sourceWorkspacePath="/home/me/project"
@@ -525,10 +299,11 @@ describe('DispatchInstallDialog target preparation', () => {
       await Promise.resolve();
     });
 
-    expect(container.textContent).toContain('dispatch.installUnavailable');
+    expect(container.textContent).toContain('dispatch.cliUnavailable');
+    expect(container.textContent).toContain('dispatch.retryCheck');
     expect(container.textContent).not.toContain('target uses musl libc');
     expect(container.textContent).not.toContain('sourceBuild');
-    expect(container.textContent).not.toContain('dispatch.installAutomaticDescription');
+    expect(container.textContent).not.toContain('dispatch.oneClickDeploy');
 
     const useTarget = Array.from(container.querySelectorAll('button'))
       .find(button => button.textContent?.includes('dispatch.useTarget'));
@@ -561,7 +336,7 @@ describe('DispatchInstallDialog target preparation', () => {
 
     await act(async () => {
       root.render(
-        <DispatchInstallDialog
+        <DispatchTargetDialog
           open
           target={{ kind: 'ssh', connectionId: 'ssh-1', displayName: 'build-host' }}
           sourceWorkspacePath="/home/me/project"
@@ -582,7 +357,7 @@ describe('DispatchInstallDialog target preparation', () => {
     );
     await act(async () => {
       root.render(
-        <DispatchInstallDialog
+        <DispatchTargetDialog
           open
           target={{ kind: 'ssh', connectionId: 'ssh-2', displayName: 'backup-host' }}
           sourceWorkspacePath="/home/me/project"
@@ -602,7 +377,7 @@ describe('DispatchInstallDialog target preparation', () => {
   it('explains the Git baseline and never offers a snapshot delivery mode', async () => {
     await act(async () => {
       root.render(
-        <DispatchInstallDialog
+        <DispatchTargetDialog
           open
           target={{ kind: 'ssh', connectionId: 'ssh-1', displayName: 'build-host' }}
           sourceWorkspacePath="/home/me/project"
@@ -645,7 +420,7 @@ describe('DispatchInstallDialog target preparation', () => {
 
     await act(async () => {
       root.render(
-        <DispatchInstallDialog
+        <DispatchTargetDialog
           open
           target={{ kind: 'ssh', connectionId: 'ssh-1', displayName: 'build-host' }}
           sourceWorkspacePath="/home/me/project"
@@ -708,7 +483,7 @@ describe('DispatchInstallDialog target preparation', () => {
 
     await act(async () => {
       root.render(
-        <DispatchInstallDialog
+        <DispatchTargetDialog
           open
           target={{ kind: 'ssh', connectionId: 'ssh-1', displayName: 'build-host' }}
           sourceWorkspacePath="/home/me/project"
@@ -753,7 +528,7 @@ describe('DispatchInstallDialog target preparation', () => {
 
     await act(async () => {
       root.render(
-        <DispatchInstallDialog
+        <DispatchTargetDialog
           open
           target={{ kind: 'ssh', connectionId: 'ssh-1', displayName: 'build-host' }}
           sourceWorkspacePath="/home/me/project"

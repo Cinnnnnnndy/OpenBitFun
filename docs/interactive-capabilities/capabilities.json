@@ -4,7 +4,7 @@
   "title": "OpenBitFun Playbook",
   "origin": "https://playbook.openbitfun.com",
   "source": "src/shared/interactive-capabilities/catalog.json",
-  "digest": "408cc52581d52de1e3686853eec8a09b2c02129869cb82b2931e21694e10557b",
+  "digest": "82954fefebb8251023c36bd1f83f9e740c4889da4e22712089e80e3234c6267c",
   "ownerDigest": "1fdb9c49d404c02483c08e1e0fe9effa0aaa4f0f2914578bcaa63e04de16cc16",
   "searchAcceptance": [
     {
@@ -187,11 +187,11 @@
     "features": 24,
     "settings": 23,
     "userFacing": 47,
-    "documentedItems": 369,
+    "documentedItems": 368,
     "controlCoverage": {
       "direct": 64,
       "delegated": 74,
-      "interactive": 231,
+      "interactive": 230,
       "unsupported": 0
     }
   },
@@ -10247,7 +10247,6 @@
       "capabilityId": "feature.detached-dispatch",
       "itemIds": [
         "targets",
-        "provision",
         "model-sync",
         "submit",
         "status-list",
@@ -10627,55 +10626,6 @@
         "kind": "provider",
         "providerId": "detached-dispatch"
       },
-      "presentationTarget": {
-        "kind": "event",
-        "eventName": "openbitfun:open-remote-connect",
-        "detail": {
-          "group": "account"
-        }
-      }
-    },
-    {
-      "id": "feature.detached-dispatch:open:provision",
-      "capabilityId": "feature.detached-dispatch",
-      "itemIds": [
-        "provision"
-      ],
-      "kind": "open",
-      "risk": "ui",
-      "executionHost": "presentationSurface",
-      "availability": {
-        "desktop": {
-          "available": true
-        },
-        "cli": {
-          "available": false,
-          "reason": "This delivery profile has no live presentation surface"
-        },
-        "peer": {
-          "available": true,
-          "requiredCapabilities": [
-            "product_control_v1",
-            "product_control_presentation_v1"
-          ]
-        },
-        "remoteControl": {
-          "available": true
-        },
-        "detachedDispatch": {
-          "available": false,
-          "reason": "This delivery profile has no live presentation surface"
-        }
-      },
-      "inputSchema": {
-        "type": "object",
-        "additionalProperties": false
-      },
-      "outputSchema": {
-        "type": "object",
-        "additionalProperties": true
-      },
-      "openReason": "unstructuredInteraction",
       "presentationTarget": {
         "kind": "event",
         "eventName": "openbitfun:open-remote-connect",
@@ -29268,13 +29218,13 @@
         "background host"
       ],
       "highlightsZh": [
-        "一键列出同账号在线设备与已保存 SSH 主机作为派发目标",
+        "可选择已配置的 SSH 主机派发任务，智能体也可派发到同账号设备",
         "提交后控制端可随时断网或休眠，目标机在独立 Git Worktree 自治执行",
         "断线重连后按游标增量回填完整对话与工具轨迹，支持远程回答权限请求",
         "任务完成后可将目标端改动安全同步回本机，绝不把本机当成脆弱的文件代理"
       ],
       "highlightsEn": [
-        "Discover same-account devices and saved SSH hosts as ready-to-run targets",
+        "Dispatch to a configured SSH host, or ask the Agent to dispatch to a same-account device",
         "Disconnect or close your laptop freely while the target works in an isolated Git worktree",
         "Replay missed events incrementally by cursor on reconnect and answer pending permissions remotely",
         "Sync completed changes back cleanly without turning your controller into a fragile file proxy"
@@ -29292,19 +29242,6 @@
               "list-targets"
             ],
             "options": []
-          }
-        },
-        {
-          "id": "provision",
-          "titleZh": "为目标主机自动检测、安装或更新 OpenBitFun CLI 运行环境",
-          "titleEn": "Provision the target host and install or update the OpenBitFun CLI",
-          "descriptionZh": "首次向全新的 SSH 服务器派发时，可在向导中一键检测并在远端部署匹配的 CLI 执行端，省去手工登录装环境。",
-          "descriptionEn": "Preparing a fresh SSH server? Detect its environment and install or update the matching OpenBitFun CLI right from the setup flow.",
-          "control": {
-            "kind": "open",
-            "reasonCode": "unstructuredInteraction",
-            "reasonZh": "「为目标主机自动检测、安装或更新 OpenBitFun CLI 运行环境」涉及远端安装进度轮询、网络下载与中途取消控制；智能体会打开目标配置界面，由你确认并观察安装完成。",
-            "reasonEn": "\"Provision the target host and install or update the OpenBitFun CLI\" involves live remote installation polling and cancellation controls; the Agent opens the target provisioning flow so you can confirm and monitor setup."
           }
         },
         {
@@ -29404,15 +29341,15 @@
         }
       ],
       "stepsZh": [
-        "确保目标机器已登录同一账号在线，或已在本地保存好可用的 SSH 连接配置",
-        "在当前 Git 项目的聊天输入框底部点击「本机」芯片打开「这个任务在哪运行」菜单（或直接对智能体说明要派发到哪台设备），选定目标与权限审批策略",
-        "发送任务提示词；目标主机会自动准备环境、同步所需模型配置并在独立 Git Worktree 中启动执行",
+        "先在 SSH 目标上安装兼容的 OpenBitFun CLI，并保存 SSH 连接。",
+        "在聊天输入框底部点击「本机」，选择 SSH 主机。要派发到同账号设备时，直接告诉智能体目标设备和任务。",
+        "发送任务后，目标主机会同步所需的模型配置，并在独立的 Git worktree 中执行任务。",
         "执行期间可随时离线；重新打开会话即可查看最新进度、批复等待中的权限，完成后一键将结果同步回本机工作区"
       ],
       "stepsEn": [
-        "Make sure your target device is signed in to the same account and online, or save an SSH connection profile first",
-        "Click the \"This computer\" chip at the bottom of the chat input to open the \"Where this task runs\" menu (or ask the agent explicitly to dispatch to a named device), and pick your target and approval policy",
-        "Submit your prompt; the target provisions its runtime if needed, syncs model settings, and starts working in a dedicated Git worktree",
+        "Install a compatible OpenBitFun CLI on the SSH target and save its SSH connection.",
+        "Select an SSH host from the This computer menu in the composer. To use a same-account device, ask the Agent to dispatch your task to that device.",
+        "Submit the task. The target syncs the required model configuration and runs the job in a dedicated Git worktree.",
         "Disconnect anytime; reopen the session later to catch up on streamed events, approve pending permissions, or sync finished changes back locally"
       ],
       "agentExamplesZh": [
@@ -29633,18 +29570,16 @@
         "target host",
         "offline job",
         "background host",
-        "一键列出同账号在线设备与已保存 SSH 主机作为派发目标",
+        "可选择已配置的 SSH 主机派发任务，智能体也可派发到同账号设备",
         "提交后控制端可随时断网或休眠，目标机在独立 Git Worktree 自治执行",
         "断线重连后按游标增量回填完整对话与工具轨迹，支持远程回答权限请求",
         "任务完成后可将目标端改动安全同步回本机，绝不把本机当成脆弱的文件代理",
-        "Discover same-account devices and saved SSH hosts as ready-to-run targets",
+        "Dispatch to a configured SSH host, or ask the Agent to dispatch to a same-account device",
         "Disconnect or close your laptop freely while the target works in an isolated Git worktree",
         "Replay missed events incrementally by cursor on reconnect and answer pending permissions remotely",
         "Sync completed changes back cleanly without turning your controller into a fragile file proxy",
         "列出同账号下的所有设备与本机已保存的 SSH 目标",
         "List same-account devices and saved SSH dispatch targets",
-        "为目标主机自动检测、安装或更新 OpenBitFun CLI 运行环境",
-        "Provision the target host and install or update the OpenBitFun CLI",
         "在派发前按需将任务所选的模型配置同步给目标主机",
         "Sync required model configuration to the target before job submission",
         "从当前 Git 工作区向设备或 SSH 目标提交可离线运行的持久任务",

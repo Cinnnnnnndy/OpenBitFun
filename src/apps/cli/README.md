@@ -393,6 +393,16 @@ currently install an auto-start service; use `openbitfun daemon run` under a
 supervisor instead. Run `openbitfun daemon --help` for lifecycle commands and
 platform diagnostics.
 
+The CLI and Desktop check the 30-day Relay device credential on startup and
+then every seven days. When fewer than 15 days remain, the host uses its
+signed-in OpenBitFun account to request a fresh credential. It retries a
+failed check after an hour. If the Relay rejects the device credential or the
+host has lost its account login, sign in on that host again (`/login` in the CLI).
+
+Bot chats share their 24-hour delegation with their running remote turns and
+renew it on use after 12 hours. A device-list request rejected with HTTP 401
+gets one retry with a fresh delegation.
+
 ### Bots and Mobile Web from Claw
 
 In Claw chat, ask to start a WeChat, Telegram, or Feishu bot, inspect Remote
