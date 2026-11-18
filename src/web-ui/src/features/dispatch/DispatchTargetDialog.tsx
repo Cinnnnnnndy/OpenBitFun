@@ -137,7 +137,7 @@ export const DispatchTargetDialog: React.FC<DispatchTargetDialogProps> = ({
     };
   }, [open, targetId]);
 
-  // Retires every in-flight probe, model sync, and revision check, so a result
+  // Retires every in-flight probe and revision check, so a result
   // that lands after the dialog moved on cannot write to a closed dialog.
   const invalidatePendingWork = useCallback(() => {
     generationRef.current += 1;
@@ -209,17 +209,15 @@ export const DispatchTargetDialog: React.FC<DispatchTargetDialogProps> = ({
     }
     if (generation !== generationRef.current) return;
     // The target chooses where its worktree lands, so nothing is sent here.
-    const normalizedPath = '';
     const request = {
-          kind: 'ssh' as const,
-          connectionId: targetId,
-          workspacePath: normalizedPath,
-        };
+      kind: 'ssh' as const,
+      connectionId: targetId,
+      workspacePath: '',
+    };
     onReady({
       request,
       target: {
         ...request,
-        workspacePath: normalizedPath,
         displayName: target.displayName,
       },
       includeUncommitted,
@@ -280,22 +278,6 @@ export const DispatchTargetDialog: React.FC<DispatchTargetDialogProps> = ({
                 {t('dispatch.checkingTarget')}
               </div>
             ) : null}
-            {probeError ? (
-              <div className="dispatch-install-dialog__retry">
-                <span className="dispatch-install-dialog__hint">
-                  {t('dispatch.probeFailed')}
-                </span>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={probing}
-                  onClick={() => void runProbe()}
-                  leadingIcon={<Icon name="refresh" size="sm" aria-hidden />}
-                >
-                  {t('dispatch.retryCheck')}
-                </Button>
-              </div>
-            ) : null}
             {probe ? (
               <div className="dispatch-install-dialog__checks">
                 <div
@@ -309,6 +291,24 @@ export const DispatchTargetDialog: React.FC<DispatchTargetDialogProps> = ({
                       : t(probe.cliInstalled ? 'dispatch.cliUpdateRequired' : 'dispatch.cliUnavailable')}
                   </strong>
                 </div>
+              </div>
+            ) : null}
+            {probeError || (probe && !cliReady) ? (
+              <div className="dispatch-install-dialog__retry">
+                {probeError && (
+                  <span className="dispatch-install-dialog__hint">
+                    {t('dispatch.probeFailed')}
+                  </span>
+                )}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={probing}
+                  onClick={() => void runProbe()}
+                  leadingIcon={<Icon name="refresh" size="sm" aria-hidden />}
+                >
+                  {t('dispatch.retryCheck')}
+                </Button>
               </div>
             ) : null}
           </section>

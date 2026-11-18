@@ -300,6 +300,7 @@ describe('DispatchTargetDialog target preparation', () => {
     });
 
     expect(container.textContent).toContain('dispatch.cliUnavailable');
+    expect(container.textContent).toContain('dispatch.retryCheck');
     expect(container.textContent).not.toContain('target uses musl libc');
     expect(container.textContent).not.toContain('sourceBuild');
     expect(container.textContent).not.toContain('dispatch.oneClickDeploy');
