@@ -537,11 +537,11 @@
           }, 1200);
         }
 
+        var isWindows = (
+          (typeof navigator.userAgent === 'string' && navigator.userAgent.toUpperCase().includes('WINDOWS'))
+          || (typeof navigator.platform === 'string' && navigator.platform.toUpperCase().includes('WIN'))
+        );
         if (controls && window.__OPENBITFUN_SHOW_STARTUP_WINDOW_CONTROLS__) {
-          var isWindows = (
-            (typeof navigator.userAgent === 'string' && navigator.userAgent.toUpperCase().includes('WINDOWS'))
-            || (typeof navigator.platform === 'string' && navigator.platform.toUpperCase().includes('WIN'))
-          );
           controls.classList.toggle('window-controls--windows', isWindows);
           controls.querySelectorAll('[data-startup-window-control-platform]').forEach(function (glyph) {
             if (glyph.getAttribute('data-startup-window-control-platform') !== (isWindows ? 'windows' : 'generic')) {
@@ -597,7 +597,7 @@
               tauri.invoke('plugin:window|is_maximized', { label: windowLabel }),
               tauri.invoke('plugin:window|is_fullscreen', { label: windowLabel })
             ]).then(function (states) {
-              if (states[0] !== false || states[1] !== false
+              if (typeof states[0] !== 'boolean' || (states[0] && !isWindows) || states[1] !== false
                 || !startupOverlay.isConnected || startupOverlay.hasAttribute('inert')) return;
               return tauri.invoke('plugin:window|start_dragging', { label: windowLabel });
             }).catch(function () {});

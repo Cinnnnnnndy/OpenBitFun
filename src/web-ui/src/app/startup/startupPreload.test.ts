@@ -154,11 +154,15 @@ describe('startup preload shell', () => {
   });
 
   it.each([
-    { maximized: true, fullscreen: false, showControls: true },
-    { maximized: false, fullscreen: true, showControls: true },
-    { maximized: true, fullscreen: true, showControls: true },
-    { maximized: true, fullscreen: false, showControls: false },
-  ])('guards pre-React dragging with maximized=$maximized/fullscreen=$fullscreen/controls=$showControls', async ({ maximized, fullscreen, showControls }) => {
+    ...['Win32', 'Linux x86_64', 'MacIntel'].flatMap(platform => [
+      { platform, maximized: false, fullscreen: false, showControls: true },
+      { platform, maximized: true, fullscreen: false, showControls: true },
+      { platform, maximized: false, fullscreen: true, showControls: true },
+      { platform, maximized: true, fullscreen: true, showControls: true },
+    ]),
+    { platform: 'Win32', maximized: true, fullscreen: false, showControls: false },
+    { platform: 'Win32', maximized: true, fullscreen: true, showControls: false },
+  ])('guards pre-React $platform dragging with maximized=$maximized/fullscreen=$fullscreen/controls=$showControls', async ({ platform, maximized, fullscreen, showControls }) => {
     const state = { maximized, fullscreen };
     const invoke = vi.fn(async (command: string, payload: { request?: { action: string } }) => {
       if (command === 'plugin:window|is_maximized') return state.maximized;
@@ -174,6 +178,8 @@ describe('startup preload shell', () => {
       url: 'http://localhost:1422/',
       runScripts: 'dangerously',
       beforeParse(window) {
+        Object.defineProperty(window.navigator, 'platform', { value: platform });
+        Object.defineProperty(window.navigator, 'userAgent', { value: '' });
         Object.assign(window, {
           __OPENBITFUN_SHOW_STARTUP_WINDOW_CONTROLS__: showControls,
           __TAURI_INTERNALS__: { invoke, metadata: { currentWindow: { label: 'main' } } },
@@ -192,7 +198,9 @@ describe('startup preload shell', () => {
       expect(dom.window.document.querySelector('[data-tauri-drag-region]')).toBeNull();
       mouseDown(overlay);
       await flush();
-      expect(dragCalls()).toHaveLength(0);
+      const initiallyAllowed = !fullscreen && (!maximized || platform === 'Win32');
+      const initialDragCount = initiallyAllowed ? 1 : 0;
+      expect(dragCalls()).toHaveLength(initialDragCount);
 
       // Restore through the static shell, without React or a cached resize update.
       state.fullscreen = false;
@@ -202,20 +210,85 @@ describe('startup preload shell', () => {
       expect(state.maximized).toBe(false);
       mouseDown(overlay);
       await flush();
-      expect(dragCalls()).toEqual([['plugin:window|start_dragging', { label: 'main' }]]);
+      expect(dragCalls()).toEqual(Array.from({ length: initialDragCount + 1 }, () =>
+        ['plugin:window|start_dragging', { label: 'main' }],
+      ));
 
       mouseDown(overlay, { button: 1 });
       mouseDown(overlay, { button: 2 });
       mouseDown(overlay, { detail: 2 });
       mouseDown(overlay.querySelector('[data-startup-window-action="toggle_maximize"] svg')!);
       await flush();
-      expect(dragCalls()).toHaveLength(1);
+      expect(dragCalls()).toHaveLength(initialDragCount + 1);
 
       // A pending state read must not start dragging after the startup handoff.
       mouseDown(overlay);
       overlay.setAttribute('inert', '');
       await flush();
-      expect(dragCalls()).toHaveLength(1);
+      expect(dragCalls()).toHaveLength(initialDragCount + 1);
+
+      overlay.removeAttribute('inert');
+      mouseDown(overlay);
+      overlay.remove();
+      await flush();
+      expect(dragCalls()).toHaveLength(initialDragCount + 1);
+    } finally {
+      dom.window.close();
+    }
+  });
+
+  it.each(['browser', 'missing-metadata'])('does not expose startup gestures in a %s runtime', async runtime => {
+    const invoke = vi.fn(async () => false);
+    const dom = new JSDOM(readIndexHtml(), {
+      url: 'http://localhost:1422/',
+      runScripts: 'dangerously',
+      beforeParse(window) {
+        Object.defineProperty(window.navigator, 'platform', { value: 'Win32' });
+        if (runtime === 'missing-metadata') {
+          Object.assign(window, { __TAURI_INTERNALS__: { invoke } });
+        }
+      },
+    });
+    try {
+      const overlay = dom.window.document.getElementById('openbitfun-startup-overlay')!;
+      overlay.dispatchEvent(new dom.window.MouseEvent('mousedown', { bubbles: true, button: 0, detail: 1 }));
+      overlay.dispatchEvent(new dom.window.MouseEvent('dblclick', { bubbles: true, button: 0, detail: 2 }));
+      await new Promise(resolve => setTimeout(resolve, 0));
+      expect(invoke).not.toHaveBeenCalled();
+    } finally {
+      dom.window.close();
+    }
+  });
+
+  it.each([
+    { maximized: undefined, fullscreen: false },
+    { maximized: 'false', fullscreen: false },
+    { maximized: false, fullscreen: undefined },
+    { maximized: false, fullscreen: 'false' },
+  ])('requires boolean startup window state with maximized=$maximized/fullscreen=$fullscreen', async ({ maximized, fullscreen }) => {
+    const invoke = vi.fn(async (command: string) => {
+      if (command === 'plugin:window|is_maximized') return maximized;
+      if (command === 'plugin:window|is_fullscreen') return fullscreen;
+      if (command === 'plugin:window|start_dragging') return;
+      throw new Error(`Unexpected window command: ${command}`);
+    });
+    const dom = new JSDOM(readIndexHtml(), {
+      url: 'http://localhost:1422/',
+      runScripts: 'dangerously',
+      beforeParse(window) {
+        Object.defineProperty(window.navigator, 'platform', { value: 'Win32' });
+        Object.assign(window, {
+          __TAURI_INTERNALS__: { invoke, metadata: { currentWindow: { label: 'main' } } },
+        });
+      },
+    });
+    try {
+      const overlay = dom.window.document.getElementById('openbitfun-startup-overlay')!;
+      overlay.dispatchEvent(new dom.window.MouseEvent('mousedown', { bubbles: true, button: 0, detail: 1 }));
+      await new Promise(resolve => setTimeout(resolve, 0));
+      expect(invoke.mock.calls.map(([command]) => command)).toEqual([
+        'plugin:window|is_maximized', 'plugin:window|is_fullscreen',
+      ]);
     } finally {
       dom.window.close();
     }
