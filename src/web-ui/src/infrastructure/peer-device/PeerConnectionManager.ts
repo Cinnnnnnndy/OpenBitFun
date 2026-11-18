@@ -81,6 +81,10 @@ export interface PeerHostCapabilities {
   readonly modelChannelRoutingV1?: boolean;
   readonly responsesWebsocketV1?: boolean;
   readonly wholeSessionCopyV1?: boolean;
+  /** `fork_session`; every Desktop host has it, CLI hosts advertise this key. */
+  readonly sessionForkV1?: boolean;
+  /** Stop interrupts recoverably instead of hard-cancelling the Turn. */
+  readonly recoverableInterruptionV1?: boolean;
   readonly sessionTrajectoryV1?: boolean;
   readonly modelRoutingV1?: boolean;
   readonly modelPoolSelectionV1?: boolean;
@@ -256,6 +260,8 @@ const NO_CAPABILITIES: PeerHostCapabilities = {
   modelChannelRoutingV1: false,
   responsesWebsocketV1: false,
   wholeSessionCopyV1: false,
+  sessionForkV1: false,
+  recoverableInterruptionV1: false,
   sessionTrajectoryV1: false,
   modelRoutingV1: false,
   modelPoolSelectionV1: false,
@@ -730,6 +736,8 @@ export class PeerConnectionManager {
       modelChannelRoutingV1: caps?.model_channel_routing_v1 === true,
       responsesWebsocketV1: caps?.responses_websocket_v1 === true,
       wholeSessionCopyV1: caps?.whole_session_copy_v1 === true,
+      sessionForkV1: caps?.session_fork_v1 === true,
+      recoverableInterruptionV1: caps?.recoverable_interruption_v1 === true,
       sessionTrajectoryV1: caps?.session_trajectory_v1 === true,
       genUiLibrariesV1: caps?.gen_ui_libraries_v1 === true,
       modelRoutingV1: caps?.model_routing_v1 === true,

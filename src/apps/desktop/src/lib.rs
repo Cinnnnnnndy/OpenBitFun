@@ -2460,6 +2460,15 @@ async fn deliver_event_to_webview(
         attach_session_event_cursor(&mut projected.payload, cursor);
     }
 
+    deliver_projected_event(transport, projected).await;
+}
+
+/// Final product delivery for native and ACP projections alike. ACP records
+/// before enqueueing here; native events record after text coalescing above.
+pub(crate) async fn deliver_projected_event(
+    transport: &TauriTransportAdapter,
+    projected: openbitfun_events::AgenticFrontendEvent,
+) {
     for hub in api::remote_connect_api::host_stream_hubs().await {
         if let Some(session_id) = projected
             .payload

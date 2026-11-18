@@ -120,6 +120,7 @@ import { i18nService, useI18n } from '@/infrastructure/i18n';
 import { getActiveSurfaceScope, onSurfaceActivated } from '@/infrastructure/peer-device/deviceSurface';
 import { ResponsesRequestSettingsFields } from '@/infrastructure/config/components/ResponsesRequestSettingsFields';
 import { usePeerDeviceModeOptional } from '@/infrastructure/peer-device/peerDeviceContextState';
+import { peerHostRefusalMessage } from '@/infrastructure/peer-device/peerHostRefusal';
 import { canEditAccountPoolsOnSurface, canEditChannelRoutingOnSurface, canQuerySubscriptionQuotaOnSurface, canQueryModelQuotaOnSurface, canQueryGrokQuotaOnSurface } from '@/infrastructure/peer-device/peerCapabilityResolution';
 import { isPeerDeviceModeActive } from '@/infrastructure/peer-device/peerModeFlag';
 import { isTauriRuntime } from '@/infrastructure/runtime';
@@ -471,6 +472,8 @@ const ModelSettingsPage: React.FC = () => {
   const [routerSettingsScope, setRouterSettingsScope] = useState<ReturnType<typeof getActiveSurfaceScope> | null>(null);
   const [routerAvailability, setRouterAvailability] = useState<{ surfaceKey: string; status: ModelRoutingStatus } | null>(null);
   const [subscriptionLoadError, setSubscriptionLoadError] = useState(false);
+  /** Set when the rendered peer host does not offer subscription accounts at all. */
+  const [subscriptionUnavailable, setSubscriptionUnavailable] = useState<string | null>(null);
   const [isConfigLoading, setIsConfigLoading] = useState(!modelSeed.loaded);
   const [configLoadError, setConfigLoadError] = useState(false);
   const [proxyLoadState, setProxyLoadState] = useState<'loading' | 'ready' | 'error'>(proxySeed.loaded ? 'ready' : 'loading');
@@ -906,6 +909,7 @@ const ModelSettingsPage: React.FC = () => {
     const isCurrent = () => scope.isCurrent() && requestId === subscriptionAccountsReadRef.current;
     setIsLoadingSubscriptions(true);
     setSubscriptionLoadError(false);
+    setSubscriptionUnavailable(null);
     try {
       const items = await aiApi.listSubscriptionAccounts();
       if (!isCurrent()) return;
@@ -931,12 +935,22 @@ const ModelSettingsPage: React.FC = () => {
       }
     } catch (e) {
       if (!isCurrent()) return;
+      // A host that does not offer subscription accounts is not a transient
+      // failure: say so instead of offering a retry that cannot succeed.
+      const unavailable = peerHostRefusalMessage(e, t);
+      if (unavailable) {
+        setSubscriptionAccounts([]);
+        setAccountInstances([]);
+        setSubscriptionUnavailable(unavailable);
+        log.debug('Subscription accounts are unavailable on this host', { error: String(e) });
+        return;
+      }
       setSubscriptionLoadError(true);
       log.warn('list_subscription_accounts failed', { error: String(e) });
     } finally {
       if (isCurrent()) setIsLoadingSubscriptions(false);
     }
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     const refresh = () => { void refreshSubscriptionAccounts(); };
@@ -4448,8 +4462,11 @@ const ModelSettingsPage: React.FC = () => {
           <ConfigRetryState message={t('acquisition.loadFailed')} retryLabel={t('messages.retry')}
             loading={isLoadingSubscriptions} onRetry={() => void refreshSubscriptionAccounts()} />
         )}
+        {subscriptionUnavailable && !isLoadingSubscriptions && (
+          <ConfigEmptyState icon={<Wifi aria-hidden="true" />} description={subscriptionUnavailable} />
+        )}
         {isLoadingSubscriptions && <p className="openbitfun-model-settings__dialog-status" role="status">{t('messages.loading')}</p>}
-        {!isLoadingSubscriptions && !subscriptionLoadError && (browsingAccounts ? signedInAccounts.length === 0 : accounts.length === 0) && (
+        {!isLoadingSubscriptions && !subscriptionLoadError && !subscriptionUnavailable && (browsingAccounts ? signedInAccounts.length === 0 : accounts.length === 0) && (
           <ConfigEmptyState icon={<Wifi aria-hidden="true" />} description={t(browsingAccounts ? 'acquisition.noSignedInAccounts' : provider ? 'subscriptionAuth.serviceUnavailable' : 'acquisition.noServices')} />
         )}
         {importing ? <SubscriptionProviderPicker
