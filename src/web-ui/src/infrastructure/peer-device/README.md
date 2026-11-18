@@ -402,13 +402,19 @@ notification metadata.
     the hard `cancel_dialog_turn`. The host still falls back to hard
     cancellation for sessions it cannot interrupt recoverably.
 
-19b. **A side question follows its own session stream.** The surface only
-    subscribes its active session, and a `/btw` child renders beside it. After
-    `btw_ask_stream` is accepted the controller opens the child's relay
-    subscription; the host replays from its records, so events emitted before
-    the subscription opened are not lost. Closing a side question cancels it
-    with `cancel_session`; a CLI host older than that handler refuses it, and
-    the controller then stops the turn with `btw_cancel` before deleting.
+19b. **Every mounted transcript follows its own session stream.** A host
+    publishes a session's events only to subscribers of that session, child
+    sessions included, and peer session refresh subscribes only the active
+    session. `retainSessionHistory` therefore opens the relay subscription for
+    any other materialized session a pane mounts (side question, review, or
+    subagent pane, docked chat), which also re-subscribes those panes after a
+    device switch closes every subscription. The active session, unsent side
+    drafts, and metadata-only shells keep their existing owners. A side
+    question's first question opens its subscription once `btw_ask_stream` is
+    accepted; the host replays from its records, so earlier events are not
+    lost. Closing a side question cancels it with `cancel_session`; a CLI host
+    older than that handler refuses it, and the controller then stops the turn
+    with `btw_cancel` before deleting.
 
 20. **Chat PR/MR links require a supported peer review platform.**
     `review_platform_v1` advertises the workspace-backed PR viewer. Older
