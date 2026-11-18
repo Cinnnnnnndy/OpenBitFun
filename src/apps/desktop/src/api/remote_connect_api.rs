@@ -705,6 +705,9 @@ async fn send_rpc_error(
     .await;
 }
 
+static RENEWAL_WAKE: std::sync::LazyLock<Arc<tokio::sync::Notify>> =
+    std::sync::LazyLock::new(|| Arc::new(tokio::sync::Notify::new()));
+
 /// Global flag set when the relay returns HTTP 401 (token expired). The
 /// frontend checks this via `account_token_expired` and prompts re-login.
 static TOKEN_EXPIRED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -732,6 +735,12 @@ async fn invalidate_local_account_session_if_current(
         log::info!("Ignored auth failure from a stale account generation");
         return false;
     }
+    if let Ok((session, relay)) = read_account_context_for_generation(expected_generation).await {
+        if session_store::has_saved_replacement(&session, &relay) {
+            RENEWAL_WAKE.notify_one();
+            return false;
+        }
+    }
     let Some(_transition_guard) = begin_account_transition_if_current(expected_generation).await
     else {
         log::info!("Ignored auth failure from a stale account generation");
@@ -753,7 +762,9 @@ async fn invalidate_local_account_session_if_current(
         service.clear_bot_delegated_identities().await;
     }
     *get_account_context().write().await = None;
-    session_store::clear_session();
+    if let Err(error) = session_store::clear_rejected_session(expected_token) {
+        log::warn!("Failed to clear rejected session: {error}");
+    }
     emit_account_event(
         "account://login-state",
         serde_json::json!({ "logged_in": false, "reason": "session_expired" }),
@@ -1373,8 +1384,11 @@ async fn register_delegated_identity_providers() {
             {
                 Ok(delegated) if account_context_is_current(generation) => Some((
                     context.relay_url,
-                    delegated.token,
-                    delegated.device_secret.to_vec(),
+                    openbitfun_core::service::remote_connect::AccountSession::new(
+                        delegated.token,
+                        delegated.user_id,
+                        delegated.device_secret,
+                    ),
                 )),
                 Ok(_) => None,
                 Err(e) => {
@@ -1392,10 +1406,47 @@ fn register_page_tool_hosts() {
     register_page_publish_host();
 }
 
+async fn maintain_device_session() -> anyhow::Result<bool> {
+    let generation = account_context_generation();
+    let Ok((old, relay_url)) = read_account_context_for_generation(generation).await else {
+        return Ok(true);
+    };
+    let Some(saved) = session_store::renew_session_if_due(false).await? else {
+        return Ok(true);
+    };
+    if !saved.replaces(&old, &relay_url) {
+        return Ok(true);
+    }
+    let Some(transition) = begin_account_transition_if_current(generation).await else {
+        return Ok(true);
+    };
+    let reconnect = device_routing_owner_for_account(generation, &old.token).is_some();
+    *get_account_context().write().await = Some(AccountContextState {
+        session: AccountSession::new(saved.token, saved.user_id, saved.master_key),
+        relay_url,
+    });
+    drop(transition);
+    if reconnect {
+        account_connect_devices_with_retry()
+            .await
+            .map_err(anyhow::Error::msg)?;
+    }
+    Ok(true)
+}
+
 pub fn init_on_startup() {
     register_page_tool_hosts();
     tokio::spawn(async {
         let startup_generation = account_context_generation();
+        let error = session_store::renew_session_if_due(false).await.err();
+        if let Some(error) = &error {
+            log::warn!("Startup device credential maintenance failed: {error}");
+        }
+        session_store::schedule_renewal_checks(
+            RENEWAL_WAKE.clone(),
+            error.is_some(),
+            maintain_device_session,
+        );
         // Restore persisted account session (if any) before anything else
         // so that device routing and bot delegation work on restart.
         match session_store::load_session_detailed() {
@@ -2309,7 +2360,7 @@ async fn persist_account_session(device_id: Option<&str>) -> Result<(), String> 
     // Login installs the context while its transition permit is still held;
     // this internal persistence step intentionally reads that staged value.
     let (session, relay_url) = read_account_context_raw().await?;
-    session_store::save_session_with_device(
+    session_store::save_issued_session(
         &session.token,
         &session.user_id,
         &session.master_key,
@@ -2678,13 +2729,8 @@ async fn connect_route_devices(route: RelayRoute) -> Result<Vec<OnlineDeviceInfo
     install_device_routing_owner(routing_owner.clone());
 
     if route == RelayRoute::Official {
-        if let Err(e) = session_store::save_session_with_device(
-            &session.token,
-            &session.user_id,
-            &session.master_key,
-            &relay_url,
-            Some(auth_device_id.as_str()),
-        ) {
+        if let Err(e) = session_store::record_authenticated_device(&session.token, &auth_device_id)
+        {
             log::warn!("Failed to persist AuthOk device_id into session: {e}");
         }
     }

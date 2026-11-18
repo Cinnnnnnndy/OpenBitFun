@@ -415,6 +415,10 @@ pub fn persisted_relay_requires_migration(relay_url: &str) -> bool {
             .is_some_and(|ip| ip.is_private() || ip.is_loopback() || ip.is_link_local())
 }
 
+#[derive(Debug, thiserror::Error)]
+#[error("{0}")]
+pub struct RelayUnauthorized(String);
+
 /// Check whether an account/relay error message indicates an invalid or
 /// expired account token (relay auth failure). Shared by Desktop, CLI, and
 /// account surfaces so they all react to the same relay wording.
@@ -459,9 +463,9 @@ pub fn validate_relay_base_url(relay_url: &str) -> Result<reqwest::Url> {
                 (Some(version), None)
                     if !version.is_empty()
                         && version.len() <= 32
-                        && version
-                            .bytes()
-                            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-')) =>
+                        && version.bytes().all(|byte| {
+                            byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-')
+                        }) =>
                 {
                     true
                 }
@@ -567,6 +571,20 @@ impl AccountClient {
         AccountSession,
         openbitfun_product_domains::account::GitHubUser,
     )> {
+        self.exchange_identity(relay_url, device, device_kind, None)
+            .await
+    }
+
+    pub(super) async fn exchange_identity(
+        &self,
+        relay_url: &str,
+        device: &DeviceIdentity,
+        device_kind: &str,
+        previous: Option<&super::session_store::LoadedSession>,
+    ) -> Result<(
+        AccountSession,
+        openbitfun_product_domains::account::GitHubUser,
+    )> {
         let mut identity =
             crate::account_identity::AccountIdentityClient::from_environment().await?;
         let profile = identity
@@ -581,8 +599,11 @@ impl AccountClient {
             .user
             .identity_id()
             .ok_or_else(|| anyhow!("Unsupported account identity"))?;
-        let device_secret =
-            super::session_store::device_secret(relay_url, &account_id, &device.device_id)?;
+        let device_secret = match previous {
+            Some(saved) if saved.user_id == account_id => saved.master_key,
+            Some(_) => return Err(anyhow!("Sign in with the original device account to renew")),
+            None => super::session_store::device_secret(relay_url, &account_id, &device.device_id)?,
+        };
         let body = login_request_body(
             &access_token,
             device,
@@ -654,7 +675,7 @@ impl AccountClient {
                 "relay returned HTTP 507 Insufficient Storage (the configured account or asset quota is full)"
             );
         }
-        match serde_json::from_slice::<ErrorBody>(body) {
+        let error = match serde_json::from_slice::<ErrorBody>(body) {
             Ok(body) => {
                 let msg = body.error;
                 if let Some(retry) = body.retry_after_secs {
@@ -664,6 +685,11 @@ impl AccountClient {
                 }
             }
             Err(_) => anyhow!("relay returned HTTP {status}"),
+        };
+        if status == reqwest::StatusCode::UNAUTHORIZED {
+            RelayUnauthorized(error.to_string()).into()
+        } else {
+            error
         }
     }
 

@@ -68,8 +68,11 @@ pub(crate) async fn activate_daemon(
                 .ok()?;
             account.account_context_is_current(generation).then_some((
                 relay_url,
-                delegated.token,
-                delegated.device_secret.to_vec(),
+                openbitfun_core::service::remote_connect::AccountSession::new(
+                    delegated.token,
+                    delegated.user_id,
+                    delegated.device_secret,
+                ),
             ))
         }
     });

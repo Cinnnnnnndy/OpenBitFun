@@ -397,7 +397,7 @@ impl CliAccountRoutingHost {
                     tracing::warn!("Failed to adopt AuthOk device_id: {error}");
                     return;
                 }
-                if let Ok((session, relay_url)) = runtime
+                if let Ok((session, _)) = runtime
                     .read_account_context_for_generation(account_generation)
                     .await
                 {
@@ -425,13 +425,9 @@ impl CliAccountRoutingHost {
                         if let Some(old) = self.host_stream_hub.write().await.replace(hub) {
                             old.close();
                         }
-                        if let Err(error) = session_store::save_session_with_device(
-                            &session.token,
-                            &session.user_id,
-                            &session.master_key,
-                            &relay_url,
-                            Some(device_id.as_str()),
-                        ) {
+                        if let Err(error) =
+                            session_store::record_authenticated_device(&session.token, &device_id)
+                        {
                             tracing::warn!("Failed to persist AuthOk device_id: {error}");
                         }
                     }
@@ -727,6 +723,10 @@ impl AccountRuntimeHost for CliAccountRoutingHost {
     async fn stop_device_routing(&self) {
         crate::remote_control::retire_daemon_account().await;
         self.stop_routing().await;
+    }
+
+    async fn device_routing_is_active(&self) -> bool {
+        self.relay_client.read().await.is_some()
     }
 
     async fn device_routing_is_standby(&self) -> bool {
