@@ -34,8 +34,9 @@ use openbitfun_product_domains::product_search::{
 #[cfg(feature = "product-search")]
 use openbitfun_runtime_ports::ProductSearchPort;
 use openbitfun_runtime_ports::{
-    AgentContextReloadPort, AgentContextReloadRequest, ClockPort, LocalWorkspaceSnapshotPort,
-    LocalWorkspaceSnapshotSessionRequest, LocalWorkspaceSnapshotStats,
+    AgentContextReloadPort, AgentContextReloadRequest, ClockPort,
+    LocalWorkspaceSnapshotFileDiffStats, LocalWorkspaceSnapshotFileRequest,
+    LocalWorkspaceSnapshotPort, LocalWorkspaceSnapshotSessionRequest, LocalWorkspaceSnapshotStats,
     LocalWorkspaceSnapshotTurnRequest, PortError, PortErrorKind, PortResult,
     RuntimeServiceCapability, RuntimeServicePort, SessionStoragePathRequest, SessionStorePort,
     SessionTranscriptRequest, SessionTurnWindowRequest, SessionViewRestoreTiming,
@@ -752,6 +753,29 @@ impl LocalWorkspaceSnapshotPort for CoreLocalWorkspaceSnapshot {
             total_files: stats.total_files,
             total_turns: stats.total_turns,
             total_changes: stats.total_changes,
+        })
+    }
+
+    async fn get_session_file_diff_stats(
+        &self,
+        request: LocalWorkspaceSnapshotFileRequest,
+    ) -> PortResult<LocalWorkspaceSnapshotFileDiffStats> {
+        validate_persisted_session_id(&request.session_id).map_err(runtime_port_error)?;
+        let manager = local_snapshot_manager_for_view(&request.workspace_id).await?;
+        let stats = manager
+            .get_session_file_diff_stats_before(
+                &request.session_id,
+                &request.file_path,
+                request.max_turn_exclusive,
+            )
+            .await
+            .map_err(snapshot_port_error)?;
+        Ok(LocalWorkspaceSnapshotFileDiffStats {
+            file_path: stats.file_path,
+            lines_added: stats.lines_added,
+            lines_removed: stats.lines_removed,
+            approximate: stats.approximate,
+            change_kind: stats.change_kind,
         })
     }
 
