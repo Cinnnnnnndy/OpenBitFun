@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mockCreateSession = vi.fn();
 const mockAskStream = vi.fn();
@@ -11,6 +11,7 @@ const mockUpdateSessionReasoningPreset = vi.fn();
 const mockEnsureBackendSession = vi.fn();
 const mockUpdateSessionModelPool = vi.fn();
 const mockLoadRelaySessionHistory = vi.fn();
+const mockRelayHostHasTurn = vi.fn();
 
 const sessions = new Map<string, any>();
 
@@ -28,6 +29,7 @@ vi.mock('../store/FlowChatStore', () => ({
     getState: () => ({ sessions }),
     updateSessionModelPool: (...args: any[]) => mockUpdateSessionModelPool(...args),
     loadRelaySessionHistory: (...args: any[]) => mockLoadRelaySessionHistory(...args),
+    relayHostHasTurn: (...args: any[]) => mockRelayHostHasTurn(...args),
     addExternalSession: (...args: any[]) => mockAddExternalSession(...args),
     updateSessionRelationship: (...args: any[]) => mockUpdateSessionRelationship(...args),
     updateSessionBtwOrigin: (...args: any[]) => mockUpdateSessionBtwOrigin(...args),
@@ -91,6 +93,7 @@ describe('BtwThreadService', () => {
     });
     mockAskStream.mockResolvedValue({ ok: true });
     mockLoadRelaySessionHistory.mockResolvedValue(undefined);
+    mockRelayHostHasTurn.mockReturnValue(false);
     mockCreateSession.mockResolvedValue({
       sessionId: 'child-1',
     });
@@ -369,6 +372,40 @@ describe('BtwThreadService', () => {
       activateSurface(surfaceIdForDevice(null));
     }
     expect(mockLoadRelaySessionHistory).not.toHaveBeenCalled();
+  });
+
+  describe('a lost peer reply', () => {
+    const replyLost = () => new Error('Relay connection closed before the reply arrived');
+    const send = () => sendMessageToBtwSession({
+      parentSessionId: 'parent-1', childSessionId: 'btw-child', question: 'Any news?', requestId: 'request-7',
+    });
+
+    beforeEach(() => {
+      sessions.set('btw-child', { sessionId: 'btw-child', sessionKind: 'btw', config: {}, dialogTurns: [] });
+      activateSurface(surfaceIdForDevice('peer-device-1'));
+    });
+    afterEach(() => activateSurface(surfaceIdForDevice(null)));
+
+    it('is accepted when the host records show the question was admitted', async () => {
+      mockAskStream.mockRejectedValueOnce(replyLost());
+      mockRelayHostHasTurn.mockReturnValue(true);
+      await expect(send()).resolves.toEqual({ requestId: 'request-7' });
+      expect(mockRelayHostHasTurn).toHaveBeenCalledWith('btw-child', 'btw-turn-request-7');
+      expect(mockAskStream).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps the original error when the host never admitted it', async () => {
+      mockAskStream.mockRejectedValueOnce(replyLost());
+      mockLoadRelaySessionHistory.mockRejectedValueOnce(new Error('Session not found'));
+      await expect(send()).rejects.toThrow('Relay connection closed before the reply arrived');
+      expect(mockRelayHostHasTurn).not.toHaveBeenCalled();
+    });
+
+    it('does not probe the host for an ordinary refusal', async () => {
+      mockAskStream.mockRejectedValueOnce(new Error('model unavailable'));
+      await expect(send()).rejects.toThrow('model unavailable');
+      expect(mockLoadRelaySessionHistory).not.toHaveBeenCalled();
+    });
   });
 
   it('discards the local placeholder when the first /btw request fails', async () => {

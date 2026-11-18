@@ -15,6 +15,7 @@ import type { ImagePayload } from '../utils/imagePayload';
 import { absoluteSessionTurnIndexForId } from '../utils/flowChatTurnOrdinal';
 import { requireSessionWorkspaceId, sessionWorkspaceId } from '../utils/sessionWorkspace';
 import { getActiveSurfaceScope } from '@/infrastructure/peer-device/deviceSurface';
+import { isPeerReplyLost } from '@/infrastructure/peer-device/peerReplyLost';
 import { assertSessionConversationCanSubmit } from '../session-drivers/conversationCapability';
 import { trackBtwSessionSubmission } from './btwSessionSubmission';
 import { createLogger } from '@/shared/utils/logger';
@@ -320,6 +321,29 @@ function followBtwSessionOnPeer(
   });
 }
 
+/**
+ * A Relay reconnect can lose the reply after the host already admitted the
+ * question, and `btw_ask_stream` is not replayed. Confirm by reading the
+ * host's records for the Turn its request id names instead of resubmitting,
+ * as a dialog turn with an unknown outcome is confirmed.
+ */
+async function btwQuestionReachedHost(
+  scope: ReturnType<typeof getActiveSurfaceScope>,
+  childSessionId: string,
+  requestId: string,
+  error: unknown,
+): Promise<boolean> {
+  if (scope.surfaceId === 'local' || !isPeerReplyLost(error) || !scope.isCurrent()) return false;
+  try {
+    await flowChatStore.loadRelaySessionHistory(childSessionId);
+  } catch {
+    // The host never created the child, so it never admitted the question.
+    return false;
+  }
+  return scope.isCurrent()
+    && flowChatStore.relayHostHasTurn(childSessionId, `btw-turn-${requestId.trim()}`);
+}
+
 export async function sendMessageToBtwSession(params: {
   parentSessionId: string;
   childSessionId: string;
@@ -370,6 +394,14 @@ export async function sendMessageToBtwSession(params: {
     ...(params.userMessageMetadata ? { userMessageMetadata: params.userMessageMetadata } : {}),
     ...(params.initialModelSelection ? { initialModelSelection: params.initialModelSelection } : {}),
     ...(params.initialModelTarget ? { initialModelTarget: params.initialModelTarget } : {}),
+  }).catch(async error => {
+    // Closing waits for this confirmation as part of the submission.
+    if (!await btwQuestionReachedHost(scope, params.childSessionId, requestId, error)) throw error;
+    log.info('Side question was admitted before its reply was lost', {
+      childSessionId: params.childSessionId,
+      requestId,
+    });
+    return { ok: true };
   }));
   followBtwSessionOnPeer(scope, params.childSessionId);
   if (scope.isCurrent() && params.initialModelTarget?.selection.kind === 'pool') {
