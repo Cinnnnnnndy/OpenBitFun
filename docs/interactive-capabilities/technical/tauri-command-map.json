@@ -1,11 +1,11 @@
 {
   "schemaVersion": 2,
   "generatedFrom": "src/shared/interactive-capabilities/catalog.json",
-  "catalogDigest": "408cc52581d52de1e3686853eec8a09b2c02129869cb82b2931e21694e10557b",
-  "commandCount": 705,
+  "catalogDigest": "82954fefebb8251023c36bd1f83f9e740c4889da4e22712089e80e3234c6267c",
+  "commandCount": 701,
   "coverage": {
-    "commandCount": 705,
-    "documentedCommandCount": 638,
+    "commandCount": 701,
+    "documentedCommandCount": 634,
     "implementationCommandCount": 67,
     "implementationDigest": "3c03db6cdd74260fd8b7203d30ea4ab7224b4cfdea4a532c11e41a587cd92b19"
   },
@@ -2204,54 +2204,6 @@
       "remoteWorkspacePolicy": "WorkspaceAgnostic"
     },
     {
-      "id": "dispatch_install_cli_cancel",
-      "moduleId": "dispatch",
-      "capabilityId": "feature.detached-dispatch",
-      "capabilityIds": [
-        "feature.detached-dispatch"
-      ],
-      "documentedItemIds": [
-        "feature.detached-dispatch:provision"
-      ],
-      "visibility": "documented",
-      "rustPath": "api::dispatch_api::dispatch_install_cli_cancel",
-      "sourceFile": "src/apps/desktop/src/api/dispatch_api.rs",
-      "signature": "fn dispatch_install_cli_cancel( state: State<'_, AppState>, request: DispatchConnectionRequest, ) -> Result<(), String>",
-      "remoteWorkspacePolicy": "WorkspaceAgnostic"
-    },
-    {
-      "id": "dispatch_install_cli_poll",
-      "moduleId": "dispatch",
-      "capabilityId": "feature.detached-dispatch",
-      "capabilityIds": [
-        "feature.detached-dispatch"
-      ],
-      "documentedItemIds": [
-        "feature.detached-dispatch:provision"
-      ],
-      "visibility": "documented",
-      "rustPath": "api::dispatch_api::dispatch_install_cli_poll",
-      "sourceFile": "src/apps/desktop/src/api/dispatch_api.rs",
-      "signature": "fn dispatch_install_cli_poll( state: State<'_, AppState>, request: DispatchInstallPollRequest, ) -> Result<DispatchInstallPoll, String>",
-      "remoteWorkspacePolicy": "WorkspaceAgnostic"
-    },
-    {
-      "id": "dispatch_install_cli_start",
-      "moduleId": "dispatch",
-      "capabilityId": "feature.detached-dispatch",
-      "capabilityIds": [
-        "feature.detached-dispatch"
-      ],
-      "documentedItemIds": [
-        "feature.detached-dispatch:provision"
-      ],
-      "visibility": "documented",
-      "rustPath": "api::dispatch_api::dispatch_install_cli_start",
-      "sourceFile": "src/apps/desktop/src/api/dispatch_api.rs",
-      "signature": "fn dispatch_install_cli_start( state: State<'_, AppState>, request: DispatchInstallStartRequest, ) -> Result<DispatchInstallStart, String>",
-      "remoteWorkspacePolicy": "WorkspaceAgnostic"
-    },
-    {
       "id": "dispatch_list_jobs",
       "moduleId": "dispatch",
       "capabilityId": "feature.detached-dispatch",
@@ -2313,22 +2265,6 @@
       "rustPath": "api::dispatch_api::dispatch_probe_target",
       "sourceFile": "src/apps/desktop/src/api/dispatch_api.rs",
       "signature": "fn dispatch_probe_target( state: State<'_, AppState>, request: DispatchProbeTargetRequest, ) -> Result<DispatchSshProbe, String>",
-      "remoteWorkspacePolicy": "WorkspaceAgnostic"
-    },
-    {
-      "id": "dispatch_provision_target",
-      "moduleId": "dispatch",
-      "capabilityId": "feature.detached-dispatch",
-      "capabilityIds": [
-        "feature.detached-dispatch"
-      ],
-      "documentedItemIds": [
-        "feature.detached-dispatch:provision"
-      ],
-      "visibility": "documented",
-      "rustPath": "api::dispatch_api::dispatch_provision_target",
-      "sourceFile": "src/apps/desktop/src/api/dispatch_api.rs",
-      "signature": "fn dispatch_provision_target( state: State<'_, AppState>, request: DispatchConnectionRequest, ) -> Result<DispatchProvisionTargetResult, String>",
       "remoteWorkspacePolicy": "WorkspaceAgnostic"
     },
     {

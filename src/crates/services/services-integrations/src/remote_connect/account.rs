@@ -375,16 +375,6 @@ pub struct DelegateToken {
     pub device_secret: [u8; 32],
 }
 
-/// Full device credential minted for a distinct SSH host. Unlike
-/// [`DelegateToken`], this token may authenticate a device WebSocket and is
-/// therefore only issued by the narrow authenticated provisioning endpoint.
-#[derive(Clone, Serialize, Deserialize)]
-pub struct ProvisionedDeviceToken {
-    pub token: String,
-    pub user_id: String,
-    pub device_id: String,
-}
-
 // ── Relay HTTP client ───────────────────────────────────────────────────
 
 #[derive(Deserialize)]
@@ -708,51 +698,6 @@ impl AccountClient {
             user_id: auth.user_id,
             device_secret,
         })
-    }
-
-    /// Register a new account device and mint its full routing token.
-    ///
-    /// `device_kind` is what keeps the minted row out of the wrong lists: this
-    /// route serves both an SSH host being bootstrapped (`"desktop"`) and a
-    /// keyboard-less peer that cannot type a password (`"watch"`), and only the
-    /// caller knows which one it is holding.
-    /// `request_id` makes an ambiguous HTTP response safe to replay.
-    pub async fn provision_device_token(
-        &self,
-        relay_url: &str,
-        session: &AccountSession,
-        device_id: &str,
-        device_name: &str,
-        device_kind: &str,
-        request_id: uuid::Uuid,
-        device_secret: &[u8; 32],
-    ) -> Result<ProvisionedDeviceToken> {
-        let body = serde_json::json!({
-            "device_id": device_id,
-            "device_name": device_name,
-            "device_kind": device_kind,
-            "public_key": device_crypto::public_key_base64(device_secret),
-            "request_id": request_id.to_string(),
-        });
-        let resp = send_with_retry(
-            "provision account device",
-            self.http
-                .post(Self::endpoint(relay_url, "/api/auth/provision-device")?)
-                .header("Authorization", Self::auth_header(session))
-                .json(&body),
-            RelayHttpRetry::IdempotentWrite,
-        )
-        .await?;
-        if !resp.status().is_success() {
-            return Err(Self::into_buffered_error(resp));
-        }
-        let provisioned: ProvisionedDeviceToken = resp.json().await?;
-        if provisioned.user_id != session.user_id || provisioned.device_id != device_id {
-            return Err(anyhow!(
-                "relay returned a mismatched provisioned device identity"
-            ));
-        }
-        Ok(provisioned)
     }
 
     /// Revoke the account token on the relay (server-side logout).

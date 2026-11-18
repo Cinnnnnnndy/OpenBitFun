@@ -50,60 +50,11 @@ pub mod dispatch_ssh {
         pub protocol: Option<Value>,
     }
 
-    #[derive(Debug, Clone, Serialize, Deserialize)]
-    #[serde(rename_all = "camelCase")]
-    pub struct DispatchInstallStart {
-        pub script_path: String,
-        pub version: String,
-        pub target: String,
-        pub url: String,
-        pub sha256: String,
-    }
-
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-    #[serde(rename_all = "snake_case")]
-    pub enum DispatchInstallStatus {
-        Running,
-        Succeeded,
-        Failed,
-    }
-
-    #[derive(Debug, Clone, Serialize, Deserialize)]
-    #[serde(rename_all = "camelCase")]
-    pub struct DispatchInstallPoll {
-        pub cursor: u64,
-        pub output: String,
-        pub status: DispatchInstallStatus,
-    }
-
     pub async fn probe(
         _manager: &SSHConnectionManager,
         _connection_id: &str,
         _workspace_path: Option<&str>,
     ) -> anyhow::Result<DispatchSshProbe> {
-        Err(unsupported())
-    }
-
-    pub async fn install_cli_start(
-        _manager: &SSHConnectionManager,
-        _connection_id: &str,
-        _expected_release: &DispatchCliRelease,
-    ) -> anyhow::Result<DispatchInstallStart> {
-        Err(unsupported())
-    }
-
-    pub async fn install_cli_poll(
-        _manager: &SSHConnectionManager,
-        _connection_id: &str,
-        _cursor: u64,
-    ) -> anyhow::Result<DispatchInstallPoll> {
-        Err(unsupported())
-    }
-
-    pub async fn install_cli_cancel(
-        _manager: &SSHConnectionManager,
-        _connection_id: &str,
-    ) -> anyhow::Result<()> {
         Err(unsupported())
     }
 

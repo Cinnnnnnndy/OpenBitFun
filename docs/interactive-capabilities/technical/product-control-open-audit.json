@@ -1,12 +1,12 @@
 {
   "schemaVersion": 1,
   "generatedFrom": "src/shared/interactive-capabilities/catalog.json",
-  "catalogDigest": "408cc52581d52de1e3686853eec8a09b2c02129869cb82b2931e21694e10557b",
-  "count": 231,
+  "catalogDigest": "82954fefebb8251023c36bd1f83f9e740c4889da4e22712089e80e3234c6267c",
+  "count": 230,
   "reasonCounts": {
     "externalAuth": 4,
     "secretEntry": 6,
-    "unstructuredInteraction": 194,
+    "unstructuredInteraction": 193,
     "visualSelection": 27
   },
   "entries": [
@@ -2220,28 +2220,6 @@
         "command:peer_control_detach",
         "command:peer_controller_set_active",
         "command:peer_mode_ping"
-      ]
-    },
-    {
-      "capabilityId": "feature.detached-dispatch",
-      "itemId": "provision",
-      "titleZh": "为目标主机自动检测、安装或更新 OpenBitFun CLI 运行环境",
-      "titleEn": "Provision the target host and install or update the OpenBitFun CLI",
-      "reasonCode": "unstructuredInteraction",
-      "reasonZh": "「为目标主机自动检测、安装或更新 OpenBitFun CLI 运行环境」涉及远端安装进度轮询、网络下载与中途取消控制；智能体会打开目标配置界面，由你确认并观察安装完成。",
-      "reasonEn": "\"Provision the target host and install or update the OpenBitFun CLI\" involves live remote installation polling and cancellation controls; the Agent opens the target provisioning flow so you can confirm and monitor setup.",
-      "presentationTarget": {
-        "kind": "event",
-        "eventName": "openbitfun:open-remote-connect",
-        "detail": {
-          "group": "account"
-        }
-      },
-      "evidence": [
-        "command:dispatch_provision_target",
-        "command:dispatch_install_cli_start",
-        "command:dispatch_install_cli_poll",
-        "command:dispatch_install_cli_cancel"
       ]
     },
     {

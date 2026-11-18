@@ -1,15 +1,10 @@
 //! Tauri commands for Remote Connect.
 
 use crate::embedded_relay_host::DesktopEmbeddedRelayHost;
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use openbitfun_core::agentic::tools::account_login_capability::set_account_login_available;
 use openbitfun_core::agentic::tools::page_deploy_host::set_page_deploy_handler;
 use openbitfun_core::agentic::tools::page_manage_host::set_page_manage_handler;
 use openbitfun_core::agentic::tools::page_publish_host::set_page_publish_handler;
-use openbitfun_core::service::dispatch::{
-    DispatchAccountDaemonIdentity, DispatchAccountDaemonProvisionRequest,
-    DISPATCH_ACCOUNT_DAEMON_PROVISIONING_SCHEMA_VERSION,
-};
 use openbitfun_core::service::remote_connect::session_store::{
     clear_credential_hint, load_credential_hint, save_credential_hint, AccountHint,
 };
@@ -900,116 +895,6 @@ pub(crate) async fn read_account_context_for_generation(
         return Err("account context changed".to_string());
     }
     Ok(context)
-}
-
-/// Secret-bearing, Rust-only handoff for one SSH target bootstrap. It is never
-/// serialized through Tauri; only its redacted outcome reaches the Web UI.
-pub(crate) struct DispatchAccountDeviceProvisioning {
-    pub(crate) request: DispatchAccountDaemonProvisionRequest,
-    target_session: AccountSession,
-    relay_url: String,
-}
-
-impl DispatchAccountDeviceProvisioning {
-    pub(crate) fn device_id(&self) -> &str {
-        &self.request.device_id
-    }
-
-    pub(crate) fn user_id(&self) -> &str {
-        &self.request.user_id
-    }
-}
-
-/// Mint a distinct full device credential for an SSH host. Callers receive
-/// `None` and skip account/daemon setup when this Desktop is logged out.
-pub(crate) async fn provision_dispatch_account_device(
-    identity: &DispatchAccountDaemonIdentity,
-) -> Result<Option<DispatchAccountDeviceProvisioning>, String> {
-    let generation = account_context_generation();
-    let Ok(_account_guard) = lock_account_operation(generation).await else {
-        return Ok(None);
-    };
-    let (session, relay_url) = match read_account_context_for_generation(generation).await {
-        Ok(context) => context,
-        Err(error) if error == "not logged in" => return Ok(None),
-        Err(error) => return Err(error),
-    };
-    let request_id = uuid::Uuid::new_v4();
-    let target_secret =
-        openbitfun_services_integrations::remote_connect::device_crypto::provisioning_secret(
-            &session.master_key,
-            &identity.device_id,
-            &request_id.to_string(),
-        );
-    let issued = AccountClient::new()
-        .provision_device_token(
-            &relay_url,
-            &session,
-            &identity.device_id,
-            &identity.device_name,
-            "desktop",
-            request_id,
-            &target_secret,
-        )
-        .await
-        .map_err(|error| format!("provision remote account device: {error}"))?;
-    let target_session =
-        AccountSession::new(issued.token.clone(), issued.user_id.clone(), target_secret);
-    let provisioning = DispatchAccountDeviceProvisioning {
-        request: DispatchAccountDaemonProvisionRequest {
-            schema_version: DISPATCH_ACCOUNT_DAEMON_PROVISIONING_SCHEMA_VERSION,
-            token: issued.token,
-            user_id: issued.user_id,
-            master_key_base64: BASE64.encode(target_secret),
-            relay_url: relay_url.clone(),
-            device_id: issued.device_id,
-        },
-        target_session,
-        relay_url,
-    };
-    if !account_context_matches(generation, &session.token).await {
-        let _ = remove_dispatch_account_device(&provisioning).await;
-        return Err("account context changed while provisioning the SSH target".to_string());
-    }
-    Ok(Some(provisioning))
-}
-
-pub(crate) async fn wait_for_dispatch_account_device_online(
-    provisioning: &DispatchAccountDeviceProvisioning,
-) -> Result<(), String> {
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
-    loop {
-        let devices = AccountClient::new()
-            .list_devices(&provisioning.relay_url, &provisioning.target_session)
-            .await
-            .map_err(|error| format!("verify remote daemon connection: {error}"))?;
-        if devices
-            .iter()
-            .any(|device| device.device_id == provisioning.request.device_id && device.online)
-        {
-            return Ok(());
-        }
-        if tokio::time::Instant::now() >= deadline {
-            return Err(
-                "remote OpenBitFun daemon did not connect to the relay within 30 seconds"
-                    .to_string(),
-            );
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-    }
-}
-
-pub(crate) async fn remove_dispatch_account_device(
-    provisioning: &DispatchAccountDeviceProvisioning,
-) -> Result<(), String> {
-    AccountClient::new()
-        .delete_device(
-            &provisioning.relay_url,
-            &provisioning.target_session,
-            &provisioning.request.device_id,
-        )
-        .await
-        .map_err(|error| format!("remove provisioned account device: {error}"))
 }
 
 async fn account_context_matches(generation: u64, token: &str) -> bool {

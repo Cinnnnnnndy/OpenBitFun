@@ -2032,10 +2032,6 @@ pub async fn run() {
             // Detached task dispatch (controller-side SSH transport)
             api::dispatch_api::dispatch_list_targets,
             api::dispatch_api::dispatch_probe_target,
-            api::dispatch_api::dispatch_install_cli_start,
-            api::dispatch_api::dispatch_install_cli_poll,
-            api::dispatch_api::dispatch_install_cli_cancel,
-            api::dispatch_api::dispatch_provision_target,
             api::dispatch_api::dispatch_sync_model_config,
             api::dispatch_api::dispatch_submit,
             api::dispatch_api::dispatch_status,
