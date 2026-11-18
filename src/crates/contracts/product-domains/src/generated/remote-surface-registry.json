@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "digest": "fnv1a64:67a20e107dd93ffd",
+  "digest": "fnv1a64:722cf3ac8fe0f4bb",
   "retiredCommandPrefixes": [
     {
       "prefix": "lsp_",
@@ -55,6 +55,8 @@
       "workspace_html_preview_v1",
       "workspace_latex_preview_v1",
       "whole_session_copy_v1",
+      "session_fork_v1",
+      "recoverable_interruption_v1",
       "session_trajectory_v1",
       "session_reference_browse_v1",
       "user_question_response",
@@ -111,6 +113,8 @@
       "workspace_html_preview_v1",
       "workspace_latex_preview_v1",
       "whole_session_copy_v1",
+      "session_fork_v1",
+      "recoverable_interruption_v1",
       "session_trajectory_v1",
       "session_reference_browse_v1",
       "user_question_response",
@@ -141,6 +145,9 @@
       "remote_connect_control_v1",
       "cancel_tool",
       "tool_catalog",
+      "whole_session_copy_v1",
+      "session_fork_v1",
+      "recoverable_interruption_v1",
       "session_trajectory_v1",
       "chat_mcp_catalog_v1",
       "workspace_icon_v1",
@@ -438,8 +445,7 @@
         "kind": "proxied"
       },
       "cliPeer": {
-        "kind": "unsupported",
-        "reason": "the CLI peer host has no handler for this command"
+        "kind": "handled"
       }
     },
     {
@@ -805,8 +811,7 @@
         "kind": "proxied"
       },
       "cliPeer": {
-        "kind": "unsupported",
-        "reason": "the CLI peer host has no handler for this command"
+        "kind": "handled"
       }
     },
     {
@@ -818,7 +823,7 @@
       },
       "cliPeer": {
         "kind": "unsupported",
-        "reason": "the CLI peer host has no handler for this command"
+        "reason": "the CLI peer host does not manage subscription account sign-in"
       }
     },
     {
@@ -990,8 +995,7 @@
         "kind": "proxied"
       },
       "cliPeer": {
-        "kind": "unsupported",
-        "reason": "the CLI peer host has no handler for this command"
+        "kind": "handled"
       }
     },
     {
@@ -1025,8 +1029,7 @@
         "kind": "proxied"
       },
       "cliPeer": {
-        "kind": "unsupported",
-        "reason": "the CLI peer host has no handler for this command"
+        "kind": "handled"
       }
     },
     {
@@ -1289,8 +1292,7 @@
         "kind": "proxied"
       },
       "cliPeer": {
-        "kind": "unsupported",
-        "reason": "the CLI peer host has no handler for this command"
+        "kind": "handled"
       }
     },
     {
@@ -1489,8 +1491,7 @@
         "kind": "proxied"
       },
       "cliPeer": {
-        "kind": "unsupported",
-        "reason": "the CLI peer host has no handler for this command"
+        "kind": "handled"
       }
     },
     {
@@ -1594,8 +1595,7 @@
         "kind": "proxied"
       },
       "cliPeer": {
-        "kind": "unsupported",
-        "reason": "the CLI peer host has no handler for this command"
+        "kind": "handled"
       }
     },
     {
@@ -2305,8 +2305,7 @@
         "kind": "proxied"
       },
       "cliPeer": {
-        "kind": "unsupported",
-        "reason": "the CLI peer host has no handler for this command"
+        "kind": "handled"
       }
     },
     {
@@ -3237,8 +3236,7 @@
         "kind": "proxied"
       },
       "cliPeer": {
-        "kind": "unsupported",
-        "reason": "the CLI peer host has no handler for this command"
+        "kind": "handled"
       }
     },
     {
@@ -3271,8 +3269,7 @@
         "kind": "proxied"
       },
       "cliPeer": {
-        "kind": "unsupported",
-        "reason": "the CLI peer host has no handler for this command"
+        "kind": "handled"
       }
     },
     {
@@ -3434,7 +3431,7 @@
       },
       "cliPeer": {
         "kind": "unsupported",
-        "reason": "the CLI peer host has no handler for this command"
+        "reason": "the CLI peer host does not manage subscription account sign-in"
       }
     },
     {
@@ -3446,7 +3443,7 @@
       },
       "cliPeer": {
         "kind": "unsupported",
-        "reason": "the CLI peer host has no handler for this command"
+        "reason": "the CLI peer host does not manage subscription account sign-in"
       }
     },
     {
@@ -4193,8 +4190,7 @@
         "kind": "proxied"
       },
       "cliPeer": {
-        "kind": "unsupported",
-        "reason": "the CLI peer host has no handler for this command"
+        "kind": "handled"
       }
     },
     {
@@ -4240,8 +4236,7 @@
         "kind": "proxied"
       },
       "cliPeer": {
-        "kind": "unsupported",
-        "reason": "the CLI peer host has no handler for this command"
+        "kind": "handled"
       }
     },
     {
@@ -4459,7 +4454,7 @@
       },
       "cliPeer": {
         "kind": "unsupported",
-        "reason": "the CLI peer host has no handler for this command"
+        "reason": "the CLI peer host does not manage subscription account sign-in"
       }
     },
     {
@@ -4471,7 +4466,7 @@
       },
       "cliPeer": {
         "kind": "unsupported",
-        "reason": "the CLI peer host has no handler for this command"
+        "reason": "the CLI peer host does not manage subscription account sign-in"
       }
     },
     {
@@ -4553,8 +4548,7 @@
         "kind": "proxied"
       },
       "cliPeer": {
-        "kind": "unsupported",
-        "reason": "the CLI peer host has no handler for this command"
+        "kind": "handled"
       }
     },
     {
@@ -4622,7 +4616,7 @@
       },
       "cliPeer": {
         "kind": "unsupported",
-        "reason": "the CLI peer host has no handler for this command"
+        "reason": "the CLI peer host does not manage subscription account sign-in"
       }
     },
     {
@@ -4634,7 +4628,7 @@
       },
       "cliPeer": {
         "kind": "unsupported",
-        "reason": "the CLI peer host has no handler for this command"
+        "reason": "the CLI peer host does not manage subscription account sign-in"
       }
     },
     {
@@ -5702,8 +5696,7 @@
         "kind": "proxied"
       },
       "cliPeer": {
-        "kind": "unsupported",
-        "reason": "the CLI peer host has no handler for this command"
+        "kind": "handled"
       }
     },
     {
@@ -5738,7 +5731,7 @@
       },
       "cliPeer": {
         "kind": "unsupported",
-        "reason": "the CLI peer host has no handler for this command"
+        "reason": "the CLI peer host does not manage subscription account sign-in"
       }
     },
     {
@@ -5750,7 +5743,7 @@
       },
       "cliPeer": {
         "kind": "unsupported",
-        "reason": "the CLI peer host has no handler for this command"
+        "reason": "the CLI peer host does not manage subscription account sign-in"
       }
     },
     {
@@ -7326,8 +7319,7 @@
         "kind": "proxied"
       },
       "cliPeer": {
-        "kind": "unsupported",
-        "reason": "the CLI peer host has no handler for this command"
+        "kind": "handled"
       }
     },
     {
@@ -7351,7 +7343,7 @@
       },
       "cliPeer": {
         "kind": "unsupported",
-        "reason": "the CLI peer host has no handler for this command"
+        "reason": "the CLI peer host does not manage subscription account sign-in"
       }
     },
     {
@@ -7923,7 +7915,7 @@
       },
       "cliPeer": {
         "kind": "unsupported",
-        "reason": "the CLI peer host has no handler for this command"
+        "reason": "the CLI peer host does not manage subscription account sign-in"
       }
     },
     {
@@ -7935,7 +7927,7 @@
       },
       "cliPeer": {
         "kind": "unsupported",
-        "reason": "the CLI peer host has no handler for this command"
+        "reason": "the CLI peer host does not manage subscription account sign-in"
       }
     },
     {
@@ -8274,8 +8266,7 @@
         "kind": "proxied"
       },
       "cliPeer": {
-        "kind": "unsupported",
-        "reason": "the CLI peer host has no handler for this command"
+        "kind": "handled"
       }
     },
     {
@@ -8412,8 +8403,7 @@
         "kind": "proxied"
       },
       "cliPeer": {
-        "kind": "unsupported",
-        "reason": "the CLI peer host has no handler for this command"
+        "kind": "handled"
       }
     },
     {

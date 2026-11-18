@@ -8990,6 +8990,56 @@ describe('FlowChatStore device surfaces', () => {
         .toEqual(['turn-0', 'turn-2']);
     });
 
+    it('subscribes a mounted side transcript that is not the active session', async () => {
+      activateSurface(PEER_SURFACE_ID);
+      flowChatStore.setState(() => ({
+        sessions: new Map([
+          ['parent', createSession({ sessionId: 'parent' })],
+          ['review-child', createSession({ sessionId: 'review-child', sessionKind: 'review' })],
+        ]),
+        activeSessionId: 'parent',
+      }));
+      apiMocks.subscribeRelaySession.mockClear();
+      apiMocks.subscribeRelaySession.mockImplementationOnce(async () => {
+        apiMocks.relayReady?.({ sessionId: 'review-child', hasMore: false, oldestSeq: 1, cursor: 0 });
+        return 'review-child-subscription';
+      });
+
+      const release = flowChatStore.retainSessionHistory('review-child');
+      await vi.waitFor(() => expect(flowChatStore.getState().sessions.get('review-child')?.historyState).toBe('ready'));
+      expect(apiMocks.subscribeRelaySession).toHaveBeenCalledExactlyOnceWith(PEER_SURFACE_ID, 'review-child');
+
+      // A second mount reuses the live subscription.
+      const again = flowChatStore.retainSessionHistory('review-child');
+      expect(apiMocks.subscribeRelaySession).toHaveBeenCalledOnce();
+      again();
+      release();
+    });
+
+    it('leaves the active session, unsent side drafts, historical shells, and local mounts to their owners', () => {
+      activateSurface(PEER_SURFACE_ID);
+      flowChatStore.setState(() => ({
+        sessions: new Map([
+          ['active', createSession({ sessionId: 'active' })],
+          ['btw-draft', createSession({ sessionId: 'btw-draft', sessionKind: 'btw', dialogTurns: [] })],
+          ['shell', createSession({ sessionId: 'shell', isHistorical: true, historyState: 'metadata-only' })],
+        ]),
+        activeSessionId: 'active',
+      }));
+      apiMocks.subscribeRelaySession.mockClear();
+      const releases = ['active', 'btw-draft', 'shell'].map(id => flowChatStore.retainSessionHistory(id));
+      expect(apiMocks.subscribeRelaySession).not.toHaveBeenCalled();
+      releases.forEach(release => release());
+
+      activateSurface(LOCAL_SURFACE_ID);
+      flowChatStore.setState(() => ({
+        sessions: new Map([['local-side', createSession({ sessionId: 'local-side' })]]),
+        activeSessionId: null,
+      }));
+      flowChatStore.retainSessionHistory('local-side')();
+      expect(apiMocks.subscribeRelaySession).not.toHaveBeenCalled();
+    });
+
     it('marks the replica-derived Turn catalog revision as controller-local', async () => {
       activateSurface(PEER_SURFACE_ID);
       seedSession('peer-catalog');

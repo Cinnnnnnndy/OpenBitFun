@@ -54,6 +54,7 @@ import { estimateRetainedBytes, resourceBudget } from '@/shared/utils/resourceBu
 import { ProcessingPhase, SessionExecutionState } from '../state-machine/types';
 import { isTurnAwaitingRecovery } from '../utils/interruptedTurnRecovery';
 import { isUnmaterializedSessionDraft } from '../utils/sessionDraft';
+import { isBtwSessionDraft } from '../utils/modelSelectionTarget';
 import { sessionActivityStore } from './sessionActivityStore';
 import {
   getActiveSurfaceId,
@@ -2458,6 +2459,7 @@ export class FlowChatStore {
     const key = this.surfaceKey(sessionId);
     this.historyLeases.set(key, (this.historyLeases.get(key) ?? 0) + 1);
     this.activeSurface.relaySessionHistory.get(sessionId)?.setVisible(true);
+    this.followMountedRelaySession(sessionId);
     const resident = this.historyResidency.get(key);
     if (resident) { resident.lastUsedAt = Date.now(); resourceBudget.touch(resident.key); }
     let released = false;
@@ -2472,6 +2474,33 @@ export class FlowChatStore {
       if (retained) { retained.lastUsedAt = Date.now(); resourceBudget.touch(retained.key); }
       this.scheduleHistoryBudget();
     };
+  }
+
+  /**
+   * A peer host streams a session's events only to a controller subscribed to
+   * it, and peer session refresh subscribes only the active session. A mounted
+   * transcript beside it (side question, review, or subagent pane, docked
+   * chat) would otherwise show no live progress, including after the device
+   * switch that closes every subscription. Opening one is idempotent and
+   * replays from the host's records; it closes with the session or the device.
+   */
+  private followMountedRelaySession(sessionId: string): void {
+    const surface = this.activeSurface;
+    if (surface.surfaceId === 'local' || surface.relaySessionHistory.has(sessionId)) return;
+    // Peer session refresh owns the active session, including deferring its
+    // read while a device switch is still choosing the tab to show.
+    if (surface.state.activeSessionId === sessionId) return;
+    const session = surface.state.sessions.get(sessionId);
+    if (!session || isUnmaterializedSessionDraft(session)) return;
+    // The host knows a side question only once its first question is sent;
+    // that submission opens the subscription itself.
+    if (isBtwSessionDraft(session) && !session.btwOrigin?.requestId) return;
+    // Historical shells keep their existing hydration owner.
+    if (session.isHistorical && session.historyState === 'metadata-only') return;
+    if (resolveSessionDriverId(sessionId, session) !== 'local') return;
+    void this.loadRelaySessionHistory(sessionId).catch(error => {
+      log.warn('Mounted peer session subscription failed', { sessionId, error });
+    });
   }
 
   private scheduleHistoryBudget(): void {

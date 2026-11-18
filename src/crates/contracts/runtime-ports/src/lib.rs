@@ -33,6 +33,7 @@ mod web_search;
 pub use hook_function::*;
 #[cfg(feature = "workspace-ports")]
 pub use local_workspace_snapshot::{
+    LocalWorkspaceSnapshotFileDiffStats, LocalWorkspaceSnapshotFileRequest,
     LocalWorkspaceSnapshotPort, LocalWorkspaceSnapshotSessionRequest, LocalWorkspaceSnapshotStats,
     LocalWorkspaceSnapshotTurnRequest,
 };
