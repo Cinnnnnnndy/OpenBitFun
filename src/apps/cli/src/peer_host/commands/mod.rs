@@ -179,6 +179,11 @@ pub(crate) fn dispatch<'a>(
         "record_voice_exchange" => Box::pin(session::record_voice_exchange(state, args)),
         "create_session" => Box::pin(session::create_session(state, args)),
         "delete_session" => Box::pin(session::delete_session(state, args)),
+        // Desktop answers both names through the same session deletion.
+        "delete_persisted_session" => Box::pin(session::delete_session(state, args)),
+        "delete_all_archived_sessions" => {
+            Box::pin(session::delete_all_archived_sessions(state, args))
+        }
         "rename_session" => Box::pin(session::rename_session(state, args)),
         "archive_session" => Box::pin(session::archive_session(state, args)),
         "unarchive_session" => Box::pin(session::unarchive_session(state, args)),
@@ -359,6 +364,8 @@ pub(crate) const HANDLED_COMMANDS: &[&str] = &[
     "cancel_dialog_turn",
     "cancel_session",
     "fork_session",
+    "delete_persisted_session",
+    "delete_all_archived_sessions",
     "activate_session_goal",
     "set_session_thread_goal_status",
     "update_session_thread_goal_objective",

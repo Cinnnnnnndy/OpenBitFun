@@ -898,6 +898,41 @@ pub(crate) async fn list_archived_sessions(
     serde_json::to_value(archived).map_err(|error| error.to_string())
 }
 
+/// Permanently delete every archived session in the workspace, like Desktop
+/// `delete_all_archived_sessions`; answers how many were deleted. Each
+/// deletion goes through the same runtime path as `delete_session`.
+pub(crate) async fn delete_all_archived_sessions(
+    state: &PeerHostState,
+    args: &Value,
+) -> Result<Value, String> {
+    use openbitfun_core::service::session::SessionStatus;
+    let request = request_value(args);
+    let workspace_path = resolved_session_storage_path(state, request).await?;
+    let archived = state
+        .compatibility
+        .list_persisted_sessions(&workspace_path)
+        .await
+        .map_err(|error| format!("Failed to list sessions: {error}"))?
+        .into_iter()
+        .filter(|session| session.status == SessionStatus::Archived);
+    let mut deleted: u32 = 0;
+    for session in archived {
+        state
+            .agent_runtime
+            .delete_session(AgentSessionDeleteRequest {
+                workspace_id: optional_string(request, "workspaceId"),
+                workspace_path: optional_string(request, "workspacePath").unwrap_or_default(),
+                session_id: session.session_id,
+                remote_connection_id: optional_string(request, "remoteConnectionId"),
+                remote_ssh_host: optional_string(request, "remoteSshHost"),
+            })
+            .await
+            .map_err(|error| format!("Failed to delete session: {}", error.into_message()))?;
+        deleted += 1;
+    }
+    Ok(json!(deleted))
+}
+
 /// The fork/branch tree around a session, like Desktop `get_session_lineage`.
 pub(crate) async fn get_session_lineage(
     state: &PeerHostState,
