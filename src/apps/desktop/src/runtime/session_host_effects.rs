@@ -1,10 +1,11 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use openbitfun_agent_runtime::sdk::{SessionEventJournal, SessionEventProjectionSnapshot};
 
-use super::session_application::DesktopSessionHostEffects;
+use super::session_application::{DesktopSessionExecutionSnapshot, DesktopSessionHostEffects};
 
-pub(super) struct AcpJournalAdapter(pub Arc<openbitfun_agent_runtime::sdk::SessionEventJournal>);
+pub(super) struct AcpJournalAdapter(pub Arc<SessionEventJournal>);
 
 impl openbitfun_acp::client::AcpProjectionJournal for AcpJournalAdapter {
     fn record(
@@ -47,13 +48,22 @@ impl DesktopSessionHostEffects for ProductionDesktopSessionHostEffects {
         self.acp_client_service.is_some()
     }
 
-    fn acp_execution_snapshot(
-        &self,
-        session_id: &str,
-    ) -> Option<openbitfun_acp::client::AcpExecutionSnapshot> {
-        self.acp_client_service
+    fn acp_execution_snapshot(&self, session_id: &str) -> Option<DesktopSessionExecutionSnapshot> {
+        let snapshot = self
+            .acp_client_service
             .as_ref()?
-            .execution_snapshot(session_id)
+            .execution_snapshot(session_id)?;
+        let projection = snapshot.projection;
+        Some(DesktopSessionExecutionSnapshot {
+            running: snapshot.running,
+            projection: SessionEventProjectionSnapshot {
+                session_id: projection.session_id,
+                stream_id: projection.stream_id,
+                cursor: projection.cursor,
+                active_turn_id: projection.active_turn_id,
+                events: projection.events,
+            },
+        })
     }
 
     async fn release_session(&self, session_id: &str) {

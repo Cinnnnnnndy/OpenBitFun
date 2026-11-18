@@ -229,16 +229,18 @@ impl DesktopSessionScopeResolver {
     }
 }
 
+pub(crate) struct DesktopSessionExecutionSnapshot {
+    pub running: bool,
+    pub projection: SessionEventProjectionSnapshot,
+}
+
 #[async_trait]
 pub(crate) trait DesktopSessionHostEffects: Send + Sync {
     async fn release_session(&self, session_id: &str);
     fn supports_acp_projection(&self) -> bool {
         false
     }
-    fn acp_execution_snapshot(
-        &self,
-        _session_id: &str,
-    ) -> Option<openbitfun_acp::client::AcpExecutionSnapshot> {
+    fn acp_execution_snapshot(&self, _session_id: &str) -> Option<DesktopSessionExecutionSnapshot> {
         None
     }
 }
@@ -933,13 +935,7 @@ impl DesktopSessionApplication {
                 } else {
                     SessionState::Idle
                 };
-                runtime_event_snapshot = Some(SessionEventProjectionSnapshot {
-                    session_id: acp.projection.session_id,
-                    stream_id: acp.projection.stream_id,
-                    cursor: acp.projection.cursor,
-                    active_turn_id: acp.projection.active_turn_id,
-                    events: acp.projection.events,
-                });
+                runtime_event_snapshot = Some(acp.projection);
             } else {
                 // No prompt is owned by this host process. Do not revive a
                 // pre-restart execution from a persisted intermediate record.
