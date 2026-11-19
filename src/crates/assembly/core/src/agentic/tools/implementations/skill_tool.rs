@@ -325,7 +325,39 @@ impl Tool for SkillTool {
 
         crate::native_hooks::activate_skill_hooks(&skill_data, context).await?;
 
-        if let Some(arguments) = input.get("arguments").and_then(Value::as_str) {
+        // The caller can propose implementation details in arguments. A design
+        // skill should receive the user's actual brief before it chooses a surface.
+        let arguments = input.get("arguments").and_then(Value::as_str);
+        let delivery_brief = matches!(skill_data.name.as_str(), "frontend-design" | "visualize")
+            && skill_data.argument_names.is_empty();
+        let user_request = context
+            .custom_data
+            .get(crate::agentic::tools::tool_context_runtime::SKILL_USER_REQUEST)
+            .and_then(Value::as_str)
+            .filter(|s| !s.trim().is_empty());
+        let file_delivery = context.custom_data
+            .get(openbitfun_agent_runtime::remote_file_delivery::TOOL_CONTEXT_REMOTE_FILE_DELIVERY_KEY)
+            .and_then(Value::as_bool) == Some(true);
+        if file_delivery && skill_data.key == "user::openbitfun-system::visualize" {
+            skill_data.content =
+                openbitfun_agent_runtime::remote_file_delivery::remote_file_delivery_reminder()
+                    .to_owned();
+        }
+        if let Some(request) = user_request.filter(|_| delivery_brief) {
+            if file_delivery {
+                if skill_data.key != "user::openbitfun-system::visualize" {
+                    skill_data.content.push_str("\n\n");
+                    skill_data.content.push_str(openbitfun_agent_runtime::remote_file_delivery::remote_file_delivery_reminder());
+                }
+            } else {
+                skill_data.content.push_str("\n\nDelivery in this conversation: follow the format the user actually requested. A request for a working visual object alone, e.g. ‘做一个沙漏吧’, is an inline simulation: use visualize when available. A request for a webpage of that object, e.g. ‘做一个沙漏网页’, requires an independently openable webpage and its file link. Delivering a webpage does not request opening the user’s browser. When you need to check a standalone file, use a private headless check, never a visible ControlHub browser, foreground window, or persistent preview server unless the user asks to open it. A design skill supplies styling; choosing it does not turn the request into a website. Continue an existing project change when the conversation supplies that target.");
+            }
+            skill_data.content = expand_prompt_template_arguments_with_names(
+                &skill_data.content,
+                request,
+                &skill_data.argument_names,
+            );
+        } else if let Some(arguments) = arguments {
             skill_data.content = expand_prompt_template_arguments_with_names(
                 &skill_data.content,
                 arguments,
@@ -1158,6 +1190,31 @@ Use the remote project skill.
         assert!(assistant.contains("\n</skill_content>"));
         assert!(assistant.contains("# Create an OpenBitFun Agent"));
         assert!(!assistant.contains("from stable key"));
+    }
+
+    #[tokio::test]
+    async fn visual_artifact_remote_reader_gets_downloadable_delivery_instead_of_inline_publication(
+    ) {
+        let root = tempfile::tempdir().unwrap();
+        let mut context = local_context(root.path().into());
+        context.custom_data.insert(
+            openbitfun_agent_runtime::remote_file_delivery::TOOL_CONTEXT_REMOTE_FILE_DELIVERY_KEY
+                .into(),
+            true.into(),
+        );
+        let results = SkillTool::new()
+            .call_impl(
+                &json!({"command": "user::openbitfun-system::visualize"}),
+                &context,
+            )
+            .await
+            .unwrap();
+        let ToolResult::Result { data, .. } = &results[0] else {
+            panic!("missing skill")
+        };
+        let content = data["content"].as_str().unwrap();
+        assert!(content.contains("computer://"));
+        assert!(!content.contains("openbitfun://current-session"));
     }
 
     #[tokio::test]

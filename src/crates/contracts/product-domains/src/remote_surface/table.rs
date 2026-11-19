@@ -51,6 +51,8 @@ const fn host_invoke_only(
     }
 }
 
+const RETIRED_GENUI_PROVIDER: &str = "the legacy GenUI provider has been retired";
+
 const HANDLED: HostSupport = HostSupport::Handled;
 /// Cell used by every `ControllerLocal` / `OperatorOnly` row: the verdict refuses
 /// the command before host dispatch, so per-host support is not consulted.
@@ -276,7 +278,7 @@ pub(super) const OPERATIONS: &[OperationDefinition] = &[
     op("fork_session",                                               Routed,      Proxied,          HANDLED),
     op("frontend_update_candidate_failed",                           LocalOnly,   ControllerLocal,  REFUSED),
     op("frontend_update_candidate_ready",                            LocalOnly,   ControllerLocal,  REFUSED),
-    op("gen_ui_provider_call",                                          Agnostic,    Proxied,          CLI_NOT_IMPLEMENTED),
+    host_invoke_only("gen_ui_provider_call", Unsupported, PeerStance::Retired { reason: RETIRED_GENUI_PROVIDER }, HostSupport::Unsupported { reason: RETIRED_GENUI_PROVIDER }),
     op("generate_commit_message",                                    Unaudited,   Proxied,          CLI_NOT_IMPLEMENTED),
     op("generate_insights",                                          Routed,      ControllerLocal,  REFUSED),
     op("generate_session_title",                                     Unaudited,   Proxied,          CLI_NOT_IMPLEMENTED),

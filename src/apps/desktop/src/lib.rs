@@ -27,6 +27,7 @@ pub mod computer_use;
 pub mod crash_diagnostics;
 pub mod desktop_cards;
 mod embedded_relay_host;
+mod figure_verifier;
 mod frontend_asset_cache;
 pub mod frontend_workbench;
 pub mod logging;
@@ -864,6 +865,7 @@ pub async fn run() {
         })
         .setup(move |app| {
             let setup_started = Instant::now();
+            figure_verifier::install(app.handle().clone());
             startup_trace.record_phase("tauri_setup_start", "native_setup");
             #[cfg(target_os = "macos")]
             {
@@ -1466,7 +1468,6 @@ pub async fn run() {
             openbitfun_control_host::mark_openbitfun_control_surface_ready,
             openbitfun_control_host::mark_openbitfun_control_surface_unready,
             openbitfun_control_host::product_control_invoke,
-            api::generative_ui_api::gen_ui_provider_call,
             openbitfun_control_host::report_openbitfun_control_result,
             miniapp_web_host::mark_miniapp_web_surface_ready,
             miniapp_web_host::report_miniapp_web_result,

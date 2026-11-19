@@ -5037,6 +5037,7 @@ mod tests {
     #[test]
     fn restore_turn_payload_stats_tracks_largest_outputs_without_contents() {
         let turn = DialogTurnData {
+            published_figures: Default::default(),
             turn_id: "turn-1".to_string(),
             turn_index: 0,
             session_id: "session-1".to_string(),
@@ -5128,6 +5129,7 @@ mod tests {
     #[test]
     fn omit_assistant_only_tool_results_preserves_visible_results() {
         let mut turns = vec![DialogTurnData {
+            published_figures: Default::default(),
             turn_id: "turn-1".to_string(),
             turn_index: 0,
             session_id: "session-1".to_string(),
@@ -5197,6 +5199,7 @@ mod tests {
     fn session_view_tool_result_compaction_truncates_large_visible_results() {
         let large_output = "x".repeat(80 * 1024);
         let mut turns = vec![DialogTurnData {
+            published_figures: Default::default(),
             turn_id: "turn-1".to_string(),
             turn_index: 0,
             session_id: "session-1".to_string(),

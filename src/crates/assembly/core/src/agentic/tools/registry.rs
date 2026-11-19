@@ -561,6 +561,18 @@ mod tests {
         assert!(registry.get_tool("Cron").is_some());
     }
 
+    #[test]
+    fn visual_answers_use_skill_and_write_without_a_legacy_generation_entry() {
+        let registry = create_tool_registry();
+        assert!(registry.get_tool("Skill").is_some());
+        assert!(registry.get_tool("Write").is_some());
+        assert!(registry.get_tool("GenerativeUI").is_none());
+        assert!(!registry
+            .get_deferred_tool_names()
+            .iter()
+            .any(|name| name == "GenerativeUI"));
+    }
+
     #[cfg(feature = "product-full")]
     #[test]
     fn registry_preserves_builtin_tool_manifest_for_owner_migration() {
@@ -614,7 +626,6 @@ mod tests {
             "ReadMCPResource",
             "ListMCPPrompts",
             "GetMCPPrompt",
-            "GenerativeUI",
             "Worktree",
             "ReviewPlatform",
             "InitMiniApp",
@@ -816,7 +827,6 @@ mod tests {
                 "ReadMCPResource",
                 "ListMCPPrompts",
                 "GetMCPPrompt",
-                "GenerativeUI",
                 "Worktree",
                 "ReviewPlatform",
                 "MiniAppBrowser",

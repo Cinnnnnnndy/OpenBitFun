@@ -61,3 +61,6 @@ Dockerfile.*        text eol=lf
 docker-compose.yml  text eol=lf
 docker-compose.*.yml text eol=lf
 Caddyfile           text eol=lf
+
+# Pinned guest scripts and map datasets are verified byte-for-byte.
+third_party/visualize/** -text -diff
