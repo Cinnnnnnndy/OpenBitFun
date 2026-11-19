@@ -61,7 +61,7 @@
           "liblept5",
           "liblzma5",
           "libsoup-3.0-0",
-          "libtesseract5",
+          "libtesseract5 | libtesseract4",
           "libxcb1",
           "libxdo3",
           "tesseract-ocr-eng",
