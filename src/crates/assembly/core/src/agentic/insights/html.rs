@@ -4,6 +4,7 @@ use crate::agentic::insights::types::*;
 pub struct HtmlLabels {
     pub title: &'static str,
     pub subtitle_template: &'static str, // "{msgs} messages across {sessions} sessions ({analyzed} analyzed) | {start} to {end}"
+    pub partial_report: &'static str,
     pub at_a_glance: &'static str,
     pub whats_working: &'static str,
     pub whats_hindering: &'static str,
@@ -76,6 +77,7 @@ impl HtmlLabels {
         HtmlLabels {
             title: "OpenBitFun Insights",
             subtitle_template: "{msgs} messages across {sessions} sessions ({analyzed} analyzed) | {start} to {end}",
+            partial_report: "Partial report. {failed} report sections failed.",
             at_a_glance: "At a Glance",
             whats_working: "What's working:",
             whats_hindering: "What's hindering you:",
@@ -141,6 +143,7 @@ impl HtmlLabels {
             title: "OpenBitFun 洞察",
             subtitle_template:
                 "{msgs} 条消息，{sessions} 个会话（{analyzed} 个已分析）| {start} 至 {end}",
+            partial_report: "报告部分生成。{failed} 个报告章节生成失败。",
             at_a_glance: "概览",
             whats_working: "做得好的：",
             whats_hindering: "遇到的阻碍：",
@@ -212,12 +215,30 @@ pub fn generate_html(report: &InsightsReport, locale: &str) -> String {
         .replace("{analyzed}", &report.analyzed_sessions.to_string())
         .replace(
             "{start}",
-            &report.date_range.start[..10.min(report.date_range.start.len())],
+            report
+                .date_range
+                .start
+                .split('T')
+                .next()
+                .unwrap_or_default(),
         )
         .replace(
             "{end}",
-            &report.date_range.end[..10.min(report.date_range.end.len())],
+            report.date_range.end.split('T').next().unwrap_or_default(),
         );
+
+    let partial_notice =
+        if report.analyzed_sessions < report.total_sessions || report.failed_sections != 0 {
+            format!(
+                "<p>{}</p>",
+                html_escape(
+                    &l.partial_report
+                        .replace("{failed}", &report.failed_sections.to_string())
+                )
+            )
+        } else {
+            String::new()
+        };
 
     let at_a_glance = render_at_a_glance(&report.at_a_glance, &l);
     let nav_toc = render_nav_toc(&l);
@@ -269,6 +290,7 @@ pub fn generate_html(report: &InsightsReport, locale: &str) -> String {
   <div class="container">
     <h1>{page_title}</h1>
     <p class="subtitle">{subtitle}</p>
+    {partial_notice}
 
     {at_a_glance}
     {nav_toc}
@@ -525,7 +547,7 @@ fn render_usage_charts(stats: &InsightsStats, l: &HtmlLabels) -> String {
         html.push_str(&response_time_chart);
     }
 
-    let time_of_day_chart = render_time_of_day_chart(&stats.hour_counts, l);
+    let time_of_day_chart = render_time_of_day_chart(stats, l);
 
     let mut tool_error_items: Vec<(String, u32)> = stats
         .tool_errors
@@ -687,41 +709,45 @@ fn render_response_time_chart(
     )
 }
 
-fn render_time_of_day_chart(
-    hour_counts: &std::collections::HashMap<u32, u32>,
-    l: &HtmlLabels,
-) -> String {
-    if hour_counts.is_empty() {
-        return format!(
-            r#"<div class="chart-card"><div class="chart-title">{}</div><div class="empty">{}</div></div>"#,
-            html_escape(l.chart_time_of_day),
-            html_escape(l.no_data),
-        );
+const TIME_PERIODS: [std::ops::Range<u32>; 4] = [6..12, 12..18, 18..24, 0..6];
+
+fn render_time_of_day_chart(stats: &InsightsStats, l: &HtmlLabels) -> String {
+    let labels = [
+        l.time_morning,
+        l.time_afternoon,
+        l.time_evening,
+        l.time_night,
+    ];
+    let items = labels
+        .iter()
+        .zip(TIME_PERIODS)
+        .map(|(label, hours)| {
+            let count = hours
+                .map(|hour| stats.hour_counts.get(&hour).copied().unwrap_or(0))
+                .sum();
+            (label.to_string(), count)
+        })
+        .collect::<Vec<_>>();
+
+    // Legacy reports only have local hour counts, so there is no reliable way
+    // to convert them to a different time zone.
+    if stats.activity_by_utc_minute.is_empty() {
+        return render_bar_chart(l.chart_time_of_day, &items, "#8b5cf6", 4);
     }
 
-    let hour_json: Vec<String> = (0..24)
-        .map(|h| format!("\"{}\":{}", h, hour_counts.get(&h).copied().unwrap_or(0)))
-        .collect();
-
+    let minutes = serde_json::to_string(&stats.activity_by_utc_minute).unwrap_or_default();
+    let labels = serde_json::to_string(&labels).unwrap_or_default();
     format!(
-        r#"<div class="chart-card" id="time-of-day-chart">
+        r#"<div class="chart-card" id="time-of-day-chart" data-minutes="{minutes}" data-labels="{labels}">
   <div class="chart-title" style="display:flex;justify-content:space-between;align-items:center">
     <span>{title}</span>
-    <select id="tz-selector" class="tz-select" onchange="updateTimeChart()">
-    </select>
+    <select id="tz-selector" class="tz-select" aria-label="{title}"></select>
   </div>
   <div id="time-bars"></div>
-  <script>
-    window.__hourCountsUTC = {{{hour_data}}};
-    window.__timeLabels = {{morning:"{lm}",afternoon:"{la}",evening:"{le}",night:"{ln}"}};
-  </script>
 </div>"#,
         title = html_escape(l.chart_time_of_day),
-        hour_data = hour_json.join(","),
-        lm = l.time_morning,
-        la = l.time_afternoon,
-        le = l.time_evening,
-        ln = l.time_night,
+        minutes = html_escape(&minutes),
+        labels = html_escape(&labels),
     )
 }
 
@@ -899,11 +925,10 @@ fn render_suggestions(suggestions: &InsightsSuggestions, l: &HtmlLabels) -> Stri
                     r#"<div class="claude-md-item">
   <input type="checkbox" class="cmd-checkbox" id="md-{i}" checked>
   <div class="cmd-code">{}</div>
-  <button class="copy-btn" onclick="copyText(this, '{}')">&nbsp;Copy&nbsp;</button>
+  <button class="copy-btn">&nbsp;Copy&nbsp;</button>
   <div class="cmd-why">{}</div>
 </div>"#,
                     html_escape(&md.content),
-                    js_escape(&md.content),
                     html_escape(&md.rationale),
                     i = i,
                 )
@@ -914,7 +939,7 @@ fn render_suggestions(suggestions: &InsightsSuggestions, l: &HtmlLabels) -> Stri
             r#"<div class="claude-md-section">
   <h3>{md_title}</h3>
   <div class="claude-md-actions">
-    <button class="copy-all-btn" onclick="copyAllChecked(this)">{copy_all}</button>
+    <button class="copy-all-btn">{copy_all}</button>
   </div>
   {items}
 </div>"#,
@@ -935,10 +960,9 @@ fn render_suggestions(suggestions: &InsightsSuggestions, l: &HtmlLabels) -> Stri
                     format!(
                         r#"<div class="feature-code">
   <code>{}</code>
-  <button class="copy-btn" onclick="copyText(this, '{}')">&nbsp;Copy&nbsp;</button>
+  <button class="copy-btn">&nbsp;Copy&nbsp;</button>
 </div>"#,
                         html_escape(&f.example_usage),
-                        js_escape(&f.example_usage),
                     )
                 };
 
@@ -986,11 +1010,10 @@ fn render_suggestions(suggestions: &InsightsSuggestions, l: &HtmlLabels) -> Stri
                         r#"<div class="pattern-prompt">
   <div class="prompt-label">{}</div>
   <code>{}</code>
-  <button class="copy-btn" onclick="copyText(this, '{}')">&nbsp;Copy&nbsp;</button>
+  <button class="copy-btn">&nbsp;Copy&nbsp;</button>
 </div>"#,
                         html_escape(l.try_this_prompt),
                         html_escape(&p.suggested_prompt),
-                        js_escape(&p.suggested_prompt),
                     )
                 };
 
@@ -1047,22 +1070,16 @@ fn render_horizon(intro: &str, workflows: &[HorizonWorkflow], l: &HtmlLabels) ->
                 String::new()
             } else {
                 let escaped = html_escape(&h.copyable_prompt);
-                let js_escaped = h
-                    .copyable_prompt
-                    .replace('\\', "\\\\")
-                    .replace('\'', "\\'")
-                    .replace('\n', "\\n");
                 format!(
                     r#"<div class="horizon-prompt">
   <div class="prompt-label">{try_prompt}</div>
   <div class="feature-code">
     <code>{code}</code>
-    <button class="copy-btn" onclick="copyText(this, '{js_code}')">Copy</button>
+    <button class="copy-btn">Copy</button>
   </div>
 </div>"#,
                     try_prompt = html_escape(l.try_this_prompt),
                     code = escaped,
-                    js_code = js_escaped,
                 )
             };
 
@@ -1175,13 +1192,6 @@ fn find_closing_single_star(chars: &[char], start: usize) -> Option<usize> {
     None
 }
 
-fn js_escape(s: &str) -> String {
-    s.replace('\\', "\\\\")
-        .replace('\'', "\\'")
-        .replace('\n', "\\n")
-        .replace('\r', "")
-}
-
 const CSS_STYLES: &str = r#"
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; background: #f8fafc; color: #334155; line-height: 1.65; padding: 48px 24px; }
@@ -1276,6 +1286,17 @@ const CSS_STYLES: &str = r#"
 "#;
 
 const JS_SCRIPT: &str = r#"
+    document.querySelectorAll('.copy-btn').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        var item = btn.closest('.feature-code, .claude-md-item');
+        var code = item && item.querySelector('.cmd-code, code');
+        if (code) copyText(btn, code.textContent);
+      });
+    });
+    document.querySelectorAll('.copy-all-btn').forEach(function(btn) {
+      btn.addEventListener('click', function() { copyAllChecked(btn); });
+    });
+
     function copyText(btn, text) {
       navigator.clipboard.writeText(text).then(function() {
         var orig = btn.textContent;
@@ -1314,7 +1335,10 @@ const JS_SCRIPT: &str = r#"
 
     (function initTimezoneSelector() {
       var sel = document.getElementById('tz-selector');
-      if (!sel || !window.__hourCountsUTC) return;
+      var chart = document.getElementById('time-of-day-chart');
+      if (!sel || !chart) return;
+      var minutes = JSON.parse(chart.dataset.minutes);
+      var labels = JSON.parse(chart.dataset.labels);
       var common = [
         'UTC',
         'America/New_York','America/Chicago','America/Denver','America/Los_Angeles',
@@ -1331,43 +1355,93 @@ const JS_SCRIPT: &str = r#"
         if (tz === localTz) opt.selected = true;
         sel.appendChild(opt);
       });
-      updateTimeChart();
+      function update() { updateTimeChart(sel.value, minutes, labels); }
+      sel.addEventListener('change', update);
+      update();
     })();
 
-    function updateTimeChart() {
-      var sel = document.getElementById('tz-selector');
+    function updateTimeChart(tz, minutes, labels) {
       var container = document.getElementById('time-bars');
-      if (!sel || !container || !window.__hourCountsUTC) return;
-      var tz = sel.value;
-      var shifted = {};
-      for (var h = 0; h < 24; h++) {
-        var utcCount = window.__hourCountsUTC[h] || 0;
-        if (utcCount === 0) continue;
-        var d = new Date(Date.UTC(2024,0,1,h,0,0));
-        var localH = parseInt(d.toLocaleString('en-US',{hour:'numeric',hour12:false,timeZone:tz}));
-        shifted[localH] = (shifted[localH]||0) + utcCount;
-      }
-      var labels = window.__timeLabels;
-      var periods = [
-        {label:labels.morning, hours:[6,7,8,9,10,11]},
-        {label:labels.afternoon, hours:[12,13,14,15,16,17]},
-        {label:labels.evening, hours:[18,19,20,21,22,23]},
-        {label:labels.night, hours:[0,1,2,3,4,5]}
-      ];
+      var formatHour = new Intl.DateTimeFormat('en-GB', {
+        hour: 'numeric', hourCycle: 'h23', timeZone: tz
+      });
+      var counts = [0, 0, 0, 0];
+      Object.entries(minutes).forEach(function(entry) {
+        var hour = Number(formatHour.format(new Date(Number(entry[0]) * 60000)));
+        var period = (Math.floor(hour / 6) + 3) % 4;
+        counts[period] += entry[1];
+      });
+      var periods = labels.map(function(label, i) { return {label:label, count:counts[i]}; });
       var maxVal = 0;
-      var data = periods.map(function(p) {
-        var count = 0;
-        p.hours.forEach(function(h){count += shifted[h]||0;});
-        if (count > maxVal) maxVal = count;
-        return {label:p.label, count:count};
+      periods.forEach(function(p) { maxVal = Math.max(maxVal, p.count); });
+      container.replaceChildren();
+      periods.forEach(function(d) {
+        var row = document.createElement('div');
+        row.className = 'bar-row';
+        var label = document.createElement('span');
+        label.className = 'bar-label';
+        label.textContent = d.label;
+        var track = document.createElement('div');
+        track.className = 'bar-track';
+        var fill = document.createElement('div');
+        fill.className = 'bar-fill';
+        fill.style.width = (maxVal > 0 ? d.count / maxVal * 100 : 0) + '%';
+        fill.style.background = '#8b5cf6';
+        track.appendChild(fill);
+        var value = document.createElement('span');
+        value.className = 'bar-value';
+        value.textContent = d.count;
+        row.append(label, track, value);
+        container.appendChild(row);
       });
-      var html = '';
-      data.forEach(function(d) {
-        var pct = maxVal > 0 ? (d.count/maxVal*100) : 0;
-        html += '<div class="bar-row"><span class="bar-label">'+d.label+'</span>'
-          +'<div class="bar-track"><div class="bar-fill" style="width:'+pct+'%;background:#8b5cf6"></div></div>'
-          +'<span class="bar-value">'+d.count+'</span></div>';
-      });
-      container.innerHTML = html;
     }
 "#;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn copy_buttons_treat_model_output_as_text_in_every_section() {
+        let labels = HtmlLabels::for_locale("en-US");
+        let text = "\"quotes\" & <examples> 'apostrophes'\nsecond line".to_owned();
+        let suggestions = render_suggestions(
+            &InsightsSuggestions {
+                openbitfun_md_additions: vec![MdAddition {
+                    section: "Section".to_owned(),
+                    content: text.clone(),
+                    rationale: String::new(),
+                }],
+                features_to_try: vec![FeatureRecommendation {
+                    feature: "Feature".to_owned(),
+                    description: String::new(),
+                    example_usage: text.clone(),
+                    benefit: String::new(),
+                }],
+                usage_patterns: vec![UsagePattern {
+                    pattern: "Pattern".to_owned(),
+                    description: String::new(),
+                    detail: String::new(),
+                    suggested_prompt: text.clone(),
+                }],
+            },
+            &labels,
+        );
+        let horizon = render_horizon(
+            "",
+            &[HorizonWorkflow {
+                title: "Workflow".to_owned(),
+                whats_possible: String::new(),
+                how_to_try: String::new(),
+                copyable_prompt: text.clone(),
+            }],
+            &labels,
+        );
+
+        let html = suggestions + &horizon;
+        assert_eq!(html.matches(&html_escape(&text)).count(), 4);
+        assert_eq!(html.matches("class=\"copy-btn\"").count(), 4);
+        assert!(!html.contains(&text));
+        assert!(!html.contains("onclick="));
+    }
+}
