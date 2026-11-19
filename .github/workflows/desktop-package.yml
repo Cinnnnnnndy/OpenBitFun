@@ -252,6 +252,11 @@ jobs:
         with:
           ref: ${{ needs.prepare.outputs.checkout_ref }}
 
+      - name: Trust the Linux build checkout
+        if: runner.os == 'Linux'
+        shell: bash
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
       - name: Check Windows signing configuration
         if: runner.os == 'Windows'
         id: windows-signing
@@ -482,7 +487,8 @@ jobs:
           if ! git cat-file -e "$WORKFLOW_SHA^{commit}"; then
             git fetch --no-tags --depth=1 origin "$WORKFLOW_SHA"
           fi
-          git archive "$WORKFLOW_SHA" scripts/ci/verify-linux-desktop-package.sh scripts/ci/check-glibc-floor.sh \
+          git archive "$WORKFLOW_SHA" scripts/ci/verify-linux-desktop-package.sh \
+            scripts/ci/check-glibc-floor.sh scripts/ci/linux-appimage-tray-libraries.json \
             | tar -x -C "$verification_dir"
           bash "$verification_dir/scripts/ci/verify-linux-desktop-package.sh" "$TARGET"
 

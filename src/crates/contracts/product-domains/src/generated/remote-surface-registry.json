@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "digest": "fnv1a64:975d66aad34aa784",
+  "digest": "fnv1a64:c33c5af9950946e1",
   "retiredCommandPrefixes": [
     {
       "prefix": "lsp_",
@@ -5855,6 +5855,18 @@
     },
     {
       "id": "remote_connect_get_methods",
+      "surface": "tauri_command",
+      "remoteWorkspace": "WorkspaceAgnostic",
+      "peer": {
+        "kind": "controller_local"
+      },
+      "cliPeer": {
+        "kind": "unsupported",
+        "reason": "the controller keeps this command; peer hosts refuse it before dispatch"
+      }
+    },
+    {
+      "id": "remote_connect_set_allowed",
       "surface": "tauri_command",
       "remoteWorkspace": "WorkspaceAgnostic",
       "peer": {

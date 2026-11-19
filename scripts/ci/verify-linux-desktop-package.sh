@@ -23,12 +23,34 @@ desktop="$(realpath -e "$release_dir/openbitfun-desktop")"
 work_dir="$(mktemp -d)"
 trap 'rm -rf "$work_dir"' EXIT
 
+# Jammy and Noble use different bzip2 SONAMEs on arm64.
+desktop_dynamic="$(LC_ALL=C readelf --dynamic --wide "$desktop")"
+if grep -Eq 'Shared library: \[libbz2\.so[^]]*\]' <<< "$desktop_dynamic"; then
+  echo "Desktop executable must link bzip2 statically" >&2
+  exit 1
+fi
+
 (
   cd "$work_dir"
   chmod +x "$appimage"
   "$appimage" --appimage-extract >/dev/null
 
   test -f squashfs-root/usr/bin/openbitfun-desktop
+  tray_sonames="$(jq -er '.[]' "$script_dir/linux-appimage-tray-libraries.json")"
+  bundle_lib="$PWD/squashfs-root/usr/lib"
+  while IFS= read -r soname; do
+    if [[ ! -f "$bundle_lib/$soname" ]]; then
+      echo "AppImage is missing the tray runtime library $soname" >&2
+      exit 1
+    fi
+  done <<< "$tray_sonames"
+  if ! tray_dependencies="$(LC_ALL=C LD_LIBRARY_PATH="$bundle_lib" ldd -r "$bundle_lib/libayatana-appindicator3.so.1" 2>&1)" \
+    || grep -Eq 'not found|undefined symbol' <<< "$tray_dependencies"; then
+    echo "AppImage tray runtime could not resolve its dependencies" >&2
+    echo "$tray_dependencies" >&2
+    exit 1
+  fi
+
   find squashfs-root -type f -print0 > "$work_dir/appimage-files"
   elf_files=()
   while IFS= read -r -d '' candidate; do
@@ -65,6 +87,10 @@ trap 'rm -rf "$work_dir"' EXIT
 deb_depends="$(dpkg-deb --field "${debs[0]}" Depends)"
 if [[ -z "$deb_depends" ]]; then
   echo "Missing Depends field in ${debs[0]}" >&2
+  exit 1
+fi
+if ! grep -Eq '(^|,)[[:space:]]*libayatana-appindicator3-1[[:space:]]*(,|$)' <<< "$deb_depends"; then
+  echo "DEB does not declare the Ayatana tray runtime dependency" >&2
   exit 1
 fi
 apt-get --simulate satisfy "$deb_depends"

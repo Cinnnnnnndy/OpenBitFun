@@ -388,6 +388,12 @@ openbitfun daemon install
 openbitfun daemon status
 ```
 
+Run `openbitfun daemon remote-control` to show this device’s setting (default
+`on`). Use `openbitfun daemon remote-control off` to appear offline and stop
+accepting remote control, or `openbitfun daemon remote-control on` to allow it
+again. The setting is shared with Desktop and persists across restarts. An
+offline device can still control online devices on the same account.
+
 Linux uses a systemd user service and macOS uses a LaunchAgent. Windows does not
 currently install an auto-start service; use `openbitfun daemon run` under a
 supervisor instead. Run `openbitfun daemon --help` for lifecycle commands and

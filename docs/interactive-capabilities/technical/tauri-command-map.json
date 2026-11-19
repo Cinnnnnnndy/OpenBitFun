@@ -1,11 +1,11 @@
 {
   "schemaVersion": 2,
   "generatedFrom": "src/shared/interactive-capabilities/catalog.json",
-  "catalogDigest": "82954fefebb8251023c36bd1f83f9e740c4889da4e22712089e80e3234c6267c",
-  "commandCount": 701,
+  "catalogDigest": "bec28fbd98726d074ccb1073068d0b9c147dddba552cbd46736305e58852b681",
+  "commandCount": 702,
   "coverage": {
-    "commandCount": 701,
-    "documentedCommandCount": 634,
+    "commandCount": 702,
+    "documentedCommandCount": 635,
     "implementationCommandCount": 67,
     "implementationDigest": "3c03db6cdd74260fd8b7203d30ea4ab7224b4cfdea4a532c11e41a587cd92b19"
   },
@@ -7479,6 +7479,22 @@
       "rustPath": "api::remote_connect_api::remote_connect_get_methods",
       "sourceFile": "src/apps/desktop/src/api/remote_connect_api.rs",
       "signature": "fn remote_connect_get_methods() -> Result<Vec<ConnectionMethodInfo>, String>",
+      "remoteWorkspacePolicy": "WorkspaceAgnostic"
+    },
+    {
+      "id": "remote_connect_set_allowed",
+      "moduleId": "remote_connect",
+      "capabilityId": "feature.remote-connect",
+      "capabilityIds": [
+        "feature.remote-connect"
+      ],
+      "documentedItemIds": [
+        "feature.remote-connect:device-control-permission"
+      ],
+      "visibility": "documented",
+      "rustPath": "api::remote_connect_api::remote_connect_set_allowed",
+      "sourceFile": "src/apps/desktop/src/api/remote_connect_api.rs",
+      "signature": "fn remote_connect_set_allowed(request: SetRemoteControlRequest) -> Result<(), String>",
       "remoteWorkspacePolicy": "WorkspaceAgnostic"
     },
     {

@@ -586,6 +586,7 @@ pub(super) const OPERATIONS: &[OperationDefinition] = &[
     op("remote_connect_get_lan_ip",                                  Agnostic,    ControllerLocal,  REFUSED),
     op("remote_connect_get_lan_network_info",                        Agnostic,    ControllerLocal,  REFUSED),
     op("remote_connect_get_methods",                                 Agnostic,    ControllerLocal,  REFUSED),
+    op("remote_connect_set_allowed",                                 Agnostic,    ControllerLocal,  REFUSED),
     op("remote_connect_set_bot_verbose_mode",                        Agnostic,    ControllerLocal,  REFUSED),
     op("remote_connect_set_form_state",                              Agnostic,    ControllerLocal,  REFUSED),
     op("remote_connect_start",                                       Agnostic,    ControllerLocal,  REFUSED),

@@ -1,12 +1,12 @@
 {
   "schemaVersion": 1,
   "generatedFrom": "src/shared/interactive-capabilities/catalog.json",
-  "catalogDigest": "82954fefebb8251023c36bd1f83f9e740c4889da4e22712089e80e3234c6267c",
-  "count": 230,
+  "catalogDigest": "bec28fbd98726d074ccb1073068d0b9c147dddba552cbd46736305e58852b681",
+  "count": 231,
   "reasonCounts": {
     "externalAuth": 4,
     "secretEntry": 6,
-    "unstructuredInteraction": 193,
+    "unstructuredInteraction": 194,
     "visualSelection": 27
   },
   "entries": [
@@ -2120,6 +2120,22 @@
         "command:ssh_is_connected",
         "command:ssh_disconnect",
         "command:ssh_disconnect_all"
+      ]
+    },
+    {
+      "capabilityId": "feature.remote-connect",
+      "itemId": "device-control-permission",
+      "titleZh": "本机可被控制",
+      "titleEn": "Allow control of this device",
+      "reasonCode": "unstructuredInteraction",
+      "reasonZh": "请在当前设备的「设备与连接」概览中切换「本机可被控制」，选择其他设备能否连接这台设备。",
+      "reasonEn": "Choose “Allow control of this device” in the local Devices & Connections overview to set whether other devices can connect to this one.",
+      "presentationTarget": {
+        "kind": "event",
+        "eventName": "openbitfun:open-remote-connect"
+      },
+      "evidence": [
+        "command:remote_connect_set_allowed"
       ]
     },
     {

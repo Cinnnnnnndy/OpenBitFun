@@ -307,6 +307,7 @@ interface ConnectionEntry {
   presenceOnline: boolean | null;
   probeRequested: boolean;
   needsReattach: boolean;
+  verifyHiddenAttachment: boolean;
   healthCheckInFlight: Promise<void> | null;
   reattachInFlight: Promise<void> | null;
   hostStarting: boolean;
@@ -507,13 +508,18 @@ export class PeerConnectionManager {
    * omit an otherwise running host. Retain the attachment and verify it with
    * a handshake. Repeated roster updates must not postpone an existing retry.
    */
-  reportPresence(onlineDeviceIds: Iterable<string>): void {
+  reportPresence(onlineDeviceIds: Iterable<string>, controllerOnly = false): void {
     const online = new Set(onlineDeviceIds);
     for (const entry of this.entries.values()) {
       const wasOnline = entry.presenceOnline;
       entry.presenceOnline = online.has(entry.deviceId);
       if (!entry.presenceOnline && wasOnline !== false) {
         this.requestRecovery(entry, 'presence');
+      } else if (controllerOnly && entry.presenceOnline && entry.health === 'ready') {
+        // Hosts may prune an invisible controller when their roster changes.
+        // Verify the attachment while the peer remains reachable.
+        entry.verifyHiddenAttachment = true;
+        void this.runHealthCheck(entry);
       } else if (entry.presenceOnline && wasOnline === false && (entry.health === 'degraded' || entry.probeRequested)) {
         this.cancelTimer(entry);
         void this.runHealthCheck(entry);
@@ -566,6 +572,7 @@ export class PeerConnectionManager {
       presenceOnline: null,
       probeRequested: false,
       needsReattach: false,
+      verifyHiddenAttachment: false,
       healthCheckInFlight: null,
       reattachInFlight: null,
       hostStarting: false,
@@ -944,7 +951,9 @@ export class PeerConnectionManager {
       // The host may have dropped this controller (presence loss, routing
       // restart) while every request still succeeded; re-attach instead of
       // reporting `ready` for a link that receives no events.
-      const lostAttachment = status.callerAttached === false;
+      const lostAttachment = status.callerAttached === false
+        || (entry.verifyHiddenAttachment && status.callerAttached === null);
+      entry.verifyHiddenAttachment = false;
       if (lostAttachment) {
         log.info('Peer host no longer has this controller attached; re-attaching', {
           deviceId: entry.deviceId,

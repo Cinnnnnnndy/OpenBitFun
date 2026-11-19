@@ -1862,6 +1862,7 @@ pub async fn run() {
             api::remote_connect_api::remote_connect_stop_bot,
             api::remote_connect_api::remote_connect_status,
             api::remote_connect_api::remote_connect_get_form_state,
+            api::remote_connect_api::remote_connect_set_allowed,
             api::remote_connect_api::remote_connect_set_form_state,
             api::remote_connect_api::remote_connect_configure_bot,
             api::remote_connect_api::remote_connect_weixin_qr_start,
