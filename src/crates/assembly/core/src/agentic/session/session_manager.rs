@@ -8399,6 +8399,22 @@ impl SessionManager {
         }
     }
 
+    /// Read the current temporary history without cloning unrelated turns or
+    /// holding its map guard across an await. None denotes a disk-backed read.
+    pub(crate) fn with_transient_session_turns<T>(
+        &self,
+        session_id: &str,
+        read: impl FnOnce(&[DialogTurnData]) -> T,
+    ) -> Option<T> {
+        let session = self.sessions.get(session_id)?;
+        if self.config.enable_persistence && self.should_persist_session(&session) {
+            return None;
+        }
+        drop(session);
+        let history = self.transient_turns.get(session_id);
+        Some(read(history.as_deref().map_or(&[], |h| h.turns.as_slice())))
+    }
+
     async fn save_runtime_dialog_turn(
         &self,
         workspace_path: &Path,

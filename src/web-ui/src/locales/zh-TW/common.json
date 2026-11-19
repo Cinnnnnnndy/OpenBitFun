@@ -1920,6 +1920,8 @@
     "messages": "消息",
     "analyzed": "已分析",
     "analyzedSessions": "已分析會話",
+    "partialReport": "部分產生",
+    "partialReportCoverage": "報告部分產生。已分析 {{analyzed}} / {{total}} 個會話，{{failed}} 個報告章節產生失敗。",
     "hours": "小時",
     "days": "天",
     "msgsPerDay": "消息/天",

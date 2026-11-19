@@ -1920,6 +1920,8 @@
     "messages": "Messages",
     "analyzed": "analyzed",
     "analyzedSessions": "Sessions analyzed",
+    "partialReport": "Partial report",
+    "partialReportCoverage": "Partial report. {{analyzed}} of {{total}} sessions analyzed. {{failed}} report sections failed.",
     "hours": "Hours",
     "days": "Days",
     "msgsPerDay": "Msgs/Day",
