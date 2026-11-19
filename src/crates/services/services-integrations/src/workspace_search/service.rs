@@ -692,6 +692,15 @@ impl WorkspaceSearchService {
         }
     }
 
+    async fn claim_cached_session(&self, repo_root: &Path) -> Option<SessionEntry> {
+        // Idle release checks the epoch under the write lock, so mark the entry
+        // active before releasing the read lock.
+        self.sessions.read().await.get(repo_root).map(|entry| {
+            entry.activity_epoch.fetch_add(1, Ordering::Relaxed);
+            entry.clone()
+        })
+    }
+
     async fn get_or_open_session(
         &self,
         repo_root: &Path,
@@ -707,9 +716,7 @@ impl WorkspaceSearchService {
         let _repo_guard = repo_guard.lock().await;
 
         // Release the cache lock before checking daemon health or evicting a stale session.
-        let existing = self.sessions.read().await.get(&repo_root).cloned();
-        if let Some(existing) = existing {
-            existing.activity_epoch.fetch_add(1, Ordering::Relaxed);
+        if let Some(existing) = self.claim_cached_session(&repo_root).await {
             if existing.session.status().await.is_ok() {
                 return Ok(existing.session);
             }
@@ -1465,9 +1472,7 @@ mod tests {
     use crate::workspace_search::flashgrep::SearchResults;
     use crate::workspace_search::{ContentSearchOutputMode, WorkspaceSearchRepoStatus};
 
-    #[tokio::test]
-    #[ignore = "spawns the flashgrep daemon against a temporary repository"]
-    async fn unhealthy_cached_session_reopens_and_allows_shutdown() {
+    fn init_search_test_repo() -> tempfile::TempDir {
         let directory = tempfile::tempdir().unwrap();
         let repo_root = directory.path();
         for args in [
@@ -1494,6 +1499,14 @@ mod tests {
             assert!(output.status.success(), "{output:?}");
         }
 
+        directory
+    }
+
+    #[tokio::test]
+    #[ignore = "spawns the flashgrep daemon against a temporary repository"]
+    async fn unhealthy_cached_session_reopens_and_allows_shutdown() {
+        let directory = init_search_test_repo();
+        let repo_root = directory.path();
         let service = WorkspaceSearchService::new();
         let original = service.get_or_open_session(repo_root).await.unwrap();
         // Close only the backend session so the cache retains an unhealthy entry.
@@ -1512,6 +1525,32 @@ mod tests {
             .await
             .expect("shutdown must not be blocked by an unhealthy cached session");
         assert!(service.sessions.read().await.is_empty());
+    }
+
+    #[tokio::test]
+    #[ignore = "spawns the flashgrep daemon against a temporary repository"]
+    async fn claiming_cached_session_prevents_pending_idle_release() {
+        let directory = init_search_test_repo();
+        let repo_root = normalize_repo_root(directory.path()).unwrap();
+        let service = Arc::new(WorkspaceSearchService::new());
+
+        tokio::time::timeout(Duration::from_secs(10), async {
+            let original = service.get_or_open_session(&repo_root).await.unwrap();
+            let idle_epoch = service.sessions.read().await[&repo_root]
+                .activity_epoch
+                .load(Ordering::Relaxed);
+
+            let claimed = service.claim_cached_session(&repo_root).await.unwrap();
+            // A pending idle release can acquire the write lock as soon as the claim returns.
+            service.release_repo_if_idle(repo_root, idle_epoch).await;
+            let status = claimed.session.status().await;
+            service.shutdown_all_daemons().await;
+
+            assert!(Arc::ptr_eq(&original, &claimed.session));
+            status.expect("a pending idle release must leave the claimed session open");
+        })
+        .await
+        .expect("claiming and releasing a cached session must complete");
     }
 
     fn empty_search_results() -> SearchResults {
