@@ -104,6 +104,7 @@ export interface InsightsStats {
 
 export interface InsightsReport {
   generated_at: number;
+  locale?: string;
   date_range: DateRange;
   total_sessions: number;
   analyzed_sessions: number;

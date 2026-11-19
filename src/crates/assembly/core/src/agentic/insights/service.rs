@@ -146,43 +146,28 @@ impl InsightsService {
         }
     }
 
-    async fn get_user_language() -> String {
-        match get_global_config_service().await {
-            Ok(config_service) => match config_service.get_config::<AppConfig>(Some("app")).await {
-                Ok(app_config) => app_config.language,
-                Err(_) => "en-US".to_string(),
-            },
-            Err(_) => "en-US".to_string(),
-        }
+    async fn get_user_language() -> LocaleId {
+        let Ok(config_service) = get_global_config_service().await else {
+            return LocaleId::EnUS;
+        };
+        config_service
+            .get_config::<AppConfig>(Some("app"))
+            .await
+            .ok()
+            .and_then(|config| LocaleId::from_str(&config.language))
+            .unwrap_or(LocaleId::EnUS)
     }
 
-    fn build_language_instruction(lang: &str) -> String {
+    fn build_language_instruction(locale: LocaleId) -> String {
         let json_rule = concat!(
             "\n\nCRITICAL JSON RULE: Inside JSON string values you MUST escape every literal double-quote as \\\".",
             " Do NOT place unescaped \" characters inside string values.",
             " For example, write \"he said \\\"hello\\\"\" instead of \"he said \"hello\"\".",
         );
-
-        if lang.starts_with("en") {
-            json_rule.to_string()
-        } else {
-            let lang_name = match lang {
-                "ja" | "ja-JP" => "Japanese (日本語)",
-                "ko" | "ko-KR" => "Korean (한국어)",
-                "fr" | "fr-FR" => "French (Français)",
-                "de" | "de-DE" => "German (Deutsch)",
-                "es" | "es-ES" => "Spanish (Español)",
-                "pt" | "pt-BR" => "Portuguese (Português)",
-                "ru" | "ru-RU" => "Russian (Русский)",
-                _ => LocaleId::from_str(lang)
-                    .map(|locale| locale.model_language_name())
-                    .unwrap_or(lang),
-            };
-            format!(
-                "\n\nIMPORTANT: All descriptive text, summaries, suggestions, and narrative content in your response MUST be written in {}. Keep JSON keys and enum values in English.{}",
-                lang_name, json_rule
-            )
-        }
+        format!(
+            "\n\nIMPORTANT: All descriptive text, summaries, suggestions, and narrative content in your response MUST be written in {}. Keep JSON keys and enum values in English.{}",
+            locale.model_language_name(), json_rule
+        )
     }
 
     pub async fn generate(
@@ -204,9 +189,9 @@ impl InsightsService {
         .await;
 
         let result = match result {
-            Ok((report, locale)) => {
+            Ok(report) => {
                 if cancellation::claim_completion(generation.id).await {
-                    let result = Self::save_report(report, &locale).await;
+                    let result = Self::save_report(report).await;
                     if result.is_ok() {
                         Self::emit_progress(&generation, "Complete!", "complete", 0, 0).await;
                         info!("Insights report generated");
@@ -231,9 +216,9 @@ impl InsightsService {
         days: u32,
         model_selector: Option<&str>,
         generation: &Registration,
-    ) -> OpenBitFunResult<(InsightsReport, String)> {
+    ) -> OpenBitFunResult<InsightsReport> {
         let user_lang = Self::get_user_language().await;
-        let lang_instruction = Self::build_language_instruction(&user_lang);
+        let lang_instruction = Self::build_language_instruction(user_lang);
         debug!("Insights generation using language: {}", user_lang);
 
         // Stage 1: Data Collection
@@ -339,9 +324,10 @@ impl InsightsService {
             usage_tracker.snapshot(),
             generation_models,
             failed_sections,
+            user_lang,
         );
 
-        Ok((report, user_lang))
+        Ok(report)
     }
 
     // ============ Stage 2: Facet Extraction ============
@@ -1216,6 +1202,7 @@ impl InsightsService {
         generation_usage: InsightsGenerationUsage,
         generation_models: Vec<String>,
         failed_sections: u32,
+        locale: LocaleId,
     ) -> InsightsReport {
         let days_covered =
             if !aggregate.date_range.start.is_empty() && !aggregate.date_range.end.is_empty() {
@@ -1247,6 +1234,7 @@ impl InsightsService {
                 .duration_since(UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_secs(),
+            locale: Some(locale.as_str().to_owned()),
             date_range: aggregate.date_range.clone(),
             total_sessions: aggregate.sessions,
             analyzed_sessions: aggregate.analyzed,
@@ -1298,10 +1286,7 @@ impl InsightsService {
 
     // ============ Save / Load / Utility ============
 
-    async fn save_report(
-        mut report: InsightsReport,
-        locale: &str,
-    ) -> OpenBitFunResult<InsightsReport> {
+    async fn save_report(mut report: InsightsReport) -> OpenBitFunResult<InsightsReport> {
         let path_manager = get_path_manager_arc();
         let usage_dir = path_manager.user_data_dir().join("usage-data");
         tokio::fs::create_dir_all(&usage_dir)
@@ -1311,7 +1296,8 @@ impl InsightsService {
         let timestamp = report.generated_at;
 
         let html_path = usage_dir.join(format!("insights-{}.html", timestamp));
-        Self::write_report_html(&report, &html_path, locale).await?;
+        Self::write_report_html(&report, &html_path, report_locale(&report, LocaleId::EnUS))
+            .await?;
 
         report.html_report_path = Some(html_path.to_string_lossy().to_string());
 
@@ -1335,7 +1321,7 @@ impl InsightsService {
     async fn write_report_html(
         report: &InsightsReport,
         path: &std::path::Path,
-        locale: &str,
+        locale: LocaleId,
     ) -> OpenBitFunResult<()> {
         JsonFileStore
             .write_text_atomic_strict(path, &generate_html(report, locale))
@@ -1346,9 +1332,10 @@ impl InsightsService {
     async fn refresh_report_html(
         report: &mut InsightsReport,
         json_path: &std::path::Path,
-        locale: &str,
+        current_locale: LocaleId,
     ) {
         let path = json_path.with_extension("html");
+        let locale = report_locale(report, current_locale);
         report.html_report_path = match Self::write_report_html(report, &path, locale).await {
             Ok(()) => Some(path.to_string_lossy().into_owned()),
             Err(error) => {
@@ -1423,7 +1410,7 @@ impl InsightsService {
         Self::refresh_report_html(
             &mut report,
             &canonical_path,
-            &Self::get_user_language().await,
+            Self::get_user_language().await,
         )
         .await;
         Ok(report)
@@ -1653,6 +1640,49 @@ fn is_retryable_error(e: &OpenBitFunError) -> bool {
         || msg.contains("connection reset")
 }
 
+fn report_locale(report: &InsightsReport, current_locale: LocaleId) -> LocaleId {
+    if let Some(locale) = report.locale.as_deref().and_then(LocaleId::from_str) {
+        return locale;
+    }
+
+    // Legacy reports did not persist a locale. Use narrative prose only, since
+    // chart categories and technical names can be English in Chinese reports.
+    let prose = [
+        &report.at_a_glance.whats_working,
+        &report.at_a_glance.whats_hindering,
+        &report.at_a_glance.quick_wins,
+        &report.at_a_glance.looking_ahead,
+        &report.interaction_style.narrative,
+        &report.wins_intro,
+        &report.friction_intro,
+        &report.horizon_intro,
+    ];
+    let (han, latin) =
+        prose
+            .iter()
+            .flat_map(|text| text.chars())
+            .fold((0usize, 0usize), |(han, latin), ch| {
+                (
+                    han + usize::from(
+                        matches!(ch, '\u{3400}'..='\u{4dbf}' | '\u{4e00}'..='\u{9fff}'),
+                    ),
+                    latin + usize::from(ch.is_ascii_alphabetic()),
+                )
+            });
+
+    if han >= 8 && han * 3 >= latin {
+        if current_locale == LocaleId::ZhTW {
+            LocaleId::ZhTW
+        } else {
+            LocaleId::ZhCN
+        }
+    } else if latin >= 24 && latin > han * 8 {
+        LocaleId::EnUS
+    } else {
+        current_locale
+    }
+}
+
 fn ensure_report_has_analysis(
     analyzed_sessions: usize,
     failed_sections: u32,
@@ -1802,6 +1832,7 @@ mod tests {
             InsightsGenerationUsage::default(),
             vec![],
             1,
+            LocaleId::EnUS,
         )
     }
 
@@ -1809,10 +1840,14 @@ mod tests {
     async fn legacy_report_round_trips_and_gets_a_safe_export_on_open() {
         let mut legacy = serde_json::to_value(report_fixture()).unwrap();
         legacy.as_object_mut().unwrap().remove("failed_sections");
+        legacy.as_object_mut().unwrap().remove("locale");
+        legacy["at_a_glance"]["whats_working"] =
+            serde_json::json!("The focused regression tests verify the fix.");
         legacy["stats"]["hour_counts"] = serde_json::json!({"18": 2});
         assert!(legacy["stats"].get("activity_by_utc_minute").is_none());
         let mut report: InsightsReport = serde_json::from_value(legacy).unwrap();
         assert_eq!(report.failed_sections, 0);
+        assert_eq!(report.locale, None);
         assert_eq!(report.stats.hour_counts[&18], 2);
         let round_trip: InsightsReport =
             serde_json::from_str(&serde_json::to_string(&report).unwrap()).unwrap();
@@ -1823,12 +1858,50 @@ mod tests {
         let html_path = json_path.with_extension("html");
         tokio::fs::write(&html_path, "old export").await.unwrap();
         report.html_report_path = Some("untrusted-legacy-path.html".to_owned());
-        InsightsService::refresh_report_html(&mut report, &json_path, "en-US").await;
+        InsightsService::refresh_report_html(&mut report, &json_path, LocaleId::ZhCN).await;
         assert_eq!(report.html_report_path.as_deref(), html_path.to_str());
         let html = tokio::fs::read_to_string(html_path).await.unwrap();
+        assert!(html.contains(r#"<html lang="en-US">"#));
         assert!(html.contains("Evening (18-24)"));
         assert!(!html.contains("id=\"tz-selector\""));
         assert!(!html.contains("old export"));
+    }
+
+    #[tokio::test]
+    async fn saved_report_language_survives_an_application_language_change() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("insights-123.json");
+        let mut report = report_fixture();
+        report.locale = Some("zh-TW".to_owned());
+        report.at_a_glance.quick_wins = "建議先加入有針對性的回歸測試。".to_owned();
+        let persisted = serde_json::to_vec(&report).unwrap();
+        let mut reopened: InsightsReport = serde_json::from_slice(&persisted).unwrap();
+
+        InsightsService::refresh_report_html(&mut reopened, &path, LocaleId::EnUS).await;
+        let html = tokio::fs::read_to_string(path.with_extension("html"))
+            .await
+            .unwrap();
+        assert!(html.contains(r#"<html lang="zh-TW">"#));
+        assert!(html.contains("概覽"));
+        assert!(html.contains(&report.at_a_glance.quick_wins));
+        assert_eq!(reopened.locale.as_deref(), Some("zh-TW"));
+    }
+
+    #[test]
+    fn legacy_chinese_narrative_survives_an_english_application_locale() {
+        let mut report = report_fixture();
+        report.locale = None;
+        report.at_a_glance.whats_working =
+            "为导入功能添加回归测试，确保 CSV 中的空行和引号都能正常处理。".to_owned();
+        assert_eq!(report_locale(&report, LocaleId::EnUS), LocaleId::ZhCN);
+    }
+
+    #[test]
+    fn prompt_explicitly_requests_the_report_language_for_each_locale() {
+        for locale in LocaleId::all() {
+            let prompt = InsightsService::build_language_instruction(locale);
+            assert!(prompt.contains(&format!("written in {}", locale.model_language_name())));
+        }
     }
 
     #[test]
@@ -1836,7 +1909,7 @@ mod tests {
         let mut report = report_fixture();
         report.analyzed_sessions = 1;
         report.stats.activity_by_utc_minute.insert(29_750_999, 2);
-        let html = generate_html(&report, "en-US");
+        let html = generate_html(&report, LocaleId::EnUS);
         assert!(html.contains("Partial report. 1 report sections failed."));
         assert!(html.contains("data-minutes=\"{&quot;29750999&quot;:2}\""));
         let persisted: InsightsReport =

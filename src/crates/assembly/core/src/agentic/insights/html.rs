@@ -1,4 +1,5 @@
 use crate::agentic::insights::types::*;
+use crate::service::i18n::LocaleId;
 
 /// All user-visible labels in the HTML report, supporting i18n.
 pub struct HtmlLabels {
@@ -53,6 +54,7 @@ pub struct HtmlLabels {
     pub no_friction: &'static str,
     pub no_horizon: &'static str,
     pub md_additions: &'static str,
+    pub copy: &'static str,
     pub copy_all_checked: &'static str,
     pub features_to_try: &'static str,
     pub usage_patterns: &'static str,
@@ -65,11 +67,11 @@ pub struct HtmlLabels {
 }
 
 impl HtmlLabels {
-    pub fn for_locale(locale: &str) -> Self {
-        if locale.starts_with("zh") {
-            Self::zh()
-        } else {
-            Self::en()
+    pub fn for_locale(locale: LocaleId) -> Self {
+        match locale {
+            LocaleId::EnUS => Self::en(),
+            LocaleId::ZhCN => Self::zh(),
+            LocaleId::ZhTW => Self::zh_tw(),
         }
     }
 
@@ -126,6 +128,7 @@ impl HtmlLabels {
             no_friction: "No significant friction points found.",
             no_horizon: "No horizon workflows identified.",
             md_additions: "OPENBITFUN.md Additions",
+            copy: "Copy",
             copy_all_checked: "Copy All Checked",
             features_to_try: "Features to Try",
             usage_patterns: "Usage Patterns",
@@ -192,6 +195,7 @@ impl HtmlLabels {
             no_friction: "未发现明显摩擦点。",
             no_horizon: "暂未识别到未来工作流。",
             md_additions: "OPENBITFUN.md 补充",
+            copy: "复制",
             copy_all_checked: "复制选中项",
             features_to_try: "推荐功能",
             usage_patterns: "使用模式",
@@ -203,9 +207,76 @@ impl HtmlLabels {
             stat_files: "文件",
         }
     }
+
+    fn zh_tw() -> Self {
+        HtmlLabels {
+            title: "OpenBitFun 洞察",
+            subtitle_template:
+                "{msgs} 則訊息，{sessions} 個會話（{analyzed} 個已分析）| {start} 至 {end}",
+            partial_report: "報告部分產生。{failed} 個報告章節產生失敗。",
+            at_a_glance: "概覽",
+            whats_working: "做得好的：",
+            whats_hindering: "遇到的阻礙：",
+            quick_wins: "快速改善：",
+            looking_ahead: "展望未來：",
+            nav_work: "工作領域",
+            nav_usage: "使用方式",
+            nav_wins: "亮眼成果",
+            nav_friction: "問題所在",
+            nav_suggestions: "建議",
+            nav_horizon: "未來展望",
+            stat_sessions: "會話",
+            stat_messages: "訊息",
+            stat_hours: "小時",
+            stat_days: "天",
+            stat_msgs_per_day: "訊息／天",
+            stat_median_response: "回應時間中位數",
+            stat_avg_response: "平均回應時間",
+            section_work: "工作領域",
+            section_usage: "你如何使用 OpenBitFun",
+            section_wins: "亮眼成果",
+            section_friction: "問題所在",
+            section_suggestions: "建議",
+            section_horizon: "未來展望",
+            chart_goals: "你的需求",
+            chart_tools: "常用工具",
+            chart_languages: "程式語言",
+            chart_session_types: "會話類型",
+            chart_tool_errors: "工具錯誤統計",
+            chart_agent_types: "智慧體類型",
+            chart_response_time: "使用者回應時間分布",
+            chart_time_of_day: "依時段分布",
+            chart_what_helped: "最有幫助的部分",
+            chart_outcomes: "結果分布",
+            chart_friction_types: "主要阻礙類型",
+            chart_satisfaction: "滿意度（推估）",
+            time_morning: "上午 (6-12)",
+            time_afternoon: "下午 (12-18)",
+            time_evening: "晚上 (18-24)",
+            time_night: "凌晨 (0-6)",
+            sessions_suffix: "個會話",
+            no_data: "暫無資料",
+            no_project_areas: "未辨識出專案領域。",
+            no_interaction_style: "暫無互動風格資料。",
+            no_big_wins: "尚未辨識出亮眼成果。",
+            no_friction: "未發現明顯的阻礙。",
+            no_horizon: "尚未辨識出未來的工作流程。",
+            md_additions: "OPENBITFUN.md 補充",
+            copy: "複製",
+            copy_all_checked: "複製選取項目",
+            features_to_try: "推薦功能",
+            usage_patterns: "使用模式",
+            try_this_prompt: "試試這個提示：",
+            copied: "已複製！",
+            median_label: "中位數",
+            average_label: "平均值",
+            stat_lines: "行",
+            stat_files: "檔案",
+        }
+    }
 }
 
-pub fn generate_html(report: &InsightsReport, locale: &str) -> String {
+pub fn generate_html(report: &InsightsReport, locale: LocaleId) -> String {
     let l = HtmlLabels::for_locale(locale);
 
     let subtitle = l
@@ -277,7 +348,7 @@ pub fn generate_html(report: &InsightsReport, locale: &str) -> String {
 
     format!(
         r#"<!DOCTYPE html>
-<html>
+<html lang="{lang}">
 <head>
   <meta charset="utf-8">
   <title>{page_title}</title>
@@ -331,6 +402,7 @@ pub fn generate_html(report: &InsightsReport, locale: &str) -> String {
   </script>
 </body>
 </html>"#,
+        lang = locale.as_str(),
         CSS = CSS_STYLES,
         JS = js_with_labels,
         page_title = html_escape(l.title),
@@ -913,6 +985,7 @@ fn render_friction_categories(categories: &[FrictionCategory], l: &HtmlLabels) -
 }
 
 fn render_suggestions(suggestions: &InsightsSuggestions, l: &HtmlLabels) -> String {
+    let copy = html_escape(l.copy);
     let mut sections = Vec::new();
 
     if !suggestions.openbitfun_md_additions.is_empty() {
@@ -925,7 +998,7 @@ fn render_suggestions(suggestions: &InsightsSuggestions, l: &HtmlLabels) -> Stri
                     r#"<div class="claude-md-item">
   <input type="checkbox" class="cmd-checkbox" id="md-{i}" checked>
   <div class="cmd-code">{}</div>
-  <button class="copy-btn">&nbsp;Copy&nbsp;</button>
+  <button class="copy-btn">&nbsp;{copy}&nbsp;</button>
   <div class="cmd-why">{}</div>
 </div>"#,
                     html_escape(&md.content),
@@ -960,7 +1033,7 @@ fn render_suggestions(suggestions: &InsightsSuggestions, l: &HtmlLabels) -> Stri
                     format!(
                         r#"<div class="feature-code">
   <code>{}</code>
-  <button class="copy-btn">&nbsp;Copy&nbsp;</button>
+  <button class="copy-btn">&nbsp;{copy}&nbsp;</button>
 </div>"#,
                         html_escape(&f.example_usage),
                     )
@@ -1010,7 +1083,7 @@ fn render_suggestions(suggestions: &InsightsSuggestions, l: &HtmlLabels) -> Stri
                         r#"<div class="pattern-prompt">
   <div class="prompt-label">{}</div>
   <code>{}</code>
-  <button class="copy-btn">&nbsp;Copy&nbsp;</button>
+  <button class="copy-btn">&nbsp;{copy}&nbsp;</button>
 </div>"#,
                         html_escape(l.try_this_prompt),
                         html_escape(&p.suggested_prompt),
@@ -1044,6 +1117,7 @@ fn render_suggestions(suggestions: &InsightsSuggestions, l: &HtmlLabels) -> Stri
 }
 
 fn render_horizon(intro: &str, workflows: &[HorizonWorkflow], l: &HtmlLabels) -> String {
+    let copy = html_escape(l.copy);
     if workflows.is_empty() {
         return format!(r#"<div class="empty">{}</div>"#, html_escape(l.no_horizon));
     }
@@ -1075,7 +1149,7 @@ fn render_horizon(intro: &str, workflows: &[HorizonWorkflow], l: &HtmlLabels) ->
   <div class="prompt-label">{try_prompt}</div>
   <div class="feature-code">
     <code>{code}</code>
-    <button class="copy-btn">Copy</button>
+    <button class="copy-btn">{copy}</button>
   </div>
 </div>"#,
                     try_prompt = html_escape(l.try_this_prompt),
@@ -1403,7 +1477,7 @@ mod tests {
 
     #[test]
     fn copy_buttons_treat_model_output_as_text_in_every_section() {
-        let labels = HtmlLabels::for_locale("en-US");
+        let labels = HtmlLabels::for_locale(LocaleId::EnUS);
         let text = "\"quotes\" & <examples> 'apostrophes'\nsecond line".to_owned();
         let suggestions = render_suggestions(
             &InsightsSuggestions {

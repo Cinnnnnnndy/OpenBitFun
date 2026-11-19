@@ -261,6 +261,9 @@ pub struct InsightsStats {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InsightsReport {
     pub generated_at: u64,
+    /// The language requested from the model when this report was generated.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub locale: Option<String>,
     pub date_range: DateRange,
     pub total_sessions: u32,
     pub analyzed_sessions: u32,
