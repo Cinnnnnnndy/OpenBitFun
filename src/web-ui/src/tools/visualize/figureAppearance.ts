@@ -53,7 +53,10 @@ export function readFigureStyle(host: HTMLElement, scheme?: string): Record<stri
   }
   for (const { name, property, variable } of typography) {
     const value = style.getPropertyValue(variable).trim();
-    if (value && CSS.supports(property, value)) resolved[name] = value;
+    if (value && CSS.supports(property, value)) {
+      resolved[name] = value;
+      resolved[variable] = value;
+    }
   }
   return resolved;
 }

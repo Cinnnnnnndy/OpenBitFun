@@ -15,7 +15,7 @@
   }
 
   html { background: var(--background); }
-  body { color: var(--foreground); font: var(--font-text-md-size, 1rem)/1.5 var(--font-sans, system-ui); display: flow-root; }
+  body { color: var(--foreground); font: var(--openbitfun-type-flow-body-font-size)/1.5 var(--openbitfun-type-flow-body-font-family); display: flow-root; }
   :where(figure, h1, h2, h3, p) { margin: 0; }
   h1 { font-size: var(--openbitfun-type-heading-panel-font-size); line-height: var(--openbitfun-type-heading-panel-line-height); }
   h2 { font-size: var(--openbitfun-type-heading-dialog-font-size); line-height: var(--openbitfun-type-heading-dialog-line-height); }
