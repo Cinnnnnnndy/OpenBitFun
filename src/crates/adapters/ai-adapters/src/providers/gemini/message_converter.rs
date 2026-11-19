@@ -523,6 +523,16 @@ impl GeminiMessageConverter {
                     }
                     sanitized.insert("type".to_string(), Value::String(schema_type));
                 }
+                if !sanitized.contains_key("type") {
+                    // JSON Schema allows untyped schemas whose `properties` / `items`
+                    // only constrain matching instances, but Gemini only accepts those
+                    // keywords on OBJECT / ARRAY schemas. Infer the structural type.
+                    if sanitized.contains_key("properties") {
+                        sanitized.insert("type".to_string(), json!("object"));
+                    } else if sanitized.contains_key("items") {
+                        sanitized.insert("type".to_string(), json!("array"));
+                    }
+                }
                 if nullable {
                     sanitized.insert("nullable".to_string(), Value::Bool(true));
                 }
@@ -902,6 +912,46 @@ mod tests {
             schema["properties"]["typed_array"]["items"]["type"],
             json!("string")
         );
+    }
+
+    #[test]
+    fn infers_structural_type_for_untyped_properties_and_items() {
+        let schema = GeminiMessageConverter::sanitize_schema(json!({
+            "type": "object",
+            "properties": {
+                "paragraphs": {
+                    "type": "array",
+                    "items": {
+                        "description": "String or paragraph object.",
+                        "properties": { "text": { "type": "string" } },
+                        "additionalProperties": true
+                    }
+                },
+                "rows": {
+                    "description": "2-D array or integer.",
+                    "items": {
+                        "type": "array",
+                        "items": {
+                            "properties": {
+                                "value": {},
+                                "formula": { "type": "string" }
+                            }
+                        }
+                    }
+                },
+                "untyped_leaf": { "description": "Anything." }
+            }
+        }));
+
+        let props = &schema["properties"];
+        assert_eq!(props["paragraphs"]["items"]["type"], json!("object"));
+        assert_eq!(props["rows"]["type"], json!("array"));
+        assert_eq!(props["rows"]["items"]["type"], json!("array"));
+        assert_eq!(props["rows"]["items"]["items"]["type"], json!("object"));
+        assert!(props["untyped_leaf"].get("type").is_none());
+        assert!(props["rows"]["items"]["items"]["properties"]["value"]
+            .get("type")
+            .is_none());
     }
 
     #[test]
