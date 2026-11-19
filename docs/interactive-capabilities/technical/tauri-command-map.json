@@ -849,7 +849,7 @@
       "visibility": "documented",
       "rustPath": "api::insights_api::cancel_insights_generation",
       "sourceFile": "src/apps/desktop/src/api/insights_api.rs",
-      "signature": "fn cancel_insights_generation() -> Result<(), String>",
+      "signature": "fn cancel_insights_generation( request: Option<CancelInsightsRequest>, ) -> Result<(), String>",
       "remoteWorkspacePolicy": "LocalOnly"
     },
     {
