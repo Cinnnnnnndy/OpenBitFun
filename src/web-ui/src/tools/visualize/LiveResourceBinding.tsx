@@ -7,6 +7,13 @@ import { getActiveSurfaceScope, isLocalSurface } from '@/infrastructure/peer-dev
 import { useI18n } from '@/infrastructure/i18n';
 import { fileValue, type BoundValue } from './visualBindings';
 
+function assertWorkspace(session: Session) {
+  if (!isLocalWorkspaceSession(session, undefined) || session.remoteConnectionId || session.remoteSshHost ||
+      (session.workspaceHostname && session.workspaceHostname !== 'localhost')) {
+    throw Error('Workspace resource browsing unavailable');
+  }
+}
+
 // The reader selects an advertised resource from the owner's catalog. The
 // author cannot choose a server, call a tool, or change the selected resource.
 export function LiveResourceBinding({
@@ -38,12 +45,6 @@ export function LiveResourceBinding({
     },
     [],
   );
-  function assertWorkspace() {
-    if (!isLocalWorkspaceSession(session, undefined) || session.remoteConnectionId || session.remoteSshHost ||
-        (session.workspaceHostname && session.workspaceHostname !== 'localhost')) {
-      throw Error('Workspace resource browsing unavailable');
-    }
-  }
   async function discover() {
     const revision = ++active.current;
     setServerId('');
@@ -53,7 +54,7 @@ export function LiveResourceBinding({
     setState('loading');
     try {
       owner.assertCurrent('discover visualization sources');
-      assertWorkspace();
+      assertWorkspace(session);
       // Local discovery includes resource-only servers. The native resource API
       // enforces the server's workspace visibility again on list and read.
       const catalog = isLocalSurface(owner.surfaceId)
@@ -65,7 +66,7 @@ export function LiveResourceBinding({
             })
           ).tools.map((tool) => ({ id: tool.serverId, name: tool.serverName }));
       if (!owner.isCurrent() || active.current !== revision) return;
-      assertWorkspace();
+      assertWorkspace(session);
       const available = [...new Map(catalog.map((server) => [server.id, server])).values()];
       setServers(available);
       setState(available.length ? 'choose' : 'empty');
@@ -85,10 +86,10 @@ export function LiveResourceBinding({
     }
     try {
       owner.assertCurrent('list visualization sources');
-      assertWorkspace();
+      assertWorkspace(session);
       const available = await MCPAPI.listResources({ serverId: id });
       if (!owner.isCurrent() || active.current !== revision) return;
-      assertWorkspace();
+      assertWorkspace(session);
       const readable = available.filter((r) => !r.size || r.size <= 256 * 1024);
       setResources(readable);
       setState(readable.length ? 'choose' : 'empty');
@@ -106,10 +107,10 @@ export function LiveResourceBinding({
     async function read() {
       if (stopped || !owner.isCurrent()) return;
       try {
-        assertWorkspace();
+        assertWorkspace(session);
         const response = await MCPAPI.readResource({ serverId, resourceUri: selected });
         if (stopped || !owner.isCurrent()) return;
-        assertWorkspace();
+        assertWorkspace(session);
         const entry = response.contents.find((c) => c.uri === selected);
         const text = entry?.text ?? entry?.content;
         if (!entry) throw Error('Unavailable resource');

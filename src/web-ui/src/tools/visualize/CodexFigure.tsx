@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { LiveResourceBinding } from './LiveResourceBinding';
 import type { FlowTextItem, FlowToolItem, Session } from '@/flow_chat/types/flow-chat';
 import {
   readBindings,
+  readerBindingSnapshot,
   resolveBindingSnapshots,
   refreshedBinding,
   latestSessionBinding,
@@ -116,10 +117,11 @@ export default function CodexFigure({
   followRef.current = follow;
   const presentation = useRef<MessagePort | null>(null);
   const declarations = useMemo(() => readBindings(html), [html]);
-  const bindings = useMemo(
-    () => checkedBindings ?? resolveBindingSnapshots(declarations ?? {}, getSession(), write, uri),
-    [checkedBindings, declarations, getSession, write, uri],
-  );
+  const readSnapshot = useMemo(() => {
+    const sources = declarations ?? {};
+    return readerBindingSnapshot(sources, () => resolveBindingSnapshots(sources, getSession(), write, uri), checkedBindings);
+  }, [checkedBindings, declarations, getSession, write, uri]);
+  const bindings = useSyncExternalStore(subscribe, readSnapshot);
   const [sourcesOpen, setSourcesOpen] = useState(false);
   const [selectedSources, setSelectedSources] = useState<string[] | null>(null);
   const [liveValues, setLiveValues] = useState<BoundValues>({});

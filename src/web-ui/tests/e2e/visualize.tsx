@@ -309,6 +309,24 @@ flowChatStore.setState(() => ({
   sessions: new Map([[session.sessionId, session]]),
   activeSessionId: session.sessionId,
 }));
+// Exercise late tool completion through the same store to which the mounted figure subscribes.
+window.addEventListener('fixture:csv', event => {
+  const status = (event as CustomEvent<'running' | 'completed'>).detail;
+  const html = sessionStorage.getItem('visualize-test-fragment')!;
+  const uri = items[0].toolResult!.result.file_path;
+  const path = uri.replace(/[^/]+$/, 'cities.csv');
+  const csv = 'Shanghai,3';
+  const file: FlowToolItem = { ...items[0], id: 'csv', status,
+    toolCall: { id: 'csv', input: { payload: '+++ ' + path + '\n' + csv } },
+    toolResult: status === 'completed' ? { success: true, result: { file_path: path, content_bytes: csv.length } } : undefined };
+  flowChatStore.setState(state => {
+    const current = state.sessions.get(session.sessionId)!;
+    const turn = current.dialogTurns[0], round = turn.modelRounds[0];
+    const next = { ...turn, modelRounds: [{ ...round, items: [file, ...items, message] }],
+      publishedFigures: turn.publishedFigures ?? { [uri]: { source: html, contentBytes: new TextEncoder().encode(html).length, bindings: {} } } };
+    return { sessions: new Map(state.sessions).set(current.sessionId, { ...current, dialogTurns: [next] }) };
+  });
+});
 const history = new URLSearchParams(location.search).has('history');
 let archive: React.ReactNode;
 if (history) {

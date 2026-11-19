@@ -130,6 +130,24 @@ export function usesRecordedData(binding: Binding) {
   return binding.type === 'file' || binding.type === 'library' || binding.type === 'tool';
 }
 
+function hasAllBindings(declarations: Declarations, values: BoundValues) {
+  return Object.keys(declarations).every(name => Object.prototype.hasOwnProperty.call(values, name));
+}
+
+/** Preserve checked values. An old, partial receipt or a deferred figure can
+ * still pick up earlier calls as the producing turn finishes or is hydrated. */
+export function readerBindingSnapshot(declarations: Declarations, resolve: () => BoundValues, checked?: BoundValues) {
+  let snapshot = checked;
+  return (): BoundValues => {
+    if (snapshot && hasAllBindings(declarations, snapshot)) return snapshot;
+    const available = resolve();
+    if (!snapshot || Object.keys(available).some(name => !Object.prototype.hasOwnProperty.call(snapshot, name))) {
+      snapshot = { ...available, ...snapshot };
+    }
+    return snapshot;
+  };
+}
+
 export interface FigureOwner {
   sessionId?: string | null;
   turnId?: string | null;
@@ -150,7 +168,8 @@ export function inspectionBindings(declarations: Declarations, session: Session 
   if (candidates?.length !== 1) return;
   const [write] = candidates;
   if (!['Write', 'Edit'].includes(projectEffectiveToolItem(write).toolName)) return;
-  return resolveBindingSnapshots(declarations, session, write, owner.uri);
+  const values = resolveBindingSnapshots(declarations, session, write, owner.uri);
+  return hasAllBindings(declarations, values) ? values : undefined;
 }
 
 // Only the producing turn, subagent, and successful inputs available before the

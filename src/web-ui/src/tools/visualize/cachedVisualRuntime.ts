@@ -14,7 +14,7 @@ const inline = (body: string) => '<script>' + body.replace(/<\/script/gi, '<\\/s
 
 // Module identity is observable through import.meta.url. Keep each verified
 // release URL as its logical identity even when its bytes are served offline.
-export async function cachedVisualRuntime(fragment: string, offlineGuest = false) {
+export async function cachedVisualRuntime(fragment: string) {
   const selected = new Set<Asset>(['lucide.js', 'floating-core.js', 'floating-dom.js']);
   if (fragment.includes('/charts/1.6.5/')) {
     selected.add('chart.js');
@@ -47,7 +47,7 @@ export async function cachedVisualRuntime(fragment: string, offlineGuest = false
   );
   // Classic script tags do not use import maps. Preserve their parser ordering,
   // onload handlers and integrity checks while serving the exact pinned bytes.
-  const classic = names.filter(key => key.endsWith('.umd.js') || key === 'd3.js' || key === 'topojson.js');
+  const classic = names.filter(key => key.endsWith('.umd.js') || ['lucide.js', 'floating-core.js', 'floating-dom.js', 'd3.js', 'topojson.js'].includes(key));
   let template: HTMLTemplateElement | undefined;
   const classicTags = new Map<HTMLScriptElement, Asset>();
   if (/<script\s[^>]*src\s*=/i.test(fragment)) {
@@ -68,7 +68,7 @@ export async function cachedVisualRuntime(fragment: string, offlineGuest = false
       const load = modules.get(name);
       if (load) {
         sources.set(name, await load());
-      } else if (offlineGuest && release[name].url.startsWith('https://persistent.oaistatic.com/plugins/visualize/')) {
+      } else if (release[name].url.startsWith('https://persistent.oaistatic.com/plugins/visualize/')) {
         // Only the host can load a missing pinned release. Fetch verifies the
         // manifest digest before the bytes enter the offline guest's import map.
         const asset = release[name];
@@ -86,9 +86,6 @@ export async function cachedVisualRuntime(fragment: string, offlineGuest = false
   const esm: [string[], string][] = [];
   for (const key of selected) {
     let code = sources.get(key);
-    // Original third-party widgets keep their published module URL in builds
-    // without the optional compatibility cache. The standard atlas is local.
-    if (!code && !modules.has(key) && release[key].url.startsWith('https://persistent.oaistatic.com/')) continue;
     if (!code) throw Error('Missing packaged visualization runtime: ' + key);
     if (key.endsWith('.umd.js')) continue;
     const url = release[key].url;

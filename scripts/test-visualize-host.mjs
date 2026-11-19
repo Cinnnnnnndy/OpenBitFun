@@ -83,8 +83,18 @@ async function testHost() {
     await reader.dispose();
   }
   const photo = 'https://images.example.test/diagram.png';
+  const dependency = 'https://cdn.jsdelivr.net/npm/bitfun-figure-fixture@1/index.js';
+  let scriptLoads = 0;
   await page.setRequestInterception(true);
   page.on('request', request => {
+    if (request.url() === dependency) {
+      scriptLoads++;
+      if (scriptLoads > 1) return void request.abort();
+      return void request.respond({
+        status: 200, contentType: 'application/javascript', headers: { 'Access-Control-Allow-Origin': '*' },
+        body: 'document.querySelector("output").textContent = window.openai.widgetState?.privateContent?.choice ?? "first";',
+      });
+    }
     if (request.url() === photo) {
       void request.respond({
         status: 200, contentType: 'image/png', headers: { 'Access-Control-Allow-Origin': '*' },
@@ -121,12 +131,29 @@ async function testHost() {
       toolResult:{success:true,result:{file_path:root+'cities.csv',content_bytes:csv.length}} };
     const write = { type:'tool', toolName:'Write', toolCall:{id:'plot',input:{}} };
     const session = { sessionId:'owner', dialogTurns:[{ id:'turn',modelRounds:[{items:[file,write]}] }] };
-    return { checked: await inspectWrittenFigure(request, async () => session),
+    const placeholder = { ...request, source: request.source.replace(/<main[\s\S]*/, '<h2>City counts</h2><output>Loading CSV</output>') };
+    file.status = 'running';
+    const pending = await inspectWrittenFigure(placeholder, async () => session);
+    file.status = 'completed';
+    return { pending, checked: await inspectWrittenFigure(request, async () => session),
       unattached: await inspectWrittenFigure(request, async () => undefined) };
   });
+  assert.deepEqual(checkedCsv.pending, { deferred: true });
   assert.equal(checkedCsv.checked.bindings.rows.value.text, 'city,count\nShanghai,3');
   assert.deepEqual(checkedCsv.unattached, { deferred: true });
   console.log('Passed private frame policy and background rendering with the producing call’s CSV snapshot.');
+  const lateHtml = '<!-- vis-bindings\n{"rows":{"type":"file","path":"./cities.csv"}}\n-->\n' +
+    '<h2>City counts</h2><output id="cities">Loading CSV</output><script>' +
+    'openai.visualization.onData("rows",async f=>{if(f) document.querySelector("#cities").textContent=await f.blob.text()});</script>';
+  const waiting = await open(lateHtml);
+  assert.equal(await waiting.$eval('#cities', el => el.textContent), 'Loading CSV');
+  for (const status of ['running', 'completed']) {
+    await page.evaluate(status => window.dispatchEvent(new CustomEvent('fixture:csv', { detail: status })), status);
+  }
+  await page.waitForFrame(async frame => frame.waitForFunction(
+    () => document.querySelector('#cities')?.textContent === 'Shanghai,3', { timeout: 2000 },
+  ).then(() => true, () => false), { timeout: 15000 });
+  console.log('Passed recovery of a mounted figure with an old empty snapshot after its CSV completed.');
   const background = await page.evaluate(async () => {
     const { inspectInBackground } = await import('/src/tools/visualize/backgroundInspection.ts');
     const backgroundFrames = () => document.querySelectorAll('body > iframe[inert][aria-hidden="true"]').length;
@@ -171,11 +198,20 @@ async function testHost() {
   assert.equal(await kansai.$$eval('[data-visual-marker] circle', els => els.length), 2);
   console.log('Passed offline regional atlas, water/land separation and city lookup in two regions.');
   const plainReply = new URL(url);
-  const stateProbe = await open('<output>Reading state</output>');
+  const checkedScript = await page.evaluate(async dependency => {
+    const { inspectWrittenFigure } = await import('/src/tools/visualize/backgroundInspection.ts');
+    return inspectWrittenFigure({
+      uri: 'openbitfun://current-session/artifacts/visualizations/v2/choice.html',
+      source: '<output></output><script src="' + dependency + '"></script>',
+    }, async () => undefined);
+  }, dependency);
+  assert.match(checkedScript.renderedSource, /data:application\/javascript;base64,/);
+  const stateProbe = await open(checkedScript.renderedSource);
+  assert.equal(await stateProbe.$eval('output', el => el.textContent), 'first');
   const replayState = await stateProbe.evaluate(async () => {
     await window.openai.setWidgetState({
       modelContent: { cityName: 'Tokyo' },
-      privateContent: { cityId: 'tokyo', modelContent: 'collision' },
+      privateContent: { cityId: 'tokyo', choice: 'saved', modelContent: 'collision' },
     });
     const state = window.openai.widgetState;
     return [state.cityId, state.modelContent, JSON.parse(JSON.stringify(state))];
@@ -183,10 +219,13 @@ async function testHost() {
   assert.deepEqual(replayState, [
     'tokyo',
     { cityName: 'Tokyo' },
-    { modelContent: { cityName: 'Tokyo' }, privateContent: { cityId: 'tokyo', modelContent: 'collision' } },
+    { modelContent: { cityName: 'Tokyo' }, privateContent: { cityId: 'tokyo', choice: 'saved', modelContent: 'collision' } },
   ]);
-  const reopenedState = await open('<output>Reading state</output>');
+  const reopenedState = await open(checkedScript.renderedSource);
   assert.equal(await reopenedState.evaluate(() => window.openai.widgetState.cityId), 'tokyo');
+  assert.equal(await reopenedState.$eval('output', el => el.textContent), 'saved');
+  assert.equal(scriptLoads, 1, 'replay must use the exact bytes verified at publication');
+  console.log('Passed pending CSV deferral and saved selection replay with the script CDN disconnected.');
   plainReply.searchParams.set('plain-reply', '1');
   await page.goto(plainReply, { waitUntil: 'domcontentloaded' });
   const recovered = await open(

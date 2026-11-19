@@ -2,6 +2,7 @@ import { buildCodexFrame } from './codexFrameDocument';
 import { watchFigureInspection } from './figureInspection';
 import { readBindings, inspectionBindings, usesRecordedData, type BoundValues, type FigureOwner } from './visualBindings';
 import type { Session } from '@/flow_chat/types/flow-chat';
+import { snapshotFigureScripts } from './figureResources';
 import { localizeFigureImages } from './figureImages';
 import { readFigureStyle } from './figureAppearance';
 
@@ -78,19 +79,14 @@ export async function inspectWrittenFigure(
   const producer = needsHistory && request.sessionId ? await getProducer(request.sessionId) : undefined;
   let bindings = inspectionBindings(declarations, producer, request);
   if (!bindings) return { deferred: true };
-  const privateImages = entries.some(entry => entry.type !== 'image') && entries.some(entry => entry.type === 'image');
-  if (privateImages) bindings = await localizeFigureImages(declarations, bindings);
+  const hasImages = entries.some(entry => entry.type === 'image');
+  if (hasImages) bindings = await localizeFigureImages(declarations, bindings);
   const { materializeRegionalMaps } = await import('./regionalAtlas');
-  const html = await materializeRegionalMaps(request.source);
+  const html = await snapshotFigureScripts(await materializeRegionalMaps(request.source), declarations);
   const issue = await inspectInBackground(html, bindings);
-  if (issue) {
-    if (needsHistory && Object.entries(declarations).some(([key, entry]) => usesRecordedData(entry) && !bindings[key])) {
-      return { deferred: true };
-    }
-    throw Error(issue);
-  }
+  if (issue) throw Error(issue);
   return {
     renderedSource: html === request.source ? undefined : html,
-    bindings: needsHistory || privateImages ? bindings : undefined,
+    bindings: needsHistory || hasImages ? bindings : undefined,
   };
 }

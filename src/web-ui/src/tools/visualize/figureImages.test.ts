@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { localizeFigureImages } from './figureImages';
+import { snapshotFigureScripts } from './figureResources';
 import type { Declarations } from './visualBindings';
 
 const url = 'https://images.example.test/diagram.png';
@@ -30,5 +31,31 @@ describe('private figure images', () => {
       headers: { 'content-type': String(type) },
     })));
     await expect(localizeFigureImages(declarations, {})).rejects.toThrow('Could not load the declared image');
+  });
+});
+
+describe('figure script snapshots', () => {
+  const url = 'https://cdn.jsdelivr.net/npm/example@1/dist/plot.js';
+  const script = '<script src="' + url + '"></script>';
+
+  it('snapshots a fixed public dependency once and reuses its bytes', async () => {
+    const load = vi.fn().mockResolvedValue(new Response('window.draw = () => 1;', {
+      headers: { 'content-type': 'application/javascript' },
+    }));
+    vi.stubGlobal('fetch', load);
+    const source = await snapshotFigureScripts(script.repeat(2), {});
+    expect(source.match(/data:application\/javascript;base64,/g)).toHaveLength(2);
+    expect(await snapshotFigureScripts(source, {})).toBe(source);
+    expect(load).toHaveBeenCalledTimes(1);
+    expect(load).toHaveBeenCalledWith(url, expect.objectContaining({ credentials: 'omit', redirect: 'error' }));
+  });
+
+  it('restricts this loader to public declarations and supported script origins', async () => {
+    const load = vi.fn();
+    vi.stubGlobal('fetch', load);
+    expect(await snapshotFigureScripts(script, declarations)).toBe(script);
+    const other = script.replace('cdn.jsdelivr.net', 'other.example.test');
+    expect(await snapshotFigureScripts(other, {})).toBe(other);
+    expect(load).not.toHaveBeenCalled();
   });
 });

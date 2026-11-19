@@ -1,4 +1,5 @@
 import type { BoundValues, Declarations } from './visualBindings';
+import { snapshotFigureScripts } from './figureResources';
 import { localizeFigureImages } from './figureImages';
 import { cachedVisualRuntime } from './cachedVisualRuntime';
 import builtInGuest from './figureGuest.js?raw';
@@ -19,18 +20,7 @@ const assets = Object.fromEntries(
   Object.entries(raw).map(([file, source]) => [file.split('/').pop()!, source]),
 );
 const script = (source: string) => '<script>' + source.replace(/<\/script/gi, '<\\/script') + '</script>';
-const cdns = [
-  'https://cdnjs.cloudflare.com',
-  'https://cdn.jsdelivr.net',
-  'https://esm.sh',
-  'https://unpkg.com',
-  'https://fonts.bunny.net',
-  'https://fonts.googleapis.com',
-  'https://fonts.gstatic.com',
-].join(' ');
-const components = 'https://persistent.oaistatic.com/plugins/visualize/';
-// Private figures run entirely on packaged scripts and local bytes. Keep a
-// trusted parent around the guest so its own frame navigations are also scoped.
+// Use the same isolated document for initial inspection, display and state restoration.
 const offlineCsp = [
   "default-src 'none'", "base-uri 'none'", "form-action 'none'", "frame-src 'none'", "object-src 'none'",
   "script-src 'unsafe-inline' 'unsafe-eval' blob: data:", "style-src 'unsafe-inline' blob: data:",
@@ -51,21 +41,6 @@ function offlineFrame(document: string) {
       });
       frame.srcdoc=${serialized};document.body.append(frame);`);
 }
-
-const csp = (images: string[]) =>
-  [
-    "default-src 'none'",
-    "base-uri 'none'",
-    "form-action 'none'",
-    "object-src 'none'",
-    "frame-src 'none'",
-    'connect-src blob: data:',
-    'worker-src blob:',
-    "script-src 'unsafe-inline' 'unsafe-eval' blob: data: " + cdns + ' ' + components,
-    "style-src 'unsafe-inline' blob: data: " + cdns + ' ' + components + 'charts/',
-    'img-src blob: data: ' + cdns + ' ' + images.join(' '),
-    ...['media', 'font'].map((type) => type + '-src blob: data: ' + cdns),
-  ].join('; ');
 
 const hasReferenceKit = !!assets['visualize.html'] && !!assets['standalone-host-bridge.js'];
 
@@ -105,17 +80,12 @@ export async function buildCodexFrame(
     const { default: charts } = await import('echarts/dist/echarts.min.js?raw');
     extensions += script(charts) + script(chartTheme);
   }
-  const privateData = state != null || Object.values(declarations).some(binding => binding.type !== 'image') ||
-    Object.values(values).some(entry => entry.kind !== 'image');
-  const images = Object.values(declarations).flatMap((binding) =>
-    binding.type === 'image' && binding.url.startsWith('https:') ? [new URL(binding.url).origin] : [],
-  );
-  if (privateData) values = await localizeFigureImages(declarations, values);
-  const guestDeclarations = privateData ? Object.fromEntries(Object.entries(declarations).map(([name, binding]) =>
-    [name, binding.type === 'image' ? { type: 'image', url: values[name].value } : binding])) : declarations;
+  values = await localizeFigureImages(declarations, values);
+  const guestDeclarations = Object.fromEntries(Object.entries(declarations).map(([name, binding]) =>
+    [name, binding.type === 'image' ? { type: 'image', url: values[name].value } : binding]));
   const bindings = JSON.stringify({ declarations: guestDeclarations, values, figureStyle }).replace(/</g, '\\u003c');
   const initial = JSON.stringify({ widgetState: state, statePersistence: 'local' }).replace(/</g, '\\u003c');
-  const cache = await cachedVisualRuntime(fragment, privateData);
+  const cache = await cachedVisualRuntime(await snapshotFigureScripts(fragment, declarations));
   let kit = (assets['visualize.html'] ?? '<!--__INLINE_VISUALIZATION_FRAGMENT__-->').replace(
     '<!--__INLINE_VISUALIZATION_FRAGMENT__-->',
     () => extensions + cache.fragment,
@@ -126,7 +96,7 @@ export async function buildCodexFrame(
     (/^[a-z\d-]+$/i.test(lang) ? lang : 'en') +
     '"><head>' +
     '<meta charset="utf-8"><meta name="referrer" content="no-referrer"><meta http-equiv="Content-Security-Policy" content="' +
-    (privateData ? offlineCsp : csp(images)) +
+    offlineCsp +
     '">' +
     '<meta name="viewport" content="width=device-width, initial-scale=1"><style>' +
     (assets['visualize.css'] ?? builtInStyles) +
@@ -144,5 +114,5 @@ export async function buildCodexFrame(
     kit +
     '</body></html>'
   );
-  return privateData ? offlineFrame(document) : document;
+  return offlineFrame(document);
 }

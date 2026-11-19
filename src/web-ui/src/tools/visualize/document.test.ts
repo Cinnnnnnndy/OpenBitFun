@@ -221,6 +221,30 @@ describe('scoped v2 data bindings', () => {
     expect(result.baseline.value).toBe(0);
     expect(resolveBindingSnapshots(readBindings(source)!, history([file, library, tool], [figure]), figure, figureUri)).toEqual({ baseline: { kind: 'json', value: 0 } });
   });
+  it('recovers an empty or partial old receipt when the preceding CSV arrives', async () => {
+    const { readBindings, inspectionBindings, readerBindingSnapshot, resolveBindingSnapshots } = await import('./visualBindings');
+    const source = header({ rows: { type: 'file', path: './counts.csv' }, count: { type: 'json', value: 4 } });
+    const declarations = readBindings(source)!;
+    const file = asset(fileUri, 'city,count', 'csv');
+    const figure = asset(figureUri, source, 'graph');
+    const session = history([file, figure, asset(fileUri, 'later revision', 'later')]);
+    const owner = { sessionId: session.sessionId, turnId: session.dialogTurns[0].id, toolCallId: figure.toolCall.id, uri: figureUri };
+    file.status = 'running';
+    expect(inspectionBindings(declarations, session, owner)).toBeUndefined();
+    const resolve = () => resolveBindingSnapshots(declarations, session, figure, figureUri);
+    const count = { kind: 'json' as const, value: 0 };
+    const read = readerBindingSnapshot(declarations, resolve, { count });
+    const empty = readerBindingSnapshot(declarations, resolve, {});
+    const waiting = read();
+    expect(read()).toBe(waiting);
+    expect(empty().rows).toBeUndefined();
+    file.status = 'completed';
+    const complete = read();
+    expect(complete.count).toBe(count);
+    expect(complete.rows.value).toMatchObject({ text: 'city,count' });
+    expect(empty().rows).toEqual(complete.rows);
+    expect(read()).toBe(complete);
+  });
   it('restores prior edit records and exact owner revisions, up to the referenced reply', () => {
     const original = asset(figureUri, '<b>old</b>', 'figure');
     const input = { file_path: figureUri, old_string: 'old', new_string: 'new' };
