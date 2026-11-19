@@ -138,7 +138,10 @@ async function testHost() {
         show();
         new Tweak({container: document.getElementById('settings'), onChange: show}).addSlider(state, 'zoom', {min: 1, max: 5});
       </script>`);
-    await frame.waitForSelector('#plot svg path[d]', { visible: true });
+    await frame.waitForFunction(() => [...document.querySelectorAll('#plot svg path[d]')].filter(path => {
+      const bounds = path.getBoundingClientRect();
+      return bounds.width > 0 && bounds.height > 0;
+    }).length >= 2);
     await frame.click('[aria-controls=settings]');
     await frame.waitForSelector('#settings output', { visible: true });
     await page.click('.visual-codex__menu summary');
