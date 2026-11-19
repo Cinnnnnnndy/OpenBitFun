@@ -3,6 +3,8 @@ import { cachedVisualRuntime } from './cachedVisualRuntime';
 import builtInGuest from './figureGuest.js?raw';
 import builtInControls from './figureDesignControls.js?raw';
 import builtInStyles from './inlineDocument.css?raw';
+import hostStyles from './figureHost.css?raw';
+import chartTheme from './figureChartTheme.js?raw';
 import extras from './codexFrameExtras.js?raw';
 import inspection from './inspectRenderedFigure.js?raw';
 
@@ -49,6 +51,7 @@ export async function buildCodexFrame(
   lang: string,
   declarations: Declarations,
   values: BoundValues,
+  figureStyle: Record<string, string>,
 ) {
   if (fragment.includes('data-visual-atlas')) {
     const { materializeRegionalMaps } = await import('./regionalAtlas');
@@ -76,12 +79,12 @@ export async function buildCodexFrame(
   }
   if (/\becharts\s*\./.test(fragment)) {
     const { default: charts } = await import('echarts/dist/echarts.min.js?raw');
-    extensions += script(charts);
+    extensions += script(charts) + script(chartTheme);
   }
   const images = Object.values(declarations).flatMap((binding) =>
     binding.type === 'image' ? [new URL(binding.url).origin] : [],
   );
-  const bindings = JSON.stringify({ declarations, values }).replace(/</g, '\\u003c');
+  const bindings = JSON.stringify({ declarations, values, figureStyle }).replace(/</g, '\\u003c');
   const initial = JSON.stringify({ widgetState: state, statePersistence: 'local' }).replace(/</g, '\\u003c');
   const cache = await cachedVisualRuntime(fragment);
   let kit = (assets['visualize.html'] ?? '<!--__INLINE_VISUALIZATION_FRAGMENT__-->').replace(
@@ -99,6 +102,7 @@ export async function buildCodexFrame(
     '<meta name="viewport" content="width=device-width, initial-scale=1"><style>' +
     (assets['visualize.css'] ?? builtInStyles) +
     '\n:root{--control-spacing:8px}.btn,.nav-link{border-radius:8px}html>body{padding:0;margin:0}' +
+    hostStyles +
     // Honor the fragment's hidden state even when its layout uses flex or grid.
     '[hidden]:not([hidden="until-found" i]){display:none!important}</style></head><body>' +
     '<script type="application/json" id="codex-visualization-widget-state">' +

@@ -80,11 +80,11 @@ export default function CodexFigure({
   const ref = useRef<HTMLIFrameElement>(null);
   const wrapper = useRef<HTMLDivElement>(null);
   const appearance = useHostAppearance(wrapper);
-  const { scheme } = appearance;
   const figureStyle = useMemo(
-    () => (wrapper.current ? readFigureStyle(wrapper.current, appearance.scheme) : {}),
+    () => readFigureStyle(wrapper.current ?? document.documentElement, appearance.scheme),
     [appearance],
   );
+  const scheme = figureStyle['color-scheme'] === 'dark' ? 'dark' : 'light';
   const [height, setHeight] = useState(180);
   const [expanded, setExpanded] = useState(false);
   const [controlsOpen, setControlsOpen] = useState(false);
@@ -175,7 +175,8 @@ export default function CodexFigure({
       /* First visit or private browsing. */
     }
     modelContent.current = state?.modelContent ?? null;
-    buildCodexFrame(html, state, currentLanguage, declarations ?? {}, bindings)
+    const initialStyle = readFigureStyle(wrapper.current ?? document.documentElement);
+    buildCodexFrame(html, state, currentLanguage, declarations ?? {}, bindings, initialStyle)
       .then((document) => {
         if (mounted) setBuilt(prev => ({ html, document, version: (prev?.version ?? 0) + 1 }));
       })

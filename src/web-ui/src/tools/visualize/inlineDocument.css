@@ -14,13 +14,29 @@
     --primary-foreground: var(--openbitfun-color-action-primary-content);
   }
 
-  html { background: var(--background); }
-  body { color: var(--foreground); font: var(--openbitfun-type-flow-body-font-size)/1.5 var(--openbitfun-type-flow-body-font-family); display: flow-root; }
+  body {
+    display: flow-root;
+    color: var(--foreground);
+    font-family: var(--openbitfun-type-flow-body-font-family);
+    font-size: var(--openbitfun-type-flow-body-font-size);
+    line-height: var(--openbitfun-type-flow-body-line-height);
+  }
   :where(figure, h1, h2, h3, p) { margin: 0; }
   h1 { font-size: var(--openbitfun-type-heading-panel-font-size); line-height: var(--openbitfun-type-heading-panel-line-height); }
   h2 { font-size: var(--openbitfun-type-heading-dialog-font-size); line-height: var(--openbitfun-type-heading-dialog-line-height); }
   h3 { font-size: var(--openbitfun-type-heading-section-font-size); line-height: var(--openbitfun-type-heading-section-line-height); }
   :where(h1, h2, h3) { font-weight: var(--openbitfun-type-heading-section-font-weight); }
+  :where(a) { color: var(--accent-foreground); }
+  :where(.card) { background: var(--card); color: var(--card-foreground); }
+  :where(.popover, .tooltip) { background: var(--popover); color: var(--popover-foreground); }
+  :where(.form-control, .form-select) {
+    background-color: var(--card);
+    border: 1px solid var(--input);
+    color: var(--card-foreground);
+  }
+  :where(input, progress) { accent-color: var(--viz-series-1); }
+  :where(button, a, input, select, textarea):focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+  :where(input, textarea)::placeholder { color: var(--muted-foreground); }
   .text-muted { color: var(--muted-foreground); }
   .text-small { font-size: var(--openbitfun-type-body-sm-font-size); }
   :where(button, select, input) { font: inherit; }
@@ -31,5 +47,4 @@
   }
   .nav-link { border-color: transparent; color: var(--muted-foreground); }
   .nav-link.active, .nav-link[aria-selected='true'] { color: var(--foreground); background: var(--muted); }
-  .btn[aria-pressed='true'] { color: var(--background); background: var(--blue); border-color: var(--blue); }
 }

@@ -11,7 +11,8 @@ export async function inspectInBackground(source: string): Promise<string | null
     if (entry.type === 'json') values[name] = { kind: 'json', value: entry.value };
     if (entry.type === 'image') values[name] = { kind: 'image', value: entry.url };
   }
-  const doc = await buildCodexFrame(source, null, document.documentElement.lang, declarations, values);
+  const figureStyle = readFigureStyle(document.body);
+  const doc = await buildCodexFrame(source, null, document.documentElement.lang, declarations, values, figureStyle);
   const frame = document.createElement('iframe');
   frame.setAttribute('sandbox', 'allow-scripts');
   frame.referrerPolicy = 'no-referrer';
@@ -23,6 +24,7 @@ export async function inspectInBackground(source: string): Promise<string | null
   // Keep a real layout viewport without occupying a conversation row or taking focus.
   frame.style.cssText =
     'position:fixed;left:0;top:0;width:min(760px,100vw);height:460px;opacity:0;pointer-events:none;z-index:-1';
+  frame.style.colorScheme = figureStyle['color-scheme'];
   let kitPort: MessagePort | undefined;
   const ready = (event: MessageEvent) => {
     if (
@@ -34,8 +36,8 @@ export async function inspectInBackground(source: string): Promise<string | null
     const bridge = new MessageChannel();
     frame.contentWindow?.postMessage({ openBitFunVisual: 2, type: 'attach' }, '*', [bridge.port2]);
     bridge.port1.postMessage({
-      figureStyle: readFigureStyle(document.body),
-      globals: { theme: getComputedStyle(document.body).colorScheme.includes('dark') ? 'dark' : 'light' },
+      figureStyle,
+      globals: { theme: figureStyle['color-scheme'] },
     });
     bridge.port1.close();
     const kit = new MessageChannel();

@@ -22,7 +22,25 @@
   );
   const send = (message, ports = []) => host.postMessage({ openBitFunVisual: 2, ...message }, '*', ports);
   const data = document.getElementById('openbitfun-visual-data');
-  const { declarations, values } = JSON.parse(data.textContent);
+  const { declarations, values, figureStyle } = JSON.parse(data.textContent);
+  let previousStyle = {};
+  function applyAppearance(next) {
+    const root = document.documentElement;
+    let changed = false;
+    for (const name of Object.keys(previousStyle)) {
+      if (!(name in next)) { root.style.removeProperty(name); changed = true; }
+    }
+    for (const [name, value] of Object.entries(next)) {
+      if (previousStyle[name] !== value) { root.style.setProperty(name, value); changed = true; }
+    }
+    root.dataset.theme = next['color-scheme'];
+    Object.assign(window.openai, {
+      theme: root.dataset.theme, visualizationTheme: root.dataset.theme, visualizationStyleVariables: next,
+    });
+    previousStyle = next;
+    if (changed) dispatchEvent(new Event('openbitfun:figure-appearance'));
+  }
+  applyAppearance(figureStyle);
   data.remove();
   const sources = new Map();
   const listeners = new Map();
@@ -110,19 +128,9 @@
     (event) => {
       if (event.source !== host || event.data?.openBitFunVisual !== 2) return;
       if (event.data.type !== 'attach' || !event.ports[0]) return;
-      let previousStyle = {};
       event.ports[0].onmessage = ({ data: message }) => {
         if (message.values) applyValues(message.values);
-        if (message.figureStyle) {
-          const style = document.documentElement.style;
-          for (const name of Object.keys(previousStyle)) {
-            if (!(name in message.figureStyle)) style.removeProperty(name);
-          }
-          for (const [name, value] of Object.entries(message.figureStyle)) {
-            if (previousStyle[name] !== value) style.setProperty(name, value);
-          }
-          previousStyle = message.figureStyle;
-        }
+        if (message.figureStyle) applyAppearance(message.figureStyle);
         const globals = message.globals;
         if (!globals) return;
         if (globals.theme) document.documentElement.dataset.theme = globals.theme;

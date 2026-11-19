@@ -48,6 +48,39 @@ async function testHost() {
     }
     throw Error('The visualization did not initialize in FlowChat');
   }
+  async function switchAppearance() {
+    await page.evaluate(async () => {
+      const { appearanceRuntime, buildBuiltinAppearance, openBitFunLightPalette, openBitFunMidnightPalette } =
+        await import('/src/infrastructure/appearance/index.ts');
+      const dark = document.documentElement.dataset.openbitfunAppearanceMode !== 'dark';
+      await appearanceRuntime.applyPackage(buildBuiltinAppearance(dark ? openBitFunMidnightPalette : openBitFunLightPalette));
+      document.documentElement.dataset.colorScheme = dark ? 'dark' : 'light';
+    });
+  }
+  // Sample what the browser actually paints inside each component, including its shadow tree.
+  async function verifyRepaint(frame, selector, count) {
+    const reader = await frame.evaluateHandle(() => selector => [...document.querySelectorAll(selector)].map(host => {
+      const paint = new Set();
+      function visit(node) {
+        if (node.getClientRects().length && node.tagName !== 'STYLE') {
+          const css = getComputedStyle(node);
+          const attributes = node instanceof SVGElement ? ['fill', 'stroke'] : ['color', 'backgroundColor', 'borderTopColor'];
+          for (const key of attributes) paint.add(css[key]);
+        }
+        for (const el of (node.shadowRoot ?? node).children) visit(el);
+      }
+      visit(host);
+      return [...paint].sort().join('|');
+    }));
+    const before = await frame.evaluate((read, selector) => read(selector), reader, selector);
+    assert.equal(before.length, count);
+    await switchAppearance();
+    await frame.waitForFunction((read, selector, old) => {
+      const next = read(selector);
+      return next.length === old.length && next.every((paint, i) => paint && paint !== old[i]);
+    }, {}, reader, selector, before);
+    await reader.dispose();
+  }
   if (process.env.OPENBITFUN_VISUALIZE_OFFLINE === '1') {
     await page.setRequestInterception(true);
     page.on('request', (request) => {
@@ -94,6 +127,7 @@ async function testHost() {
   });
   assert.deepEqual([geography.cities, geography.onLand, geography.taihu, geography.sea], [3, true, true, true]);
   assert.equal(new Set(geography.fills).size, 3);
+  await verifyRepaint(deltaMap, '[data-map-layer="land"], [data-map-layer="lakes"], [data-visual-marker] circle, [data-visual-marker] text', 8);
   const kansai = await open('<script type="application/json" data-visual-atlas="1">{"places":[{"name":"Osaka","country":"JP"},{"name":"Kyoto","country":"JP"}]}</script>');
   assert.equal(await kansai.$$eval('[data-visual-marker] circle', els => els.length), 2);
   console.log('Passed offline regional atlas, water/land separation and city lookup in two regions.');
@@ -125,6 +159,83 @@ async function testHost() {
   assert.equal(await page.$$eval('[data-codex-figure]', (figures) => figures.length), 1);
   console.log('Passed recovery of an interactive figure when the model returned plain text.');
   await page.goto(url, { waitUntil: 'domcontentloaded' });
+  const paints = await open(`
+    <style>#chart { height:180px }</style>
+    <h2>Theme</h2><button id="step" class="btn btn-primary">1</button><div id="chart"></div>
+    <script>
+      const step = document.querySelector('#step');
+      step.onclick = () => step.textContent = '2';
+      const chart = echarts.init(document.querySelector('#chart'), null, { renderer: 'svg' });
+      chart.setOption({ animation:false, legend:{}, xAxis:{type:'category',data:['A','B']}, yAxis:{},
+        series:[{type:'bar',name:'One',data:[1,2]},{type:'bar',name:'Two',data:[1,2]}] });
+      window.firstPaint = [window.openai.theme, getComputedStyle(document.body).color,
+        getComputedStyle(document.documentElement).getPropertyValue('--viz-series-1').trim()];
+      chart.setOption({series:[{data:[3,5]}]});
+      chart.dispatchAction({type:'legendUnSelect',name:'Two'});
+    </script>`);
+  await paints.click('#step');
+  await page.mouse.move(700, 600);
+  async function checkPaint() {
+    const expected = await page.$eval('[data-codex-figure]', host => {
+      const probe = host.appendChild(document.createElement('span'));
+      const values = ['content-primary', 'content-secondary', 'accent-default', 'action-primary-background', 'action-primary-content', 'action-primary-hover'].map(token => {
+        probe.style.color = 'var(--openbitfun-color-' + token + ')';
+        return getComputedStyle(probe).color;
+      });
+      probe.remove();
+      return values;
+    });
+    await paints.waitForFunction(([ink, label, series, button, buttonInk, hover]) => {
+      const step = document.querySelector('#step');
+      // zrender splits SVG paint into fill and fill-opacity.
+      const axisLabel = [...document.querySelectorAll('#chart text')].find(el => el.textContent === 'A');
+      if (!axisLabel) return false;
+      const pixel = document.createElement('canvas').getContext('2d');
+      function rgba(color, opacity = 1) {
+        pixel.clearRect(0, 0, 1, 1);
+        pixel.fillStyle = color;
+        pixel.globalAlpha = opacity;
+        pixel.fillRect(0, 0, 1, 1);
+        return pixel.getImageData(0, 0, 1, 1).data;
+      }
+      const axisStyle = getComputedStyle(axisLabel);
+      const actualLabel = rgba(axisStyle.fill, Number(axisStyle.fillOpacity));
+      const expectedLabel = rgba(label);
+      return getComputedStyle(document.documentElement).backgroundColor === 'rgba(0, 0, 0, 0)' &&
+        getComputedStyle(document.body).color === ink && getComputedStyle(step).backgroundColor === (step.matches(':hover') ? hover : button) &&
+        getComputedStyle(step).color === buttonInk &&
+        [...document.querySelectorAll('#chart path[d]')].some(el => getComputedStyle(el).fill === series && el.getBBox().height > 5) &&
+        actualLabel.every((value, i) => Math.abs(value - expectedLabel[i]) <= 1);
+    }, {}, expected);
+    const state = await paints.evaluate(() => {
+      const option = echarts.getInstanceByDom(document.querySelector('#chart')).getOption();
+      return [document.querySelector('#step').textContent, option.legend[0].selected.Two, option.series[0].data];
+    });
+    assert.deepEqual(state, ['2', false, [3,5]]);
+    return expected;
+  }
+  const first = await checkPaint();
+  assert.deepEqual(await paints.evaluate(() => window.firstPaint), [
+    narrow ? 'dark' : 'light', first[0],
+    await page.$eval('[data-codex-figure]', el => getComputedStyle(el).getPropertyValue('--openbitfun-color-accent-default').trim()),
+  ]);
+  await page.evaluate(async () => {
+    const { appearanceRuntime, buildBuiltinAppearance, openBitFunMidnightPalette } = await import('/src/infrastructure/appearance/index.ts');
+    await appearanceRuntime.applyPackage(buildBuiltinAppearance(openBitFunMidnightPalette));
+    document.documentElement.dataset.colorScheme = 'dark';
+  });
+  const midnight = await checkPaint();
+  assert.notDeepEqual(midnight, first);
+  await page.evaluate(async () => {
+    const { skinRuntime } = await import('/src/infrastructure/visual-skin/index.ts');
+    const skin = { manifest:{schema:'openbitfun.visual-skin',schemaVersion:1,id:'chart-paint',name:'Chart paint',version:'1.0.0'},
+      modes:{dark:{tokens:{'color.accent.default':'#7dd3a4','color.action.primary.background':'#8fd4bf','color.action.primary.content':'#17312f'}}} };
+    await skinRuntime.importPackage(new TextEncoder().encode(JSON.stringify(skin)).buffer);
+  });
+  assert.notDeepEqual(await checkPaint(), midnight);
+  await page.evaluate(async () => (await import('/src/infrastructure/visual-skin/index.ts')).skinRuntime.deactivate());
+  assert.deepEqual(await checkPaint(), midnight);
+  console.log('Passed themed first paint, transparent chat background, button contrast pair and live chart paint with updated data and selection preserved.');
   if (process.argv.includes('--bundled') || !existsSync(new URL('assets/visualize.html', root))) {
     const frame = await open(`
       <div role="tablist"><button role="tab" aria-controls="plot" aria-selected="true">Chart</button>
@@ -216,7 +327,7 @@ async function testHost() {
         const plot = chart && [...chart.querySelectorAll('*')].find(el => el.shadowRoot)?.shadowRoot;
         const line = plot?.querySelector('.recharts-line-curve');
         return line && getComputedStyle(line).stroke === series
-          && getComputedStyle(document.documentElement).backgroundColor === paper
+          && getComputedStyle(document.documentElement).backgroundColor === 'rgba(0, 0, 0, 0)'
           && getComputedStyle(document.body).color === ink
           && getComputedStyle(document.querySelector('svg path')).stroke === series;
       }, {}, expected);
@@ -395,6 +506,7 @@ async function testHost() {
         }),
       { timeout: 60000 },
     );
+    await verifyRepaint(widgetFrame, 'viz-calendar, viz-waterfall, viz-flame-chart, viz-stack-trace', 4);
     await widgetFrame.evaluate(() => {
       const calendar = document.querySelector('viz-calendar');
       const detail = document.body.appendChild(document.createElement('output'));
@@ -481,6 +593,7 @@ async function testHost() {
     const plots = read();
     return plots.length === count && plots.every(Boolean);
   }, {}, readPlots, specs.length);
+  await verifyRepaint(chart, 'main > section', specs.length);
   const initialPlots = await chart.evaluate(read => read(), readPlots);
   for (const restoring of [false, true]) {
     await chart.click('#sample');
