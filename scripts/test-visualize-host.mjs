@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 
@@ -23,7 +24,7 @@ page.on('requestfailed', (req) => {
 });
 page.on('pageerror', (error) => console.error(error.message));
 page.setDefaultTimeout(30000);
-try {
+async function testHost() {
   await page.setViewport({ width: narrow ? 375 : 840, height: 850 });
   await page.goto(url, { waitUntil: 'domcontentloaded' });
   async function open(html) {
@@ -124,6 +125,30 @@ try {
   assert.equal(await page.$$eval('[data-codex-figure]', (figures) => figures.length), 1);
   console.log('Passed recovery of an interactive figure when the model returned plain text.');
   await page.goto(url, { waitUntil: 'domcontentloaded' });
+  if (process.argv.includes('--bundled') || !existsSync(new URL('assets/visualize.html', root))) {
+    const frame = await open(`
+      <div role="tablist"><button role="tab" aria-controls="plot" aria-selected="true">Chart</button>
+      <button role="tab" aria-controls="settings">Options</button></div>
+      <section id="plot" style="height:200px"></section><section id="settings" hidden><output></output></section>
+      <script>
+        const chart = echarts.init(document.getElementById('plot'), null, { renderer: 'svg' });
+        chart.setOption({ xAxis: { type: 'category', data: ['A','B'] }, yAxis: {}, series: [{ type: 'bar', data: [4,7] }] });
+        const state = { zoom: 2 };
+        const show = () => document.querySelector('output').textContent = String(state.zoom);
+        show();
+        new Tweak({container: document.getElementById('settings'), onChange: show}).addSlider(state, 'zoom', {min: 1, max: 5});
+      </script>`);
+    await frame.waitForSelector('#plot svg path[d]', { visible: true });
+    await frame.click('[aria-controls=settings]');
+    await frame.waitForSelector('#settings output', { visible: true });
+    await page.click('.visual-codex__menu summary');
+    await page.locator('text/Adjust design').click();
+    await page.focus('fieldset input[type=range]');
+    await page.keyboard.press('End');
+    await frame.waitForFunction(() => document.querySelector('output').textContent === '5');
+    console.log('Passed bundled charts, tabs, design controls and host state without the reference kit.');
+    return;
+  }
   const original = process.env.OPENBITFUN_REFERENCE_FRAGMENT;
   if (original) {
     const html = await readFile(original, 'utf8');
@@ -463,6 +488,9 @@ try {
   }
   await readPlots.dispose();
   console.log('Passed visible rendering, data changes and restoration for all 13 chart families.');
+}
+try {
+  await testHost();
 } finally {
   await browser.close();
 }

@@ -7,7 +7,8 @@
     "node": ">=22.12.0"
   },
   "scripts": {
-    "visualize:prepare": "node scripts/import-visualize.mjs && node scripts/cache-visualize-runtime.mjs",
+    "visualize:prepare": "pnpm run visualize:verify",
+    "visualize:import-reference": "node scripts/import-visualize.mjs && node scripts/cache-visualize-runtime.mjs",
     "visualize:verify": "node scripts/verify-visualize-bundle.mjs",
     "agent-harness:generate": "node scripts/generate-agent-harness.mjs",
     "agent-harness:check": "node scripts/generate-agent-harness.mjs --check",

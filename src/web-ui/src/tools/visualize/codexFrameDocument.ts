@@ -1,6 +1,7 @@
 import type { BoundValues, Declarations } from './visualBindings';
 import { cachedVisualRuntime } from './cachedVisualRuntime';
 import builtInGuest from './figureGuest.js?raw';
+import builtInControls from './figureDesignControls.js?raw';
 import builtInStyles from './inlineDocument.css?raw';
 import extras from './codexFrameExtras.js?raw';
 import inspection from './inspectRenderedFigure.js?raw';
@@ -54,7 +55,7 @@ export async function buildCodexFrame(
     fragment = await materializeRegionalMaps(fragment);
   }
   // Use Tweak's existing hidden-attribute observer for tabs and conditional content as well as variants.
-  const tweak = assets['tweak.js']?.split('.viz-carousel > [data-variant][hidden]').join('[hidden]') ?? '';
+  const tweak = assets['tweak.js']?.split('.viz-carousel > [data-variant][hidden]').join('[hidden]') ?? builtInControls;
   let extensions = script(assets['standalone-host-bridge.js'] ?? builtInGuest) + script(extras) + script(inspection) + script(tweak);
   if (hasReferenceKit && /<viz-calendar\b/i.test(fragment) && !/\/widgets\/[^/]+\/(?:calendar|element)\.js/.test(fragment)) {
     extensions += script(assets['calendar.js']);
