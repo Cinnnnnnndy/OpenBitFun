@@ -1695,6 +1695,35 @@ test('stable and beta publication require every producer, while artifact-only ru
 });
 
 
+test('Desktop release and nightly package Linux on Ubuntu 22.04 and verify before upload', () => {
+  const readPackageJob = (file) =>
+    yaml.parse(readFileSync(path.join(repoRoot, '.github/workflows', file), 'utf8')).jobs.package;
+  const release = readPackageJob('desktop-package.yml');
+  const nightly = readPackageJob('nightly-artifacts.yml');
+  const dependencies = (job) => job.steps.find((step) => step.name === 'Install Linux desktop build dependencies');
+
+  assert.equal(release.container, "${{ startsWith(matrix.platform.name, 'linux-') && 'ubuntu:22.04' || '' }}");
+  assert.equal(nightly.container, "${{ startsWith(matrix.platform, 'linux-') && 'ubuntu:22.04' || '' }}");
+  assert.equal(dependencies(release).run, dependencies(nightly).run);
+
+  for (const job of [release, nightly]) {
+    const checkout = job.steps.find((step) => step.uses === 'actions/checkout@v5');
+    const trust = job.steps.find((step) => step.name === 'Trust the Linux build checkout');
+    const verify = job.steps.find((step) => step.name === 'Verify Linux desktop package');
+    const buildIndex = job.steps.findIndex((step) => step.name === 'Build desktop app');
+    const uploadIndex = job.steps.findIndex((step) => step.name === 'Upload bundles');
+    assert.equal(trust.if, "runner.os == 'Linux'");
+    assert.equal(trust.run, 'git config --global --add safe.directory "$GITHUB_WORKSPACE"');
+    assert.ok(job.steps.indexOf(checkout) < job.steps.indexOf(trust));
+    assert.ok(job.steps.indexOf(trust) < buildIndex);
+    assert.equal(verify.if, "runner.os == 'Linux'");
+    assert.match(verify.run, /verify-linux-desktop-package\.sh/);
+    assert.match(verify.run, /linux-appimage-tray-libraries\.json/);
+    assert.ok(buildIndex >= 0 && buildIndex < job.steps.indexOf(verify));
+    assert.ok(job.steps.indexOf(verify) < uploadIndex);
+  }
+});
+
 test('Desktop recovery selects one platform and cannot publish an incomplete release', (t) => {
   const workflow = yaml.parse(readFileSync(path.join(repoRoot, '.github/workflows/desktop-package.yml'), 'utf8'));
   const step = workflow.jobs.prepare.steps.find((entry) => entry.name === 'Select Desktop package platforms');
