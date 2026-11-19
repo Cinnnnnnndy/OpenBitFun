@@ -73,9 +73,6 @@ export function compileCatalog(source) {
     if (!library || !template.roots.length || template.roots.some(root => !Object.hasOwn(library.components, root))) throw new Error('Template requires an available library and root components');
   }
 
-// OpenUI Lang is positional. Keep this prompt derived from the same product
-// declarations that compile the runtime library so the model sees the exact
-// signatures that GenUIOpenUI.tsx registers.
   const str = { type: 'string', minLength: 1 };
   const ref = name => ({ $ref: '#/$defs/' + name });
   const object = (properties, required = Object.keys(properties)) => ({ type: 'object', properties, required, additionalProperties: false });
@@ -88,11 +85,6 @@ export function compileCatalog(source) {
   const app = { type: 'object', properties: { schemaVersion: { const: 2 }, id: str, title: str, description: { type: 'string' }, template: { enum: Object.keys(source.templates) }, libraryId: { enum: libraryIds }, libraryRevision: { type: 'integer' }, designSpec: designSpecIdentity, htmlRuntime, source: { anyOf: [ref('openuiDocument'), ref('htmlDocument')] }, state: { type: 'object', additionalProperties: ref('state') } }, required: ['schemaVersion', 'id', 'title', 'template', 'libraryId', 'libraryRevision', 'designSpec', 'source', 'state'], additionalProperties: true };
   const propertyOrder = ['schemaVersion', 'id', 'title', 'description', 'template', 'libraryId', 'libraryRevision', 'designSpec', 'htmlRuntime', 'source', 'state'];
   app.properties = Object.fromEntries(propertyOrder.map(key => [key, app.properties[key]]));
-  const message = { anyOf: [
-    object({ createSurface: object({ id: str, title: str, description: { type: 'string' }, template: { enum: Object.keys(source.templates) }, libraryId: { enum: libraryIds }, libraryRevision: { type: 'integer' }, designSpec: designSpecIdentity, source: { anyOf: [ref('openuiDocument'), ref('htmlDocument')] } }, ['id', 'title', 'template', 'libraryId', 'libraryRevision', 'designSpec', 'source']) }),
-    object({ updateDataModel: object({ state: app.properties.state, values: { type: 'object' } }, []) }),
-  ] };
-  const generation = object({ protocol: { const: 'openbitfun.genui.v1' }, messages: { type: 'array', minItems: 1, items: message } });
   const profiles = structuredClone(source.profiles ?? {});
   for (const profile of Object.values(profiles)) {
     if (!profile.templates?.length || profile.templates.length !== 1 || profile.templates.some(id => !source.templates[id])) throw new Error('Profile must bind exactly one available template');
@@ -106,5 +98,5 @@ export function compileCatalog(source) {
   app.properties.designSpec = object({ id: { enum: Object.keys(source.designSpecs ?? {}) }, revision: { type: 'integer' } });
   app.properties.designSpec.required = ['id', 'revision'];
   const libraryAdapters = Object.fromEntries(Object.entries(libraries).map(([id, library]) => [id, { ...structuredClone(library.metadata), id }]));
-  return { contractVersion: 4, $defs: { state, htmlDocument, openuiDocument }, app, generation, libraries, libraryAdapters, templates: source.templates, legacyTemplateLibraries: source.legacyTemplateLibraries ?? {}, designSpecs: source.designSpecs ?? {}, profiles, rules: source.rules, htmlRuntime: source.htmlRuntime };
+  return { contractVersion: 4, $defs: { state, htmlDocument, openuiDocument }, app, libraries, libraryAdapters, templates: source.templates, legacyTemplateLibraries: source.legacyTemplateLibraries ?? {}, designSpecs: source.designSpecs ?? {}, profiles, rules: source.rules, htmlRuntime: source.htmlRuntime };
 }

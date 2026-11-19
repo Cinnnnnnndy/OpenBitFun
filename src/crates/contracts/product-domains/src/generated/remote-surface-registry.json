@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "digest": "fnv1a64:21391be4b394fbaa",
+  "digest": "fnv1a64:aaf7320d931d5b35",
   "retiredCommandPrefixes": [
     {
       "prefix": "lsp_",
@@ -2285,14 +2285,15 @@
     },
     {
       "id": "gen_ui_provider_call",
-      "surface": "tauri_command",
-      "remoteWorkspace": "WorkspaceAgnostic",
+      "surface": "host_invoke_only",
+      "remoteWorkspace": "RemoteUnsupported",
       "peer": {
-        "kind": "proxied"
+        "kind": "retired",
+        "reason": "the legacy GenUI provider has been retired"
       },
       "cliPeer": {
         "kind": "unsupported",
-        "reason": "the CLI peer host has no handler for this command"
+        "reason": "the legacy GenUI provider has been retired"
       }
     },
     {

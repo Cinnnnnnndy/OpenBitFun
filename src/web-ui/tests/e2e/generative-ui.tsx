@@ -33,7 +33,11 @@ if (params.has('streaming')) {
       designSpec: { id: 'openui.desktop.v1', revision: 1 },
       source: {
         kind: 'openui-lang',
-        content: 'root = Col([Text("Stored OpenUI text"), Button("Archived action")])',
+        content: [
+          'root = Col([Text("Stored OpenUI text"), Button("Archived action"), photo, note])',
+          'photo = SearchImage("Archived lighthouse")',
+          'note = HtmlView("<p>Saved nested note</p><script>document.title = 1</script>", 100, "Saved note")',
+        ].join('\n'),
       },
     },
     {

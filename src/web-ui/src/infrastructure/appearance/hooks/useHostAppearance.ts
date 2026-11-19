@@ -8,7 +8,6 @@ const appearanceAttributes = [
   "data-openbitfun-skin-id",
   "data-color-scheme",
   "data-contrast",
-  "data-theme",
 ];
 
 /** A new skin or Appearance revision can change scoped tokens within the same color scheme. */

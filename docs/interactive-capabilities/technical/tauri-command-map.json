@@ -2,12 +2,12 @@
   "schemaVersion": 2,
   "generatedFrom": "src/shared/interactive-capabilities/catalog.json",
   "catalogDigest": "47d0b05e8a0f73d27f5f8c7a79539589d9fdaa74c8d26fcc5f5027eb4753c6b0",
-  "commandCount": 702,
+  "commandCount": 701,
   "coverage": {
-    "commandCount": 702,
+    "commandCount": 701,
     "documentedCommandCount": 635,
-    "implementationCommandCount": 67,
-    "implementationDigest": "3c03db6cdd74260fd8b7203d30ea4ab7224b4cfdea4a532c11e41a587cd92b19"
+    "implementationCommandCount": 66,
+    "implementationDigest": "22a8353380694e1246a4b15ec83c4f5a10c781fd5dfb0a0fb9d2a135e53380b6"
   },
   "commands": [
     {
@@ -2674,20 +2674,6 @@
       "sourceFile": "src/apps/desktop/src/frontend_workbench.rs",
       "signature": "fn frontend_update_candidate_ready( state: tauri::State<'_, Arc<FrontendWorkbenchManager>>, webview: tauri::Webview, request: FrontendUpdateDecisionRequest, ) -> Result<Value, String>",
       "remoteWorkspacePolicy": "LocalOnly"
-    },
-    {
-      "id": "gen_ui_provider_call",
-      "moduleId": "generative_ui",
-      "capabilityId": "feature.generative-ui",
-      "capabilityIds": [
-        "feature.generative-ui"
-      ],
-      "documentedItemIds": [],
-      "visibility": "implementation",
-      "rustPath": "api::generative_ui_api::gen_ui_provider_call",
-      "sourceFile": "src/apps/desktop/src/api/generative_ui_api.rs",
-      "signature": "fn gen_ui_provider_call(request: GenUIProviderRequest) -> Result<Value, String>",
-      "remoteWorkspacePolicy": "WorkspaceAgnostic"
     },
     {
       "id": "generate_commit_message",

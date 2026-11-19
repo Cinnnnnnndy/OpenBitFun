@@ -10,7 +10,7 @@ import {
 } from './visualBindings';
 import { z } from 'zod/v4';
 import { useI18n } from '@/infrastructure/i18n';
-import { useHostAppearance } from '../generative-ui/components/openui/scheme';
+import { useHostAppearance } from '@/infrastructure/appearance/hooks/useHostAppearance';
 import { buildCodexFrame } from './codexFrameDocument';
 import { watchFigureInspection } from './figureInspection';
 import { readFigureStyle } from './figureAppearance';

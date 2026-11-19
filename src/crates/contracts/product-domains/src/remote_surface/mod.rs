@@ -677,6 +677,21 @@ mod tests {
     }
 
     #[test]
+    fn old_controllers_receive_a_retirement_reason_for_the_genui_provider() {
+        let command = "gen_ui_provider_call";
+        assert_eq!(
+            operation(command).unwrap().surface,
+            OperationSurface::HostInvokeOnly
+        );
+        for host in [PeerHostKind::Desktop, PeerHostKind::Cli] {
+            assert!(matches!(
+                peer_host_verdict(command, host),
+                PeerHostVerdict::Refuse(PeerRefusal::Retired { .. })
+            ));
+        }
+    }
+
+    #[test]
     fn refusal_messages_keep_legacy_wire_strings() {
         assert_eq!(
             PeerRefusal::ControllerLocal.message("account_login"),

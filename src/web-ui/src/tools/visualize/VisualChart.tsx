@@ -29,7 +29,7 @@ import { useI18n } from '@/infrastructure/i18n';
 import { withOverlays } from './chartOverlays';
 import { chartOptions } from './chartOptions';
 import type { VisualSpec, VisualTable } from './document';
-import { useHostAppearance } from '../generative-ui/components/openui/scheme';
+import { useHostAppearance } from '@/infrastructure/appearance/hooks/useHostAppearance';
 
 registerCharts([
   BarChart,

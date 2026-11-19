@@ -1,4 +1,4 @@
-import atlasStyle from '../../../../shared/generative-ui/regional-map.css?raw';
+import atlasStyle from '../../../../shared/visualize/regional-map.css?raw';
 import { i18nService } from '@/infrastructure/i18n';
 
 import land from '../../../../../third_party/visualize/atlas/land.json?url&no-inline';

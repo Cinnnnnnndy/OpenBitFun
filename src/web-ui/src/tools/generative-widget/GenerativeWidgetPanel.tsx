@@ -7,7 +7,6 @@ import { useGenerativeWidgetProjection } from '@/flow_chat/hooks/useGenerativeWi
 import GenUIApplication from '@/tools/generative-ui/GenUIApplication';
 import { isGenUIAppEnvelope, type GenUIAppEnvelope, type GenUIAppState } from '@/tools/generative-ui/genUITypes';
 import { resolveGenUIInteractionState } from '@/tools/generative-ui/genUIInteractionState';
-import type { GenUITargetEvent } from '@/tools/generative-ui/genUIAsyncCapabilities';
 import type { GenUIVerification } from '@/tools/generative-ui/genUIVerification';
 import { genUIContentKey } from '@/tools/generative-ui/genUIState';
 import './GenerativeWidgetPanel.scss';
@@ -17,8 +16,6 @@ export interface GenerativeWidgetPanelProps {
   appState?: GenUIAppState;
   origin?: GenerativeWidgetOrigin;
   presentation?: 'panel' | 'inline';
-  /** Optional host delivery for component events such as Map marker selection. */
-  onTargetEvent?: (event: GenUITargetEvent) => void | Promise<void>;
   onExpand?: (value: { origin: GenerativeWidgetOrigin; app: GenUIAppEnvelope; appState?: GenUIAppState; widgetId: string }) => void;
 }
 
@@ -81,9 +78,6 @@ export const GenerativeWidgetPanel: React.FC<GenerativeWidgetPanelProps> = ({
             definition={app}
             streaming={projection?.isStreaming}
             initialState={appState}
-            restoredFromStorage={false}
-            readOnly
-            persistState={false}
             onVerification={setVerification}
           />}
         </fieldset>

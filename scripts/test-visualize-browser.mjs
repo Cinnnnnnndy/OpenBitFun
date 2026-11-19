@@ -13,6 +13,13 @@ try {
   const page = await browser.newPage();
   page.setDefaultNavigationTimeout(90000);
   const errors = [];
+  const archiveModules = new Set();
+  page.on('request', request => {
+    const path = new URL(request.url()).pathname;
+    if (/\/generative-ui\/(?:genUIOpenUI|GenUIApplication)\.tsx$|@openuidev[_/]react-lang/.test(path)) {
+      archiveModules.add(path);
+    }
+  });
   page.on('pageerror', (error) => errors.push(String(error)));
   await page.setViewport({ width: 736, height: 800 });
   await page.goto(url, { waitUntil: 'domcontentloaded' });
@@ -213,8 +220,10 @@ try {
   const frameElement = await page.waitForSelector('iframe[data-gen-ui-html-frame]');
   assert.equal(await frameElement.evaluate(el => el.getAttribute('sandbox')), '');
   assert.ok((await frameElement.boundingBox()).height > 260);
-  const frame = await frameElement.contentFrame();
-  await frame.waitForSelector('label[for="services"]', { visible: true });
+  const frame = await page.waitForFrame(async candidate =>
+    candidate.parentFrame() === page.mainFrame() &&
+    await candidate.evaluate(() => Boolean(document.querySelector('label[for="services"]')?.getClientRects().length)).catch(() => false),
+  );
   assert.equal(await frame.$eval('#details', el => getComputedStyle(el).display), 'none');
   await frame.click('label[for="services"]');
   assert.equal(await frame.$eval('#details', el => getComputedStyle(el).display), 'block');
@@ -288,6 +297,7 @@ try {
   assert.equal(await page.$('.flow-tool-card-wrapper, .visual-guide iframe'), null);
   console.log('Passed: reference overview, three tabs, four modes, six architecture rows, four distinct routes and retained choice.');
 
+  assert.deepEqual([...archiveModules], [], 'New answers must load independently of the OpenUI renderer');
   await page.goto(url + '?history');
   await page.waitForFunction(() => document.querySelectorAll('[data-gen-ui-app]').length === 2);
   for (const i of [0, 1]) {
@@ -295,6 +305,7 @@ try {
     assert.match(await region.evaluate((el) => el.textContent), new RegExp('Saved record ' + i));
     assert.equal(await region.$eval('button', (e) => e.disabled), true);
   }
+  assert.ok(archiveModules.size, 'Old messages load the archive renderer on demand');
   assert.equal(await page.$('[data-openbitfun-state="repairRequired"]'), null);
   console.log('Passed: direct and deferred archived GenUI results render read-only.');
   assert.deepEqual(errors, []);

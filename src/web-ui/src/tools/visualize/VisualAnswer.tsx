@@ -22,7 +22,7 @@ import inlineDocumentCss from './inlineDocument.css?raw';
 
 const emptyNames: string[] = [];
 const VisualChart = lazy(() => import('./VisualChart'));
-const StaticDocument = lazy(() => import('../generative-ui/GenUIHtmlDocument'));
+const StaticDocument = lazy(() => import('@/shared/ui/static-document/StaticHtmlDocument'));
 const CodexFigure = lazy(() => import('./CodexFigure'));
 
 interface ReaderState {
@@ -385,7 +385,7 @@ export default function VisualAnswer({
     return (
       <Suspense fallback={<p>{summary}</p>}>
         <div className={doc.hasControls ? 'visual-answer__interactive-document' : undefined}>
-          <StaticDocument source={{ kind: 'html-document', html: doc.html, css: inlineDocumentCss + staticFigureTypography }} />
+          <StaticDocument source={{ html: doc.html, css: inlineDocumentCss + staticFigureTypography }} />
         </div>
       </Suspense>
     );

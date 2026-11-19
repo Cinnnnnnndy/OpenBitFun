@@ -508,9 +508,6 @@
     }
   ],
   "implementationOnlyCommands": {
-    "generativeUiOwner": [
-      "gen_ui_provider_call"
-    ],
     "publicMarketImageCache": [
       "market_image_load"
     ],
@@ -13566,7 +13563,7 @@
             ]
           },
           "evidence": [
-            "source:src/web-ui/src/tools/generative-ui/GenUIHtmlDocument.tsx#GenUIHtmlDocument"
+            "source:src/web-ui/src/tools/visualize/CodexFigure.tsx#CodexFigure"
           ]
         },
         {
@@ -13703,9 +13700,6 @@
     "shell": "feature.terminal"
   },
   "implementationOwners": {
-    "generative_ui": {
-      "capabilityId": "feature.generative-ui"
-    },
     "commands": {
       "capabilityId": "feature.projects"
     },
