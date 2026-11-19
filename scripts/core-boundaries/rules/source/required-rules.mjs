@@ -2273,7 +2273,7 @@ export const requiredContentRules = [
   {
     path: 'src/crates/execution/agent-runtime/tests/agent_session_contracts/scheduled_job_contracts.rs',
     reason:
-      'agent-runtime scheduled-job owner must keep behavior-equivalence contracts for wire shape, retry, coalescing, one-shot, missing-session, and restart recovery semantics',
+      'agent-runtime scheduled-job owner must keep contracts for wire shape, pending wakeups, failed-trigger consumption, coalescing, one-shot, missing-session, and restart recovery semantics',
     patterns: [
       {
         regex: /\bmanual_trigger_coalesces_existing_pending_run\b/,
@@ -2296,8 +2296,16 @@ export const requiredContentRules = [
         message: 'missing enqueue success one-shot regression',
       },
       {
-        regex: /\benqueue_failure_preserves_retry_and_missing_session_disable_semantics\b/,
+        regex: /\benqueue_failure_consumes_trigger_and_preserves_missing_session_disable_semantics\b/,
         message: 'missing enqueue failure regression',
+      },
+      {
+        regex: /\bfailed_trigger_waits_for_the_next_schedule_instead_of_retrying\b/,
+        message: 'missing failed trigger scheduling regression',
+      },
+      {
+        regex: /\bfailed_one_shot_trigger_stops_until_an_explicit_manual_run\b/,
+        message: 'missing failed one-shot manual run regression',
       },
       {
         regex: /\brestart_recovery_marks_active_turn_error\b/,
@@ -2489,7 +2497,7 @@ export const requiredContentRules = [
     ],
   },
   {
-    path: 'src/crates/assembly/core/src/agentic/tools/implementations/task/deep_review.rs',
+    path: 'src/crates/assembly/core/src/agentic/tools/implementations/agent_collaboration/deep_review.rs',
     reason:
       'TaskTool must keep DeepReview retry/result presentation as a facade call instead of re-owning provider-neutral policy text or data shaping',
     patterns: [
@@ -2512,7 +2520,7 @@ export const requiredContentRules = [
     ],
   },
   {
-    path: 'src/crates/assembly/core/src/agentic/tools/implementations/task/execution.rs',
+    path: 'src/crates/assembly/core/src/agentic/tools/implementations/agent_collaboration/execution.rs',
     reason:
       'TaskTool execution must keep DeepReview retry/result presentation as facade calls instead of re-owning provider-neutral policy text or data shaping',
     patterns: [
@@ -3272,13 +3280,25 @@ export const requiredContentRules = [
         regex: /\bpub async fn start_dialog_turn_with_existing_context\b/,
         message: 'missing existing-context dialog turn entry point',
       },
-      {
-        regex: /\bstart_dialog_turn_with_existing_context_persists_turn_and_snapshot\b/,
-        message: 'missing existing-context dialog turn persistence regression',
-      },
+    ],
+  },
+  {
+    path: 'src/crates/assembly/core/src/agentic/session/session_manager/tests/prompt_cache.rs',
+    reason: 'core prompt cache tests must cover cloning both runtime and persisted entries',
+    patterns: [
       {
         regex: /\bclone_prompt_cache_copies_runtime_and_persisted_entries\b/,
         message: 'missing prompt cache clone runtime/disk regression',
+      },
+    ],
+  },
+  {
+    path: 'src/crates/assembly/core/src/agentic/session/session_manager/tests/turn_admission.rs',
+    reason: 'core session turn admission must cover persistence with existing context',
+    patterns: [
+      {
+        regex: /\bstart_dialog_turn_with_existing_context_persists_turn_and_snapshot\b/,
+        message: 'missing existing-context dialog turn persistence regression',
       },
     ],
   },
@@ -4500,6 +4520,12 @@ export const requiredContentRules = [
         regex: /\bSftpSession\b/,
         message: 'missing SFTP session owner path',
       },
+    ],
+  },
+  {
+    path: 'src/crates/services/services-integrations/src/remote_ssh/manager/tests/saved_profiles.rs',
+    reason: 'SSH saved profile tests must cover missing vault credentials',
+    patterns: [
       {
         regex: /\bretains_password_connection_and_workspace_without_vault_entry\b/,
         message: 'missing saved credential retention regression',
@@ -7818,7 +7844,7 @@ export const requiredContentRules = [
     ],
   },
   {
-    path: 'src/crates/assembly/core/src/agentic/tools/implementations/task/input.rs',
+    path: 'src/crates/assembly/core/src/agentic/tools/implementations/agent_collaboration/input.rs',
     reason:
       'core Task input must continue owning fork-aware background subagent launch semantics until a reviewed agent-runtime port preserves delivery behavior',
     patterns: [
@@ -7837,7 +7863,7 @@ export const requiredContentRules = [
     ],
   },
   {
-    path: 'src/crates/assembly/core/src/agentic/tools/implementations/task/execution.rs',
+    path: 'src/crates/assembly/core/src/agentic/tools/implementations/agent_collaboration/execution.rs',
     reason:
       'core Task execution must continue owning background subagent launch semantics until a reviewed agent-runtime port preserves delivery behavior',
     patterns: [
@@ -7860,7 +7886,7 @@ export const requiredContentRules = [
     ],
   },
   {
-    path: 'src/crates/assembly/core/src/agentic/tools/implementations/task/background.rs',
+    path: 'src/crates/assembly/core/src/agentic/tools/implementations/agent_collaboration/background.rs',
     reason:
       'core Task background acknowledgement must remain assistant-visible and expose the task id needed for explicit result collection',
     patterns: [
@@ -7871,7 +7897,7 @@ export const requiredContentRules = [
     ],
   },
   {
-    path: 'src/crates/assembly/core/src/agentic/tools/implementations/task/tests.rs',
+    path: 'src/crates/assembly/core/src/agentic/tools/implementations/agent_collaboration/tests.rs',
     reason:
       'core Task tests must preserve background acknowledgement shape',
     patterns: [

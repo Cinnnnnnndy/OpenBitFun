@@ -83,7 +83,11 @@
       "noSessions": "No sessions yet",
       "sessionUnavailable": "This session is no longer on that device.",
       "sessionActionFailed": "Couldn't do that on the other device. Try again.",
-      "connecting": "Connecting to {{name}}…"
+      "connecting": "Connecting to {{name}}…",
+      "linkReconnecting": "Reconnecting",
+      "linkReconnectingLabel": "Reconnecting to {{name}}. Its sessions may be out of date.",
+      "linkStarting": "Starting",
+      "linkStartingLabel": "{{name}} is still starting OpenBitFun."
     },
     "aria": {
       "navControl": "Navigation controls",
@@ -518,7 +522,11 @@
       "discoveryWarningTitle": "External session discovery",
       "discoveryReadFailed": "Some {{source}} session records could not be read. Existing sessions remain available.",
       "discoveryWorkspaceUnresolved": "Some {{source}} sessions could not be matched to a workspace. Existing sessions remain available.",
-      "discoveringExternal": "Discovering external sessions…"
+      "discoveringExternal": "Discovering external sessions…",
+      "deleteFailed": "Failed to delete session",
+      "archiveFailed": "Failed to archive session",
+      "renameFailed": "Failed to rename session",
+      "workspaceBindingMismatch": "This session belongs to a different workspace, so it cannot be changed from here. Reopen OpenBitFun to reload it under its own workspace."
     },
     "scheduledJobs": {
       "title": "Scheduled Jobs",
@@ -929,6 +937,8 @@
   },
   "peerConnection": {
     "reconnectingShort": "Reconnecting…",
+    "startingShort": "Host starting…",
+    "starting": "{{name}} is still starting OpenBitFun. Requests will work once it is ready.",
     "returnLocalShort": "Go local",
     "returningShort": "Returning…",
     "reconnecting": "Reconnecting to {{name}}. Content may be out of date."
@@ -1397,6 +1407,8 @@
     "readyVersion": "Version {{version}} is downloaded",
     "installWarning": "Installing will restart OpenBitFun on this device and interrupt its active sessions.",
     "installAndRestart": "Install and restart",
+    "systemRestartRequired": "System restart required",
+    "systemRestartMessage": "The update was installed. Restart Windows to finish applying it; you do not need to install it again.",
     "installing": "Installing…",
     "deferredMessage": "The update is saved. Select the bottom-left checkmark to install and restart whenever you are ready.",
     "downloadAgain": "Download again",
@@ -1777,6 +1789,7 @@
     "scrollPrevious": "Scroll tabs left",
     "scrollNext": "Scroll tabs right",
     "closeTab": "Close {{label}}",
+    "closeDeviceTabs": "Close all tabs for this device",
     "workspaceUnavailable": "This session's workspace is not open. Reopen its workspace to switch to this session."
   },
   "loading": {
@@ -2176,6 +2189,7 @@
       "copyAuthFailed": "Failed to copy GitHub CLI login command.",
       "unresolvedPullRequest": "This pull request could not be resolved from the remotes of the current workspace.",
       "ghAuthRequired": "GitHub CLI authentication required",
+      "ghAuthHostTerminal": "Run this command in the OpenBitFun host terminal, finish signing in, then retry.",
       "tokenRequiredTitle": "Token required",
       "tokenScopeTitle": "Token permissions required",
       "tokenUpdateTitle": "Token update required",
@@ -2211,28 +2225,10 @@
     "includeUncommittedHint": "Only Git-visible changes are sent. Ignored files, including local .env files and build output, stay on this device.",
     "cliStatus": "$t(shared:product.name)",
     "cliReady": "Ready ({{version}})",
-    "cliCanDeploy": "Ready for one-click setup",
-    "installingCli": "Installing OpenBitFun CLI…",
-    "provisioningDaemon": "Syncing the account and starting the service…",
-    "cancellingPreparation": "Cancelling setup…",
     "cliUpdateRequired": "Needs an update before it can run tasks",
     "cliUnavailable": "OpenBitFun is not installed on this target",
     "deviceUpdateRequired": "Update OpenBitFun on this device, then check again.",
-    "oneClickDeploy": "Set up OpenBitFun",
-    "oneClickDeployDescription": "Installs the signature-verified OpenBitFun CLI. If this device is signed in, it also syncs the current account and starts an auto-start service.",
-    "prepareSucceededWithAccount": "OpenBitFun CLI is installed, the account was synced securely, and the persistent service is connected.",
-    "prepareSucceededCliOnly": "OpenBitFun CLI is installed. Account sync was skipped because this device is signed out; SSH Dispatch tasks still run as persistent background processes.",
-    "prepareFailed": "OpenBitFun setup did not complete. Failed account and service changes are cleaned up on a best-effort basis; check the target connection or service manager and try again.",
-    "prepareCancelled": "Setup was cancelled.",
-    "prepareCancelFailed": "Setup could not be cancelled. Check the target status again shortly.",
-    "cancelPreparation": "Cancel setup",
-    "retryProvision": "Retry account service",
-    "retryProvisionDescription": "The CLI is ready. Retry only the secure account sync and persistent service setup.",
-    "installUnavailable": "No compatible OpenBitFun package is available for this target, so it cannot run tasks. Pick another target, or install OpenBitFun on it yourself and check again.",
-    "installDetails": "Installation details",
     "version": "Version",
-    "downloadUrl": "Source",
-    "integrity": "Integrity check",
     "useTarget": "Use this target",
     "cancel": "Cancel",
     "eventHistoryIncomplete": "Some task history is no longer available. The visible conversation may be incomplete.",
@@ -2374,6 +2370,8 @@
   },
   "peerHost": {
     "connectionInterrupted": "The connection to the device was interrupted. Try again.",
+    "notResponding": "That device is not responding. Check that OpenBitFun is running there, then try again.",
+    "starting": "OpenBitFun on that device is still starting. Try again in a moment.",
     "unavailable": "This feature is not available on that device.",
     "updateRequired": "The OpenBitFun version on that device does not support this feature. Try updating OpenBitFun on that device.",
     "withDetail": "{{message}} ({{detail}})"

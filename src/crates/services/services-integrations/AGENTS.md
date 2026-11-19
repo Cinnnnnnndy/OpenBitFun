@@ -2,7 +2,7 @@
 
 Scope: this guide applies to `src/crates/services/services-integrations`.
 
-For remote CLI installation scripts and recovery behavior, run
+For SSH dispatch target probing, protocol compatibility, and job transport, run
 `cargo test --locked -p openbitfun-services-integrations --no-default-features --features remote-ssh-concrete --lib remote_ssh::dispatch_ssh::tests`.
 Generated Bash execution tests require Unix; Windows covers protocol and script
 assembly checks. These fixtures do not establish live SSH behavior.
@@ -178,6 +178,19 @@ they do not prove live SSH/Peer/relay behavior.
   workspace path.
 
 ## Verification
+
+For remote ExecCommand/WriteStdin output waits, steering, split UTF-8 cursors
+and runtime-port conversion:
+
+```bash
+cargo test --locked -p openbitfun-services-integrations --no-default-features --features remote-ssh-concrete --lib remote_ssh::remote_exec
+```
+
+Wait interruption commits the output cursor and leaves the remote process and
+already submitted input intact. Preserve partial UTF-8 bytes across polls and
+use the drained closure snapshot for session cleanup. These fixtures use the
+remote manager with simulated transport and local process owners; they do not
+establish live SSH, Peer Device, relay or Detached Dispatch behavior.
 
 Select one integration family and its minimum feature set. Remote SSH uses a
 grouped target for tests within the same boundary; use

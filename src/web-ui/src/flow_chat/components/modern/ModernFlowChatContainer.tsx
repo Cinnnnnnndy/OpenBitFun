@@ -27,6 +27,7 @@ import { composerPresentationToTurnRailPreview, parseComposerPresentation } from
 import { BackgroundCommandInputDialog } from '../background-command/BackgroundCommandInputDialog';
 import { WelcomePanel } from '../WelcomePanel';
 import { HistorySessionPlaceholder } from './HistorySessionPlaceholder';
+import { PeerUpdatesPausedNotice } from './PeerUpdatesPausedNotice';
 import { HistorySessionLoadingBoundary } from './HistorySessionLoadingBoundary';
 import {
   FlowChatContext,
@@ -91,7 +92,7 @@ import { scheduleAfterStartupPaint } from '@/shared/utils/startupTaskScheduling'
 import { agentAPI } from '@/infrastructure/api/service-api/AgentAPI';
 import { notificationService } from '@/shared/notification-system';
 import { confirmDanger } from '@/infrastructure/confirm-dialog';
-import { getActiveSurfaceScope, isSurfaceChangedError } from '@/infrastructure/peer-device/deviceSurface';
+import { getActiveSurfaceScope, isLocalSurface, isSurfaceChangedError } from '@/infrastructure/peer-device/deviceSurface';
 import { deleteSessionTreeBranch } from '../../services/deleteSessionTreeBranch';
 import { resolveSessionDriverId } from '../../session-drivers/resolve';
 import {
@@ -580,6 +581,7 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
   const trajectoryRef = useRef<TrajectoryExplorerRef>(null);
   const openTrajectory = useCallback(() => setTrajectoryOpen(true), []);
   const virtualListRef = useRef<VirtualMessageListRef>(null);
+  const paneViewportRect = useRef<{ width: number; height: number }>();
   const chatScopeRef = useRef<HTMLDivElement>(null);
   const activeSessionIdRef = useRef<string | null>(null);
   const sessionViewportStateRef = useRef<Map<string, SessionViewportState>>(new Map());
@@ -1145,13 +1147,15 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
       ...(historyView?.loadedRanges.flatMap(range => range.turns) ?? []),
     ];
     const dialogTurnById = new Map(loadedTurns.map(turn => [turn.id, turn]));
-    const loadedByStorageIndex = new Map<number, { turnId: string; content: string; capsulePreview?: FlowChatTurnRailItem['capsulePreview'] }>();
-    const loadedByOrdinal = new Map<number, { turnId: string; content: string; capsulePreview?: FlowChatTurnRailItem['capsulePreview'] }>();
+    type LoadedRailTurn = { turnId: string; content: string; storageTurnIndex?: number; capsulePreview?: FlowChatTurnRailItem['capsulePreview'] };
+    const loadedByStorageIndex = new Map<number, LoadedRailTurn>();
+    const loadedByOrdinal = new Map<number, LoadedRailTurn>();
     for (const range of historyView?.loadedRanges ?? []) {
       range.turns.forEach((turn, index) => {
         const loaded = {
           turnId: turn.id,
           content: turn.userMessage?.content ?? '',
+          storageTurnIndex: turn.storageTurnIndex ?? turn.backendTurnIndex,
           capsulePreview: turnRailPreviewFor(turn),
         };
         loadedByOrdinal.set(range.startOrdinal + index, loaded);
@@ -1166,6 +1170,7 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
       const loaded = {
         turnId: summary.turnId,
         content: dialogTurn?.userMessage?.content ?? '',
+        storageTurnIndex: summary.storageTurnIndex,
         capsulePreview: turnRailPreviewFor(dialogTurn),
       };
       loadedByOrdinal.set(Math.max(0, summary.turnIndex - 1), loaded);
@@ -1185,13 +1190,19 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
       const catalogDialogTurn = catalogEntry?.turnId
         ? dialogTurnById.get(catalogEntry.turnId)
         : undefined;
-      const loaded = loadedByStorageIndex.get(storageTurnIndex)
-        ?? (catalogEntry?.turnId && catalogDialogTurn ? {
+      const loaded = [loadedByStorageIndex.get(storageTurnIndex),
+        catalogEntry?.turnId && catalogDialogTurn ? {
           turnId: catalogEntry.turnId,
           content: catalogDialogTurn.userMessage?.content ?? '',
+          storageTurnIndex: catalogDialogTurn.storageTurnIndex ?? catalogDialogTurn.backendTurnIndex,
           capsulePreview: turnRailPreviewFor(catalogDialogTurn),
-        } : undefined)
-        ?? loadedByOrdinal.get(ordinal);
+        } : undefined, loadedByOrdinal.get(ordinal),
+      ].find(candidate => {
+        if (!candidate) return false;
+        if (!catalogEntry) return true;
+        if (catalogEntry.turnId && candidate.turnId !== catalogEntry.turnId) return false;
+        return candidate.storageTurnIndex === undefined || candidate.storageTurnIndex === catalogEntry.storageTurnIndex;
+      });
       const turnId = loaded?.turnId ?? catalogEntry?.turnId ?? null;
       if (loaded?.turnId) {
         usedLoadedTurnIds.add(loaded.turnId);
@@ -1261,6 +1272,10 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
   const activeHistoryRestore = historyRestore?.sessionId === activeSession?.sessionId ? historyRestore : null;
   const showFailedHistoryPlaceholder =
     (showHistoryPlaceholder && historyState === 'failed') || activeHistoryRestore?.status === 'failed';
+  // Rendered records stay after a failed live read; without a cue they look
+  // current while nothing new arrives. The next ready clears the failed state.
+  const showUpdatesPaused = historyState === 'failed' && !showFailedHistoryPlaceholder
+    && showSessionTranscript && !isLocalSurface(surfaceScope.surfaceId);
   const showHistoryOpenIntentOverlay =
     pendingHistoryOpenSession !== null &&
     (
@@ -2015,6 +2030,14 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
     void FlowChatManager.getInstance().switchChatSession(sessionId);
   }, [activeSession?.sessionId, historyRestore]);
 
+  const handleRetryPausedUpdates = useCallback(() => {
+    const sessionId = activeSession?.sessionId;
+    if (!sessionId) return;
+    void flowChatStore.reloadRelaySessionFromHost(sessionId).catch(error => {
+      log.warn('Failed to resume paused device updates', { sessionId, error });
+    });
+  }, [activeSession?.sessionId]);
+
   const handleHistoryWindowBoundaryIntent = useCallback((
     direction: SessionHistoryWindowDirection,
     options?: HistoryWindowBoundaryIntentOptions,
@@ -2024,6 +2047,7 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
       return existingRequest;
     }
 
+    let ownsBoundaryStatus = () => false;
     const request = (async () => {
       const currentViewportIntent = viewportIntentRef.current;
       const presentation = currentViewportIntent?.kind === 'turn'
@@ -2037,13 +2061,20 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
       }
 
       const scope = getActiveSurfaceScope();
-      const isCurrent = () => scope.isCurrent()
+      ownsBoundaryStatus = () => scope.isCurrent()
         && activeSessionIdRef.current === sessionId
-        && historyPresentationOwnerGenerationRef.current === presentationOwnerGeneration
-        && options?.isCurrent?.() !== false;
+        && historyPresentationOwnerGenerationRef.current === presentationOwnerGeneration;
+      const isCurrent = () => ownsBoundaryStatus() && options?.isCurrent?.() !== false;
+      let synchronizationPrepared = false;
       if (options?.synchronizeHistory) {
         setHistoryBoundaryState(previous => ({ ...previous, [direction]: 'loading' }));
         try {
+          // The host snapshot can itself move the rendered boundary. Reserve
+          // its commit before publishing it, otherwise the pager cancels this
+          // recovery as if an unrelated navigation had replaced the reader.
+          const prepared = await options.prepareViewportForPresentationCommit?.();
+          if (prepared === false || !isCurrent()) return 'cancelled';
+          synchronizationPrepared = Boolean(options.prepareViewportForPresentationCommit);
           await flowChatStore.synchronizeSessionHistory(sessionId, isCurrent);
           if (!isCurrent()) return 'cancelled';
         } catch (error) {
@@ -2058,10 +2089,12 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
       // while the reader still displays its copy. Reacquire that exact range
       // before extending it; repeatedly fetching the adjacent page cannot
       // restore a missing active window, even after an explicit source sync.
-      const activeRange = flowChatStore.getSessionHistoryViewState(sessionId)?.activeRange;
-      if (presentation && (!activeRange
-        || activeRange.startOrdinal !== presentation.range.startOrdinal
-        || activeRange.endOrdinalExclusive !== presentation.range.endOrdinalExclusive)) {
+      const readerWindowIsCurrent = () => {
+        const activeRange = flowChatStore.getSessionHistoryViewState(sessionId)?.activeRange;
+        return !presentation || (activeRange?.startOrdinal === presentation.range.startOrdinal
+          && activeRange.endOrdinalExclusive === presentation.range.endOrdinalExclusive);
+      };
+      if (presentation && !readerWindowIsCurrent()) {
         setHistoryBoundaryState(previous => ({ ...previous, [direction]: 'loading' }));
         try {
           const restored = await flowChatStore.restoreSessionHistoryWindow(sessionId, presentation.range, isCurrent);
@@ -2227,13 +2260,23 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
       setHistoryBoundaryState(previous => ({ ...previous, [direction]: 'loading' }));
       let viewportPreparationStarted = false;
       try {
-        const result = direction === 'before'
-          ? await flowChatStore.loadPreviousSessionTurnWindow(sessionId, targetOrdinal)
-          : await flowChatStore.loadSessionTurnWindow(sessionId, targetOrdinal, {
+        const loadAdjacentWindow = () => direction === 'before'
+          ? flowChatStore.loadPreviousSessionTurnWindow(sessionId, targetOrdinal)
+          : flowChatStore.loadSessionTurnWindow(sessionId, targetOrdinal, {
             source: 'prefetch',
             before: 4,
             after: 12,
           });
+        let result = await loadAdjacentWindow();
+        if (presentation && result.status === 'ready' && result.isCurrent && isCurrent() && !readerWindowIsCurrent()) {
+          // The adjacent read can itself adopt a new catalog and retire the
+          // active window. Restore the reader before extending, then confirm
+          // the adjacent page again: restoration may also replace cached bodies.
+          const restored = await flowChatStore.restoreSessionHistoryWindow(sessionId, presentation.range, isCurrent);
+          if (!isCurrent()) return 'cancelled';
+          if (!restored) throw new Error('The reader history range is no longer available');
+          result = await loadAdjacentWindow();
+        }
         if (!result.isCurrent || !isCurrent()) {
           recordHistoryPagingEvent(sessionId, 'outcome_cancelled', {
             direction,
@@ -2290,21 +2333,29 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
           return 'not-ready';
         }
 
+        const preparedHistoryView = flowChatStore.getSessionHistoryViewState(sessionId);
         viewportPreparationStarted = Boolean(options?.prepareViewportForPresentationCommit);
-        const preparationResult = await options?.prepareViewportForPresentationCommit?.();
+        const preparationResult = synchronizationPrepared
+          ? true
+          : await options?.prepareViewportForPresentationCommit?.();
         const activeSessionIsCurrent = activeSessionIdRef.current === sessionId;
         const presentationOwnerIsCurrent = (
           historyPresentationOwnerGenerationRef.current === presentationOwnerGeneration
         );
+        const currentHistoryView = flowChatStore.getSessionHistoryViewState(sessionId);
+        const historyWindowIsCurrent = readerWindowIsCurrent()
+          && currentHistoryView?.navigationGeneration === preparedHistoryView?.navigationGeneration
+          && currentHistoryView?.catalog?.revision === preparedHistoryView?.catalog?.revision;
         if (
           preparationResult === false
           || !activeSessionIsCurrent
           || !presentationOwnerIsCurrent
           || !isCurrent()
+          || !historyWindowIsCurrent
         ) {
           recordHistoryPagingEvent(sessionId, 'outcome_cancelled', {
             direction,
-            reason: 'viewport-preparation',
+            reason: historyWindowIsCurrent ? 'viewport-preparation' : 'history-window-superseded',
             preparationResult: preparationResult ?? null,
             activeSessionIsCurrent,
             presentationOwnerIsCurrent,
@@ -2393,6 +2444,11 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
       // Only the request that owns the slot may release it.
       if (historyBoundaryRequestsRef.current[direction] === request) {
         historyBoundaryRequestsRef.current[direction] = null;
+        // A pager ticket may be cancelled without replacing the reader. The
+        // request still owns its loading indicator, but never a newer reader's.
+        setHistoryBoundaryState(previous => ownsBoundaryStatus() && previous[direction] === 'loading'
+          ? { ...previous, [direction]: 'idle' }
+          : previous);
       }
     });
     historyBoundaryRequestsRef.current[direction] = request;
@@ -2799,6 +2855,12 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
           onSend={handleSendBackgroundCommandInput}
         />
 
+        {showUpdatesPaused ? (
+          <PeerUpdatesPausedNotice
+            surfaceId={surfaceScope.surfaceId}
+            onRetry={handleRetryPausedUpdates}
+          />
+        ) : null}
         <div
           className="modern-flowchat-container__messages"
           data-testid="flowchat-messages"
@@ -2860,6 +2922,8 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
               <>
                 <VirtualMessageList
                   ref={virtualListRef}
+                  viewportRectRef={paneViewportRect}
+                  contentPresented={isHistoryContentPresented}
                   items={virtualItems}
                   latestTurnId={latestTurnId}
                   isViewportActive={isViewportActive}

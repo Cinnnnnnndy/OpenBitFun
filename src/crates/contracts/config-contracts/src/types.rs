@@ -1338,6 +1338,10 @@ pub struct AIConfig {
     #[serde(default = "default_review_team_rate_limit_status")]
     pub review_team_rate_limit_status: serde_json::Value,
 
+    /// Allow model-issued collaboration calls to override configured subagent models.
+    #[serde(default = "default_true")]
+    pub allow_subagent_model_override: bool,
+
     /// Maximum number of subagents that may execute concurrently.
     #[serde(default = "default_subagent_max_concurrency")]
     pub subagent_max_concurrency: usize,
@@ -1879,15 +1883,18 @@ pub const DEFAULT_MODEL_CONTEXT_WINDOW_TOKENS: u32 = 128_128;
 pub const MIN_MODEL_CONTEXT_WINDOW_TOKENS: u32 = 32_000;
 pub const MAX_CONFIGURED_OUTPUT_TOKENS_RATIO_PERCENT: u32 = 40;
 const AUTOMATIC_MAX_OUTPUT_TOKEN_TIERS: [u32; 5] = [8_000, 16_000, 24_000, 32_000, 64_000];
+const MAX_OUTPUT_64K_MIN_CONTEXT_WINDOW: u32 = 400_000;
 
 /// Chooses the largest supported output tier that does not exceed one quarter
-/// of the model context window.
+/// of the model context window. The 64k tier requires a context window of at
+/// least 400k.
 pub fn automatic_max_output_tokens(context_window: u32) -> u32 {
     let quarter_context = context_window / 4;
     AUTOMATIC_MAX_OUTPUT_TOKEN_TIERS
         .iter()
         .rev()
         .copied()
+        .filter(|tier| *tier != 64_000 || context_window >= MAX_OUTPUT_64K_MIN_CONTEXT_WINDOW)
         .find(|tier| *tier <= quarter_context)
         .unwrap_or(quarter_context)
 }
@@ -1902,6 +1909,13 @@ pub fn is_valid_configured_max_output_tokens(context_window: u32, max_tokens: u3
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AIModelConfig {
+    /// Responses transport and context preferences; absent preserves HTTP/full behavior.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub responses: Option<openbitfun_core_types::responses::ResponsesRequestSettings>,
+    /// Provider-instance defaults, materialized with the other shared endpoint settings.
+    /// A model's explicit `responses` override wins. Only Responses routes consume these.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub responses_defaults: Option<openbitfun_core_types::responses::ResponsesRequestSettings>,
     pub id: String,
     pub name: String,
     pub provider: String,
@@ -2357,6 +2371,7 @@ impl Default for AIConfig {
             skill_settings: SkillSettingsConfig::default(),
             review_teams: default_review_team_configs(),
             review_team_rate_limit_status: default_review_team_rate_limit_status(),
+            allow_subagent_model_override: true,
             subagent_max_concurrency: default_subagent_max_concurrency(),
             swarm_max_concurrency: default_swarm_max_concurrency(),
             subagent_batch_execution_policy: default_subagent_batch_execution_policy(),
@@ -2431,6 +2446,8 @@ impl Default for AIModelConfig {
             skip_ssl_verify: false,
             custom_request_body: None,
             custom_request_body_mode: None,
+            responses: None,
+            responses_defaults: None,
             auth: AuthConfig::ApiKey,
             channel_routing: None,
         }
@@ -5053,5 +5070,41 @@ mod media_config_tests {
         };
 
         assert!(media.effective_image_service().is_none());
+    }
+}
+
+#[cfg(test)]
+mod subagent_model_override_tests {
+    use super::AIConfig;
+    use serde_json::json;
+
+    #[test]
+    fn legacy_ai_payload_defaults_to_allowed_and_round_trips() {
+        let legacy = json!({"subagent_max_concurrency": 3, "max_rounds": 12});
+        let config: AIConfig = serde_json::from_value(legacy).unwrap();
+        assert!(config.allow_subagent_model_override);
+        assert!(AIConfig::default().allow_subagent_model_override);
+        let restored: AIConfig =
+            serde_json::from_value(serde_json::to_value(config).unwrap()).unwrap();
+        assert!(restored.allow_subagent_model_override);
+        assert_eq!(restored.subagent_max_concurrency, 3);
+        assert_eq!(restored.max_rounds, 12);
+    }
+
+    #[test]
+    fn explicit_opt_out_survives_serialization() {
+        let config: AIConfig = serde_json::from_value(json!({
+            "allow_subagent_model_override": false,
+            "agent_model_defaults": {"subagents": {"default": {"kind": "fixed", "model_id": "fast"}}}
+        })).unwrap();
+        assert!(!config.allow_subagent_model_override);
+        let encoded = serde_json::to_value(&config).unwrap();
+        assert_eq!(encoded["allow_subagent_model_override"], false);
+        let restored: AIConfig = serde_json::from_value(encoded).unwrap();
+        assert!(!restored.allow_subagent_model_override);
+        assert_eq!(
+            serde_json::to_value(restored.agent_model_defaults).unwrap(),
+            serde_json::to_value(config.agent_model_defaults).unwrap()
+        );
     }
 }

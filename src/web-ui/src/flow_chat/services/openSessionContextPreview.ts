@@ -1,4 +1,4 @@
-import { sessionAPI, type UsageContextCategory } from '@/infrastructure/api/service-api/SessionAPI';
+import { sessionAPI, type UsageContextCategory, type UsageContextEstimate } from '@/infrastructure/api/service-api/SessionAPI';
 import { getActiveSurfaceScope } from '@/infrastructure/peer-device/deviceSurface';
 import { openAgentCanvasTabForSession, useAgentCanvasStore } from '@/app/components/panels/content-canvas/stores/canvasStore';
 import { flowChatStore } from '../store/FlowChatStore';
@@ -17,42 +17,45 @@ const PREVIEW_FILE_NAMES: Record<UsageContextCategory, string> = {
 export async function openSessionContextPreview(params: {
   sessionId: string;
   reportSessionId: string;
+  /** The visible conversation owns the canvas when inspecting an input-target child. */
+  canvasSessionId?: string;
   workspaceId?: string;
   title: string;
   category: UsageContextCategory;
   emptyContent: string;
+  /** Reuse the overview query so numbers and text describe the same instant. */
+  estimate?: UsageContextEstimate;
+  onEstimate?: (estimate: UsageContextEstimate) => void;
 }): Promise<'opened' | 'unavailable' | 'stale'> {
   const surface = getActiveSurfaceScope();
+  const canvasSessionId = params.canvasSessionId ?? params.sessionId;
   const session = flowChatStore.getState().sessions.get(params.sessionId);
   const workspaceId = params.workspaceId || session?.workspaceId || session?.config?.workspaceId;
   // Dispatch reports belong to the target. Never read the controller's prompt cache.
   if (!workspaceId || params.sessionId !== params.reportSessionId
     || resolveSessionDriverId(params.sessionId, session) !== 'local') return 'unavailable';
 
-  let report;
-  try {
-    report = await sessionAPI.getSessionUsageReport({
-      sessionId: params.sessionId,
-      workspaceId,
-      includeHiddenSubagents: false,
-      contextPreviewCategory: params.category,
-      ...(params.category === 'systemPrompt' ? { includeSystemPromptPreview: true } : {}),
-    });
-  } catch (error) {
-    // A peer host without the report (for example an older CLI host) does not
-    // offer previews either; that is the calm unavailable state, not a failure.
-    if (classifyPeerHostRefusal(error)) return surface.isCurrent() ? 'unavailable' : 'stale';
-    throw error;
+  let estimate = params.estimate;
+  if (!estimate) {
+    try {
+      const report = await sessionAPI.getSessionUsageReport({
+        sessionId: params.sessionId, workspaceId, includeHiddenSubagents: false,
+        contextEstimate: { includeContents: true, contextOnly: true },
+      });
+      if (!surface.isCurrent()) return 'stale';
+      if (report.sessionId !== params.sessionId) return 'unavailable';
+      estimate = report.contextEstimate;
+    } catch (error) {
+      if (classifyPeerHostRefusal(error)) return surface.isCurrent() ? 'unavailable' : 'stale';
+      throw error;
+    }
   }
   if (!surface.isCurrent()) return 'stale';
-  if (report.sessionId !== params.sessionId) return 'unavailable';
-  const snapshot = report.contextPreview;
-  const legacy = !snapshot && params.category === 'systemPrompt' ? report.systemPromptPreview : undefined;
-  const content = snapshot?.category === params.category && typeof snapshot.content === 'string'
-    ? snapshot.content : legacy?.content?.trim() ? legacy.content : undefined;
-  if (content === undefined) return 'unavailable';
+  if (estimate) params.onEstimate?.(estimate);
+  const content = estimate?.contents?.[params.category];
+  if (typeof content !== 'string') return 'unavailable';
 
-  openAgentCanvasTabForSession(params.sessionId, {
+  openAgentCanvasTabForSession(canvasSessionId, {
     type: params.category === 'toolDefinitions' ? 'tool-definitions' : 'markdown-editor',
     title: params.title,
     data: params.category === 'toolDefinitions' ? { content, readOnly: true }
@@ -61,12 +64,11 @@ export async function openSessionContextPreview(params: {
       duplicateCheckKey: params.category === 'systemPrompt' ? `session-system-prompt-${params.sessionId}`
         : `session-context-${params.category}-${params.sessionId}`,
       sessionId: params.sessionId,
-      capturedAt: snapshot?.capturedAt,
-      cachedAt: legacy?.cachedAt,
+      capturedAt: estimate?.capturedAt,
       resourceScope: { surfaceId: surface.surfaceId, workspaceId },
     },
   });
-  if (useAgentCanvasStore.getState().scopeKey === params.sessionId && typeof window !== 'undefined') {
+  if (useAgentCanvasStore.getState().scopeKey === canvasSessionId && typeof window !== 'undefined') {
     window.dispatchEvent(new window.CustomEvent('expand-right-panel'));
   }
   return 'opened';

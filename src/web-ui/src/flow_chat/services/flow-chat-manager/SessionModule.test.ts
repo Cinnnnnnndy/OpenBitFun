@@ -28,6 +28,7 @@ import {
 } from '../sessionOpenIntent';
 import type { Session } from '../../types/flow-chat';
 import type { ReviewTeamRunManifest } from '@/shared/services/reviewTeamService';
+import { WorkspaceKind, WorkspaceType, type WorkspaceInfo } from '@/shared/types';
 import { workspaceManager } from '@/infrastructure/services/business/workspaceManager';
 import { notificationService } from '../../../shared/notification-system';
 
@@ -402,6 +403,32 @@ describe('createChatSession', () => {
       workspaceId: 'missing-workspace', workspacePath: '/home/wsp/projects/Test',
     }, 'Standard')).rejects.toThrow('Workspace ID is unavailable');
     expect(agentApiMocks.createSession).not.toHaveBeenCalled();
+  });
+
+  it('creates a Claw session for a closed assistant by its catalog ID', async () => {
+    const assistant: WorkspaceInfo = {
+      id: 'closed-assistant',
+      name: 'Design assistant',
+      rootPath: '/assistants/design',
+      workspaceKind: WorkspaceKind.Assistant,
+      workspaceType: WorkspaceType.Other,
+      languages: [],
+      openedAt: '',
+      lastAccessed: '',
+      tags: [],
+    };
+    const workspaceState = vi.spyOn(workspaceManager, 'getState').mockReturnValueOnce({
+      ...workspaceManager.getState(), assistantWorkspaces: [assistant],
+    });
+    const { context } = createContext(createSession());
+    try {
+      await expect(createChatSession(context, { workspaceId: assistant.id }, 'Claw', true)).resolves.toBe('created-1');
+      expect(agentApiMocks.createSession).toHaveBeenCalledWith(expect.objectContaining({
+        workspaceId: assistant.id, workspacePath: assistant.rootPath, agentType: 'Claw',
+      }));
+    } finally {
+      workspaceState.mockRestore();
+    }
   });
 
   it('dedupes concurrent creates before model config loading resolves', async () => {

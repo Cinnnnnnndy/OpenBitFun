@@ -16,8 +16,8 @@ use crate::agentic::tools::tool_result_storage;
 #[cfg(feature = "opencode-plugin-host")]
 use crate::agentic::WorkspaceBinding;
 use crate::native_hooks::{self, NativeHookSessionFacts};
-use crate::util::elapsed_ms_u64;
 use crate::util::errors::{OpenBitFunError, OpenBitFunResult};
+use crate::util::{elapsed_ms_u64, truncate_at_char_boundary};
 use futures::future::join_all;
 use log::{debug, error, info, warn};
 use openbitfun_agent_runtime::permission::{
@@ -735,7 +735,8 @@ fn approval_resource_summary(resource: &str) -> String {
         }
     }
     if summary.len() > 160 {
-        summary.truncate(160);
+        let boundary = truncate_at_char_boundary(&summary, 160).len();
+        summary.truncate(boundary);
         summary.push('…');
     }
     summary
@@ -766,7 +767,7 @@ fn permission_decision_input(
     }
 }
 
-const SUBAGENT_LAUNCH_TOOL_NAMES: &[&str] = &["Task", "AgentSpawn"];
+const SUBAGENT_LAUNCH_TOOL_NAMES: &[&str] = &["Task", "AgentSpawn", "AgentFork"];
 
 /// Native hook session facts derived from one tool task.
 fn native_hook_session_facts<'a>(
@@ -3741,7 +3742,7 @@ mod tests {
         DialogRoundInjectionInterrupt, SessionRoundInjectionBuffer,
     };
     use crate::agentic::tools::framework::{Tool, ToolResult, ValidationResult};
-    use crate::agentic::tools::implementations::task::AgentExecutionTool;
+    use crate::agentic::tools::implementations::agent_collaboration::AgentExecutionTool;
     use crate::agentic::tools::tool_context_runtime::ToolUseContext;
     use crate::agentic::tools::ToolRuntimeRestrictions;
     use crate::agentic::WorkspaceBinding;
@@ -3765,6 +3766,14 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use std::time::SystemTime;
     use tokio::time::{sleep, Duration};
+
+    #[test]
+    fn approval_resource_summary_truncates_multibyte_text_safely() {
+        let summary = approval_resource_summary(&"中".repeat(54));
+
+        assert_eq!(summary, format!("{}…", "中".repeat(53)));
+        assert!(summary.is_char_boundary(summary.len()));
+    }
 
     fn loaded_spec(tool_name: &str, catalog_generation: u64) -> LoadedDeferredToolSpec {
         LoadedDeferredToolSpec {

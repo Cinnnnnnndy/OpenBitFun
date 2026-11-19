@@ -45,6 +45,7 @@ import { inlineDiffPreviewAppearanceDescriptor } from '@/flow_chat/components/In
 import { exportImageAppearanceDescriptor } from '@/flow_chat/components/modern/ExportImageButton.appearance';
 import { userMessageItemAppearanceDescriptor } from '@/flow_chat/components/modern/UserMessageItem.appearance';
 import { externalHistoryNoticeAppearanceDescriptor } from '@/flow_chat/components/ExternalHistoryNotice.appearance';
+import { peerUpdatesPausedNoticeAppearanceDescriptor } from '@/flow_chat/components/modern/PeerUpdatesPausedNotice.appearance';
 import { sessionUsageReportCardAppearanceDescriptor } from '@/flow_chat/components/usage/SessionUsageReportCard.appearance';
 import { createPlanDisplayAppearanceDescriptor } from '@/flow_chat/tool-cards/CreatePlanDisplay.appearance';
 import { editorConfigAppearanceDescriptor } from '@/app/scenes/settings/pages/development/EditorSettingsPage.appearance';
@@ -239,7 +240,6 @@ import { chatEmptyStateAppearanceDescriptor } from '@/flow_chat/components/ChatE
 import { copyOutputButtonAppearanceDescriptor } from '@/flow_chat/components/CopyOutputButton.appearance';
 import { copyableTextPreviewAppearanceDescriptor } from '@/flow_chat/components/CopyableTextPreview.appearance';
 import { currentSessionTitleAppearanceDescriptor } from '@/flow_chat/components/CurrentSessionTitle.appearance';
-import { sessionTitleNumberAppearanceDescriptor } from '@/flow_chat/components/SessionTitleNumber.appearance';
 import { coworkExampleCardsAppearanceDescriptor } from '@/flow_chat/components/CoworkExampleCards.appearance';
 import { imageAnalysisCardAppearanceDescriptor } from '@/flow_chat/components/ImageAnalysisCard.appearance';
 import { scrollToBottomButtonAppearanceDescriptor } from '@/flow_chat/components/ScrollToBottomButton.appearance';
@@ -317,6 +317,7 @@ export function createDefaultAppearanceRegistry(): AppearanceRegistry {
     .registerComponent(exportImageAppearanceDescriptor)
     .registerComponent(userMessageItemAppearanceDescriptor)
     .registerComponent(externalHistoryNoticeAppearanceDescriptor)
+    .registerComponent(peerUpdatesPausedNoticeAppearanceDescriptor)
     .registerComponent(sessionUsageReportCardAppearanceDescriptor)
     .registerComponent(createPlanDisplayAppearanceDescriptor)
     .registerComponent(editorConfigAppearanceDescriptor)
@@ -493,7 +494,6 @@ export function createDefaultAppearanceRegistry(): AppearanceRegistry {
     .registerComponent(copyOutputButtonAppearanceDescriptor)
     .registerComponent(copyableTextPreviewAppearanceDescriptor)
     .registerComponent(currentSessionTitleAppearanceDescriptor)
-    .registerComponent(sessionTitleNumberAppearanceDescriptor)
     .registerComponent(coworkExampleCardsAppearanceDescriptor)
     .registerComponent(imageAnalysisCardAppearanceDescriptor)
     .registerComponent(scrollToBottomButtonAppearanceDescriptor)

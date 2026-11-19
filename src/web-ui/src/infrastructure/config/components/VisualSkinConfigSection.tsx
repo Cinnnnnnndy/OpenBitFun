@@ -1,10 +1,11 @@
 import { Button, IconButton } from '@openbitfun/ui';
 import { Check, Image, Palette, Trash2, Upload } from 'lucide-react';
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { useVisualSkin, type VisualSkinCatalogEntry } from '@/infrastructure/visual-skin';
-import { ConfigPageSection, formatStandaloneUiText } from './common';
+import { decodeSkinDataUrl } from '@/infrastructure/visual-skin/archive';
+import { ConfigPageSection } from './common';
 
 function previewSource(entry: VisualSkinCatalogEntry): string | undefined {
   return typeof entry.previewAsset === 'string' && entry.previewAsset.trim()
@@ -12,12 +13,54 @@ function previewSource(entry: VisualSkinCatalogEntry): string | undefined {
     : undefined;
 }
 
+function isVideoPreview(source: string | undefined): boolean {
+  return Boolean(source?.startsWith('data:video/'));
+}
+
+function VideoPreview({ source }: { source: string }) {
+  const [blobUrl, setBlobUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (typeof URL.createObjectURL !== 'function') return undefined;
+    try {
+      const mimeMatch = /^data:([^;,]+);base64,/i.exec(source);
+      const mimeType = mimeMatch?.[1] || 'video/mp4';
+      const bytes = decodeSkinDataUrl(source);
+      const buffer = bytes.buffer instanceof ArrayBuffer
+        ? bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)
+        : new Uint8Array(bytes).buffer;
+      const url = URL.createObjectURL(new Blob([buffer], { type: mimeType }));
+      setBlobUrl(url);
+      return () => {
+        URL.revokeObjectURL(url);
+      };
+    } catch {
+      setBlobUrl(null);
+      return undefined;
+    }
+  }, [source]);
+
+  return (
+    <video
+      src={blobUrl ?? (typeof URL.createObjectURL === 'function' ? undefined : source)}
+      muted
+      loop
+      autoPlay
+      playsInline
+      disablePictureInPicture
+      preload="metadata"
+      tabIndex={-1}
+      aria-hidden="true"
+    />
+  );
+}
+
 /**
  * Import and activate declarative visual skin packs generated from a reference
  * image. The runtime owns validation and persistence; this component only
  * exposes the safe, user-facing workflow.
  */
-export function VisualSkinConfigSection() {
+export function VisualSkinConfigSection({ createAction }: { createAction?: ReactNode }) {
   const { t } = useTranslation('settings/appearance');
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
@@ -31,6 +74,7 @@ export function VisualSkinConfigSection() {
     error: runtimeError,
     importPackage,
     activate,
+    deactivate,
     preview,
     cancelPreview,
     previewSkinId,
@@ -65,7 +109,6 @@ export function VisualSkinConfigSection() {
     <ConfigPageSection
       className="visual-skin-config"
       title={t('skin.title')}
-      description={formatStandaloneUiText(t('skin.description'))}
       bodySurface={false}
       fieldSurface="ambient"
       data-openbitfun-product-component="visual-skin-settings"
@@ -73,6 +116,15 @@ export function VisualSkinConfigSection() {
       data-openbitfun-state={disabled ? 'disabled' : undefined}
       extra={(
         <>
+          <Button
+            variant="quiet"
+            size="sm"
+            disabled={disabled || (!activeSkinId && !previewSkinId)}
+            data-testid="visual-skin-deactivate"
+            onClick={() => void handleAction(deactivate)}
+          >
+            {t('skin.deactivate')}
+          </Button>
           <input
             ref={fileInputRef}
             type="file"
@@ -96,6 +148,7 @@ export function VisualSkinConfigSection() {
           >
             {busy ? t('skin.importing') : t('skin.import')}
           </Button>
+          {createAction}
         </>
       )}
     >
@@ -121,6 +174,7 @@ export function VisualSkinConfigSection() {
               const active = entry.id === activeSkinId;
               const previewing = previewSkinId === entry.id;
               const previewAsset = previewSource(entry);
+              const videoPreview = isVideoPreview(previewAsset);
               return (
                 <article
                   key={entry.id}
@@ -135,10 +189,11 @@ export function VisualSkinConfigSection() {
                 >
                   <div
                     className="visual-skin-config__preview"
-                    style={previewAsset ? { backgroundImage: `url(${previewAsset})` } : undefined}
+                    style={previewAsset && !videoPreview ? { backgroundImage: `url(${previewAsset})` } : undefined}
                     role={previewAsset ? 'img' : undefined}
                     aria-label={previewAsset ? t('skin.previewAlt', { name: entry.name }) : undefined}
                   >
+                    {videoPreview && previewAsset && <VideoPreview source={previewAsset} />}
                     {!previewAsset && <Image size={22} aria-hidden="true" />}
                   </div>
                   <div className="visual-skin-config__copy">

@@ -27,6 +27,7 @@ pub mod computer_use;
 pub mod crash_diagnostics;
 pub mod desktop_cards;
 mod embedded_relay_host;
+mod frontend_asset_cache;
 pub mod frontend_workbench;
 pub mod logging;
 pub mod macos_menubar;
@@ -758,9 +759,18 @@ pub async fn run() {
 
     let mut builder = tauri::Builder::default();
     let frontend_protocol_manager = Arc::clone(&frontend_workbench);
-    builder = builder.register_uri_scheme_protocol(
+    // The synchronous registration runs the handler inline on the WebView
+    // callback (the main thread on macOS and Windows). Every lazy chunk read,
+    // path canonicalization and revision lookup would then stall the UI, so the
+    // asset is resolved on the blocking pool and answered asynchronously.
+    builder = builder.register_asynchronous_uri_scheme_protocol(
         frontend_workbench::FRONTEND_PROTOCOL_SCHEME,
-        move |_context, request| frontend_protocol_manager.protocol_response(request),
+        move |_context, request, responder| {
+            let manager = Arc::clone(&frontend_protocol_manager);
+            tauri::async_runtime::spawn_blocking(move || {
+                responder.respond(manager.protocol_response(request));
+            });
+        },
     );
 
     #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
@@ -819,6 +829,14 @@ pub async fn run() {
         .manage(startup_trace.clone())
         .on_page_load(|webview, payload| {
             let label = webview.label();
+            // A reload discards the page's HostInvoke bridge listener without
+            // running its cleanup; until the new page registers again, Peer
+            // requests must be refused as not executed instead of timing out.
+            if label == "main"
+                && matches!(payload.event(), tauri::webview::PageLoadEvent::Started)
+            {
+                api::peer_host_invoke::set_peer_host_bridge_ready(false);
+            }
             if label.starts_with("embedded-browser-view-")
                 || label.starts_with("embedded-browser-panel-view-")
             {
@@ -1532,6 +1550,7 @@ pub async fn run() {
             retry_file_watch,
             get_clipboard_files,
             get_clipboard_image,
+            write_clipboard_image,
             api::browser_file_drop_api::resolve_browser_dropped_file_paths,
             api::file_drop_preview_api::set_file_drop_preview_target,
             paste_files,
@@ -1881,6 +1900,7 @@ pub async fn run() {
             api::pages_api::page_unpublish,
             api::pages_api::page_delete,
             api::peer_host_invoke::peer_host_invoke_complete,
+            api::peer_host_invoke::peer_host_bridge_ready,
             api::peer_host_invoke::peer_control_attach,
             api::peer_host_invoke::peer_control_detach,
             api::peer_host_invoke::peer_mode_ping,
@@ -2012,10 +2032,6 @@ pub async fn run() {
             // Detached task dispatch (controller-side SSH transport)
             api::dispatch_api::dispatch_list_targets,
             api::dispatch_api::dispatch_probe_target,
-            api::dispatch_api::dispatch_install_cli_start,
-            api::dispatch_api::dispatch_install_cli_poll,
-            api::dispatch_api::dispatch_install_cli_cancel,
-            api::dispatch_api::dispatch_provision_target,
             api::dispatch_api::dispatch_sync_model_config,
             api::dispatch_api::dispatch_submit,
             api::dispatch_api::dispatch_status,
@@ -2444,6 +2460,15 @@ async fn deliver_event_to_webview(
         attach_session_event_cursor(&mut projected.payload, cursor);
     }
 
+    deliver_projected_event(transport, projected).await;
+}
+
+/// Final product delivery for native and ACP projections alike. ACP records
+/// before enqueueing here; native events record after text coalescing above.
+pub(crate) async fn deliver_projected_event(
+    transport: &TauriTransportAdapter,
+    projected: openbitfun_events::AgenticFrontendEvent,
+) {
     for hub in api::remote_connect_api::host_stream_hubs().await {
         if let Some(session_id) = projected
             .payload

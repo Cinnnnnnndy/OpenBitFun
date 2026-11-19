@@ -307,6 +307,8 @@ export type CustomHeadersMode = 'replace' | 'merge';
 export type CustomRequestBodyMode = 'merge' | 'trim';
 
 export interface AIModelConfig {
+  responses?: ResponsesRequestSettings;
+  responses_defaults?: ResponsesRequestSettings;
   id?: string;
   name: string;
   provider: string;
@@ -341,6 +343,11 @@ export interface AIModelConfig {
   auth?: AuthConfig;
   /** Ordered backup channels (other model configs). Absent keeps one channel. */
   channel_routing?: ModelChannelRouting;
+}
+
+export interface ResponsesRequestSettings {
+  transport: 'http' | 'websocket';
+  context: 'full' | 'incremental';
 }
 
 /** Explicit failover route; members are other model configuration IDs. */
@@ -509,6 +516,7 @@ export interface AIConfig {
   tool_presentation_mode?: 'native' | 'ptc' | 'ptc_python';
   default_models: DefaultModelsConfig;
   model_routing?: ModelRoutingConfig;
+  allow_subagent_model_override: boolean;
   agent_model_defaults: AgentModelDefaultsConfig;
   agent_model_selections?: AgentModelSelections;
   task_models: TaskModelsConfig;

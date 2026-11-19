@@ -83,7 +83,11 @@
       "noSessions": "尚無會話",
       "sessionUnavailable": "該裝置上已找不到這個會話。",
       "sessionActionFailed": "無法在另一台裝置上完成此操作，請重試。",
-      "connecting": "正在連線 {{name}}…"
+      "connecting": "正在連線 {{name}}…",
+      "linkReconnecting": "重新連線中",
+      "linkReconnectingLabel": "正在重新連線 {{name}}，其會話可能尚未更新。",
+      "linkStarting": "啟動中",
+      "linkStartingLabel": "{{name}} 上的 OpenBitFun 仍在啟動。"
     },
     "aria": {
       "navControl": "導航控制",
@@ -518,7 +522,11 @@
       "discoveryWarningTitle": "外部工作階段探索",
       "discoveryReadFailed": "部分 {{source}} 工作階段記錄無法讀取，既有工作階段仍可使用。",
       "discoveryWorkspaceUnresolved": "部分 {{source}} 工作階段無法對應到工作區，既有工作階段仍可使用。",
-      "discoveringExternal": "正在探索外部工作階段…"
+      "discoveringExternal": "正在探索外部工作階段…",
+      "deleteFailed": "刪除會話失敗",
+      "archiveFailed": "歸檔會話失敗",
+      "renameFailed": "重新命名會話失敗",
+      "workspaceBindingMismatch": "此會話屬於其他工作區，無法在此處修改。請重新開啟 OpenBitFun，會話會在其所屬工作區下重新載入。"
     },
     "scheduledJobs": {
       "title": "定時任務",
@@ -929,6 +937,8 @@
   },
   "peerConnection": {
     "reconnectingShort": "正在重新連線…",
+    "startingShort": "主機啟動中…",
+    "starting": "「{{name}}」上的 OpenBitFun 仍在啟動，就緒後即可使用。",
     "returnLocalShort": "返回本機",
     "returningShort": "正在返回…",
     "reconnecting": "正在重新連線至「{{name}}」。內容可能尚未更新。"
@@ -1397,6 +1407,8 @@
     "readyVersion": "版本 {{version}} 已下載",
     "installWarning": "安裝將重啟本裝置上的 OpenBitFun，並中斷此裝置上的活動會話。",
     "installAndRestart": "安裝並重啟",
+    "systemRestartRequired": "需要重新啟動系統",
+    "systemRestartMessage": "更新已安裝，請重新啟動 Windows 完成更新，無需重複安裝。",
     "installing": "正在安裝…",
     "deferredMessage": "更新已保留，可隨時點擊左下角的勾號安裝並重啟。",
     "downloadAgain": "重新下載",
@@ -1777,6 +1789,7 @@
     "scrollPrevious": "向左捲動標籤頁",
     "scrollNext": "向右捲動標籤頁",
     "closeTab": "關閉{{label}}",
+    "closeDeviceTabs": "關閉該裝置全部標籤頁",
     "workspaceUnavailable": "此工作階段所屬的工作區尚未開啟，請先重新開啟該工作區，再切換至此工作階段。"
   },
   "loading": {
@@ -2176,6 +2189,7 @@
       "copyAuthFailed": "複製 GitHub CLI 登入命令失敗。",
       "unresolvedPullRequest": "無法從目前工作區的遠端儲存庫中找到此提取請求。",
       "ghAuthRequired": "需要 GitHub CLI 驗證",
+      "ghAuthHostTerminal": "請在執行 OpenBitFun 的主機終端中執行此命令，完成登入後再試。",
       "tokenRequiredTitle": "需要權杖",
       "tokenScopeTitle": "需要權杖權限",
       "tokenUpdateTitle": "需要更新權杖",
@@ -2211,28 +2225,10 @@
     "includeUncommittedHint": "只會傳送 Git 可見的變更；.env、建置產物等忽略檔案會保留在本機。",
     "cliStatus": "$t(shared:product.name)",
     "cliReady": "就緒（{{version}}）",
-    "cliCanDeploy": "可一鍵部署",
-    "installingCli": "正在安裝 OpenBitFun CLI…",
-    "provisioningDaemon": "正在同步帳號並啟動常駐服務…",
-    "cancellingPreparation": "正在取消部署…",
     "cliUpdateRequired": "需要更新後才能執行任務",
     "cliUnavailable": "此目標尚未安裝 OpenBitFun",
     "deviceUpdateRequired": "請在此裝置上更新 OpenBitFun，然後重新檢查。",
-    "oneClickDeploy": "一鍵部署 OpenBitFun",
-    "oneClickDeployDescription": "安裝經過簽章驗證的 OpenBitFun CLI；若本機已登入，還會為目標同步目前帳號並啟動開機常駐服務。",
-    "prepareSucceededWithAccount": "OpenBitFun CLI 已安裝，帳號已安全同步，常駐服務已啟動並連線。",
-    "prepareSucceededCliOnly": "OpenBitFun CLI 已安裝。本機未登入，已略過帳號同步；SSH Dispatch 任務仍會以獨立背景程序持續執行。",
-    "prepareFailed": "未能完整部署 OpenBitFun。失敗的帳號和服務變更會盡力自動清理；請檢查目標連線或服務管理器後重試。",
-    "prepareCancelled": "部署已取消。",
-    "prepareCancelFailed": "無法取消部署，請稍後重新檢查目標狀態。",
-    "cancelPreparation": "取消部署",
-    "retryProvision": "重試帳號常駐服務",
-    "retryProvisionDescription": "CLI 已就緒，可單獨重試安全帳號同步和常駐服務部署。",
-    "installUnavailable": "此目標沒有可用的 OpenBitFun 安裝套件，無法執行任務。請換一個目標，或先在該裝置上自行安裝 OpenBitFun 後重新檢查。",
-    "installDetails": "安裝詳情",
     "version": "版本",
-    "downloadUrl": "下載來源",
-    "integrity": "完整性驗證",
     "useTarget": "使用此目標",
     "cancel": "取消",
     "eventHistoryIncomplete": "部分任務記錄已無法載入，目前內容可能不完整。",
@@ -2374,6 +2370,8 @@
   },
   "peerHost": {
     "connectionInterrupted": "與裝置的連線中斷了，請重試。",
+    "notResponding": "該裝置沒有回應。請確認該裝置上的 OpenBitFun 正在執行，然後重試。",
+    "starting": "該裝置上的 OpenBitFun 仍在啟動，請稍後再試。",
     "unavailable": "此功能在該裝置上無法使用。",
     "updateRequired": "該裝置上的 OpenBitFun 版本不支援此功能。請嘗試在該裝置上更新 OpenBitFun。",
     "withDetail": "{{message}}（{{detail}}）"

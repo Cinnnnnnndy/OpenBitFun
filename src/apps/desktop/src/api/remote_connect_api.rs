@@ -1,15 +1,10 @@
 //! Tauri commands for Remote Connect.
 
 use crate::embedded_relay_host::DesktopEmbeddedRelayHost;
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use openbitfun_core::agentic::tools::account_login_capability::set_account_login_available;
 use openbitfun_core::agentic::tools::page_deploy_host::set_page_deploy_handler;
 use openbitfun_core::agentic::tools::page_manage_host::set_page_manage_handler;
 use openbitfun_core::agentic::tools::page_publish_host::set_page_publish_handler;
-use openbitfun_core::service::dispatch::{
-    DispatchAccountDaemonIdentity, DispatchAccountDaemonProvisionRequest,
-    DISPATCH_ACCOUNT_DAEMON_PROVISIONING_SCHEMA_VERSION,
-};
 use openbitfun_core::service::remote_connect::session_store::{
     clear_credential_hint, load_credential_hint, save_credential_hint, AccountHint,
 };
@@ -20,7 +15,7 @@ use openbitfun_core::service::remote_connect::{
 };
 use openbitfun_events::AI_MODEL_CATALOG_UPDATED_EVENT;
 use openbitfun_services_integrations::remote_connect::account::{
-    error_indicates_expired_token, validate_relay_base_url, DEVICE_KIND_DESKTOP,
+    error_indicates_expired_token, validate_relay_base_url, RoutingIntent, DEVICE_KIND_DESKTOP,
 };
 use openbitfun_services_integrations::remote_connect::{
     deploy_page_version_on_relay, join_relay_url, list_pages_from_relay,
@@ -273,16 +268,22 @@ fn emit_device_presence(devices: &[OnlineDeviceInfo]) {
     emit_account_event("account://device-presence", payload);
 }
 
+/// Drop the route's controller delivery targets. Pending permission requests
+/// are kept: a relay blip or routing restart is presence loss, and a
+/// re-attaching controller restores them from the interaction mailbox.
 async fn disconnect_route_controllers(route: RelayRoute, reason: &'static str) {
-    let request_ids = crate::api::peer_host_invoke::disconnect_route_controllers(route);
-    if let Err(error) =
-        crate::api::peer_host_invoke::fail_closed_permission_requests(request_ids, reason).await
-    {
-        log::warn!("Peer permission requests were not fully cancelled: {error}");
-    }
+    clear_route_delivery_targets(route, reason);
     if route == RelayRoute::Official {
         emit_device_presence(&[]);
     }
+}
+
+/// Clear delivery targets without publishing an empty roster. A routing
+/// reconnect reports the new connection's presence moments later; an empty
+/// roster in between would drop and re-add every sidebar device section.
+fn clear_route_delivery_targets(route: RelayRoute, reason: &'static str) {
+    crate::api::peer_host_invoke::disconnect_route_controllers(route);
+    log::debug!("Peer controller delivery targets cleared: route={route:?}, reason={reason}");
 }
 
 /// Retire the active routing owner before touching the shared service. The
@@ -293,6 +294,9 @@ async fn stop_and_clear_device_routing(reason: &'static str) {
 }
 
 async fn stop_route_device_routing(route: RelayRoute, reason: &'static str) {
+    if route == RelayRoute::Official {
+        ROUTING_INTENT.cancel();
+    }
     route.cancel();
     let _lifecycle = route.lifecycle().write().await;
     clear_device_routing_state_on_route(route);
@@ -704,6 +708,10 @@ async fn send_rpc_error(
     .await;
 }
 
+static ROUTING_INTENT: RoutingIntent = RoutingIntent::new();
+static RENEWAL_WAKE: std::sync::LazyLock<Arc<tokio::sync::Notify>> =
+    std::sync::LazyLock::new(|| Arc::new(tokio::sync::Notify::new()));
+
 /// Global flag set when the relay returns HTTP 401 (token expired). The
 /// frontend checks this via `account_token_expired` and prompts re-login.
 static TOKEN_EXPIRED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -731,6 +739,12 @@ async fn invalidate_local_account_session_if_current(
         log::info!("Ignored auth failure from a stale account generation");
         return false;
     }
+    if let Ok((session, relay)) = read_account_context_for_generation(expected_generation).await {
+        if session_store::has_saved_replacement(&session, &relay) {
+            RENEWAL_WAKE.notify_one();
+            return false;
+        }
+    }
     let Some(_transition_guard) = begin_account_transition_if_current(expected_generation).await
     else {
         log::info!("Ignored auth failure from a stale account generation");
@@ -752,7 +766,9 @@ async fn invalidate_local_account_session_if_current(
         service.clear_bot_delegated_identities().await;
     }
     *get_account_context().write().await = None;
-    session_store::clear_session();
+    if let Err(error) = session_store::clear_rejected_session(expected_token) {
+        log::warn!("Failed to clear rejected session: {error}");
+    }
     emit_account_event(
         "account://login-state",
         serde_json::json!({ "logged_in": false, "reason": "session_expired" }),
@@ -894,116 +910,6 @@ pub(crate) async fn read_account_context_for_generation(
         return Err("account context changed".to_string());
     }
     Ok(context)
-}
-
-/// Secret-bearing, Rust-only handoff for one SSH target bootstrap. It is never
-/// serialized through Tauri; only its redacted outcome reaches the Web UI.
-pub(crate) struct DispatchAccountDeviceProvisioning {
-    pub(crate) request: DispatchAccountDaemonProvisionRequest,
-    target_session: AccountSession,
-    relay_url: String,
-}
-
-impl DispatchAccountDeviceProvisioning {
-    pub(crate) fn device_id(&self) -> &str {
-        &self.request.device_id
-    }
-
-    pub(crate) fn user_id(&self) -> &str {
-        &self.request.user_id
-    }
-}
-
-/// Mint a distinct full device credential for an SSH host. Callers receive
-/// `None` and skip account/daemon setup when this Desktop is logged out.
-pub(crate) async fn provision_dispatch_account_device(
-    identity: &DispatchAccountDaemonIdentity,
-) -> Result<Option<DispatchAccountDeviceProvisioning>, String> {
-    let generation = account_context_generation();
-    let Ok(_account_guard) = lock_account_operation(generation).await else {
-        return Ok(None);
-    };
-    let (session, relay_url) = match read_account_context_for_generation(generation).await {
-        Ok(context) => context,
-        Err(error) if error == "not logged in" => return Ok(None),
-        Err(error) => return Err(error),
-    };
-    let request_id = uuid::Uuid::new_v4();
-    let target_secret =
-        openbitfun_services_integrations::remote_connect::device_crypto::provisioning_secret(
-            &session.master_key,
-            &identity.device_id,
-            &request_id.to_string(),
-        );
-    let issued = AccountClient::new()
-        .provision_device_token(
-            &relay_url,
-            &session,
-            &identity.device_id,
-            &identity.device_name,
-            "desktop",
-            request_id,
-            &target_secret,
-        )
-        .await
-        .map_err(|error| format!("provision remote account device: {error}"))?;
-    let target_session =
-        AccountSession::new(issued.token.clone(), issued.user_id.clone(), target_secret);
-    let provisioning = DispatchAccountDeviceProvisioning {
-        request: DispatchAccountDaemonProvisionRequest {
-            schema_version: DISPATCH_ACCOUNT_DAEMON_PROVISIONING_SCHEMA_VERSION,
-            token: issued.token,
-            user_id: issued.user_id,
-            master_key_base64: BASE64.encode(target_secret),
-            relay_url: relay_url.clone(),
-            device_id: issued.device_id,
-        },
-        target_session,
-        relay_url,
-    };
-    if !account_context_matches(generation, &session.token).await {
-        let _ = remove_dispatch_account_device(&provisioning).await;
-        return Err("account context changed while provisioning the SSH target".to_string());
-    }
-    Ok(Some(provisioning))
-}
-
-pub(crate) async fn wait_for_dispatch_account_device_online(
-    provisioning: &DispatchAccountDeviceProvisioning,
-) -> Result<(), String> {
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
-    loop {
-        let devices = AccountClient::new()
-            .list_devices(&provisioning.relay_url, &provisioning.target_session)
-            .await
-            .map_err(|error| format!("verify remote daemon connection: {error}"))?;
-        if devices
-            .iter()
-            .any(|device| device.device_id == provisioning.request.device_id && device.online)
-        {
-            return Ok(());
-        }
-        if tokio::time::Instant::now() >= deadline {
-            return Err(
-                "remote OpenBitFun daemon did not connect to the relay within 30 seconds"
-                    .to_string(),
-            );
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-    }
-}
-
-pub(crate) async fn remove_dispatch_account_device(
-    provisioning: &DispatchAccountDeviceProvisioning,
-) -> Result<(), String> {
-    AccountClient::new()
-        .delete_device(
-            &provisioning.relay_url,
-            &provisioning.target_session,
-            &provisioning.request.device_id,
-        )
-        .await
-        .map_err(|error| format!("remove provisioned account device: {error}"))
 }
 
 async fn account_context_matches(generation: u64, token: &str) -> bool {
@@ -1482,8 +1388,11 @@ async fn register_delegated_identity_providers() {
             {
                 Ok(delegated) if account_context_is_current(generation) => Some((
                     context.relay_url,
-                    delegated.token,
-                    delegated.device_secret.to_vec(),
+                    openbitfun_core::service::remote_connect::AccountSession::new(
+                        delegated.token,
+                        delegated.user_id,
+                        delegated.device_secret,
+                    ),
                 )),
                 Ok(_) => None,
                 Err(e) => {
@@ -1501,10 +1410,54 @@ fn register_page_tool_hosts() {
     register_page_publish_host();
 }
 
+async fn maintain_device_session() -> anyhow::Result<bool> {
+    let generation = account_context_generation();
+    let Ok((old, relay_url)) = read_account_context_for_generation(generation).await else {
+        return Ok(true);
+    };
+    let Some(saved) = session_store::renew_session_if_due(false).await? else {
+        return Ok(true);
+    };
+    let generation = if saved.replaces(&old, &relay_url) {
+        let Some(mut transition) = begin_account_transition_if_current(generation).await else {
+            return Ok(true);
+        };
+        *get_account_context().write().await = Some(AccountContextState {
+            session: AccountSession::new(saved.token, saved.user_id, saved.master_key),
+            relay_url,
+        });
+        transition.make_context_observable();
+        let next = account_context_generation();
+        ROUTING_INTENT.rotated(generation, next);
+        next
+    } else if saved.token == old.token
+        && device_routing_owner_for_account(generation, &old.token).is_none()
+    {
+        generation
+    } else {
+        return Ok(true);
+    };
+    if ROUTING_INTENT.requested(generation) {
+        reconnect_requested_devices(generation)
+            .await
+            .map_err(anyhow::Error::msg)?;
+    }
+    Ok(true)
+}
+
 pub fn init_on_startup() {
     register_page_tool_hosts();
     tokio::spawn(async {
         let startup_generation = account_context_generation();
+        let error = session_store::renew_session_if_due(false).await.err();
+        if let Some(error) = &error {
+            log::warn!("Startup device credential maintenance failed: {error}");
+        }
+        session_store::schedule_renewal_checks(
+            RENEWAL_WAKE.clone(),
+            error.is_some(),
+            maintain_device_session,
+        );
         // Restore persisted account session (if any) before anything else
         // so that device routing and bot delegation work on restart.
         match session_store::load_session_detailed() {
@@ -2414,18 +2367,16 @@ fn current_device_identity() -> Result<DeviceIdentity, String> {
 }
 
 /// Persist the in-memory account session so restart restores login.
-async fn persist_account_session(device_id: Option<&str>) -> Result<(), String> {
+async fn persist_account_session(
+    device_id: Option<&str>,
+    previous_host_token: Option<&str>,
+) -> Result<(), String> {
     // Login installs the context while its transition permit is still held;
     // this internal persistence step intentionally reads that staged value.
     let (session, relay_url) = read_account_context_raw().await?;
-    session_store::save_session_with_device(
-        &session.token,
-        &session.user_id,
-        &session.master_key,
-        &relay_url,
-        device_id,
-    )
-    .map_err(|e| format!("persist session: {e}"))
+    session_store::save_issued_session(&session, &relay_url, device_id, previous_host_token)
+        .await
+        .map_err(|e| format!("persist session: {e}"))
 }
 
 #[tauri::command]
@@ -2530,7 +2481,14 @@ async fn login_account_on_relay_for_generation(
     // Reset the token-expired flag on fresh login
     TOKEN_EXPIRED.store(false, std::sync::atomic::Ordering::Relaxed);
 
-    if let Err(e) = persist_account_session(Some(device.device_id.as_str())).await {
+    if let Err(e) = persist_account_session(
+        Some(device.device_id.as_str()),
+        replaced_account
+            .as_ref()
+            .map(|context| context.session.token.as_str()),
+    )
+    .await
+    {
         log::warn!("Failed to persist session: {e}");
     }
     register_delegated_identity_providers().await;
@@ -2623,17 +2581,10 @@ async fn clear_account_login_state(revoke_relay_token: bool) {
     if let Some(service) = get_service_holder().read().await.as_ref() {
         service.clear_bot_delegated_identities().await;
     }
-    if revoke_relay_token {
-        // Best-effort relay revocation must not prevent local logout.
-        if let Ok((session, relay_url)) = read_account_context_raw().await {
-            let _ = AccountClient::new()
-                .revoke_token(&relay_url, &session)
-                .await;
-        }
-    }
+    let active = read_account_context_raw().await.ok();
     *get_account_context().write().await = None;
     clear_credential_hint();
-    session_store::clear_session();
+    session_store::logout_session(active, revoke_relay_token).await;
     TOKEN_EXPIRED.store(false, std::sync::atomic::Ordering::Relaxed);
     emit_account_event(
         "account://login-state",
@@ -2659,12 +2610,22 @@ pub use openbitfun_core::service::remote_connect::relay_client::DevicePresenceEn
 const STARTUP_DEVICE_CONNECT_MAX_ATTEMPTS: usize = 5;
 
 async fn account_connect_devices_with_retry() -> Result<Vec<OnlineDeviceInfo>, String> {
-    let expected_generation = account_context_generation();
+    let generation = account_context_generation();
+    ROUTING_INTENT.request(generation);
+    reconnect_requested_devices(generation).await
+}
+
+async fn reconnect_requested_devices(
+    expected_generation: u64,
+) -> Result<Vec<OnlineDeviceInfo>, String> {
     for attempt in 1..=STARTUP_DEVICE_CONNECT_MAX_ATTEMPTS {
-        if !account_context_is_current(expected_generation) {
+        if !account_context_is_current(expected_generation)
+            || !ROUTING_INTENT.requested(expected_generation)
+        {
             return Err("account context changed".to_string());
         }
-        match account_connect_devices().await {
+        match connect_route_devices_for_generation(RelayRoute::Official, expected_generation).await
+        {
             Ok(devices) => return Ok(devices),
             Err(error) => {
                 if error_indicates_expired_token(&error)
@@ -2694,8 +2655,21 @@ pub async fn account_connect_devices() -> Result<Vec<OnlineDeviceInfo>, String> 
 }
 
 async fn connect_route_devices(route: RelayRoute) -> Result<Vec<OnlineDeviceInfo>, String> {
-    let account_generation = route.generation();
+    let generation = route.generation();
+    if route == RelayRoute::Official {
+        ROUTING_INTENT.request(generation);
+    }
+    connect_route_devices_for_generation(route, generation).await
+}
+
+async fn connect_route_devices_for_generation(
+    route: RelayRoute,
+    account_generation: u64,
+) -> Result<Vec<OnlineDeviceInfo>, String> {
     let operation_guard = route.lock_operation(account_generation).await?;
+    if route == RelayRoute::Official && !ROUTING_INTENT.requested(account_generation) {
+        return Err("device routing stopped".to_string());
+    }
     let (session, relay_url) = route.context(account_generation).await?;
     let identity = current_device_identity()?;
     let device_name = identity.device_name.clone();
@@ -2737,7 +2711,7 @@ async fn connect_route_devices(route: RelayRoute) -> Result<Vec<OnlineDeviceInfo
     // service client. Its compare-and-clear exit path must not touch this new
     // connection's controllers or presence.
     clear_device_routing_state_on_route(route);
-    disconnect_route_controllers(route, "Device routing reconnecting").await;
+    clear_route_delivery_targets(route, "Device routing reconnecting");
 
     let (mut event_rx, auth_device_id, service_connection_id) = match service
         .start_device_connection(
@@ -2754,6 +2728,11 @@ async fn connect_route_devices(route: RelayRoute) -> Result<Vec<OnlineDeviceInfo
         Err(e) => {
             let msg = format!("{e}");
             clear_device_routing_state_on_route(route);
+            // The reconnect kept the previous roster; without a connection it
+            // no longer describes reachable devices.
+            if route == RelayRoute::Official {
+                emit_device_presence(&[]);
+            }
             // Token invalidation re-enters the account transition path, so the
             // current account-operation lease must be released first.
             drop(routing_lifecycle);
@@ -2782,14 +2761,10 @@ async fn connect_route_devices(route: RelayRoute) -> Result<Vec<OnlineDeviceInfo
     install_device_routing_owner(routing_owner.clone());
 
     if route == RelayRoute::Official {
-        if let Err(e) = session_store::save_session_with_device(
-            &session.token,
-            &session.user_id,
-            &session.master_key,
-            &relay_url,
-            Some(auth_device_id.as_str()),
-        ) {
-            log::warn!("Failed to persist AuthOk device_id into session: {e}");
+        match session_store::record_authenticated_device(&session.token, &auth_device_id) {
+            Ok(true) => RENEWAL_WAKE.notify_one(),
+            Ok(false) => {}
+            Err(error) => log::warn!("Failed to persist AuthOk device_id into session: {error}"),
         }
     }
 
@@ -3503,9 +3478,10 @@ async fn execute_local_remote_command(
                 .map_err(|e| anyhow::anyhow!("serialize response: {e}"));
             }
             if command == "peer_mode_ping" {
-                let value = crate::api::peer_host_invoke::peer_mode_ping()
-                    .await
-                    .map_err(|e| anyhow::anyhow!(e))?;
+                let value = crate::api::peer_host_invoke::peer_mode_ping_for_caller(
+                    route,
+                    source_device_id,
+                );
                 return serde_json::to_value(RemoteResponse::HostInvokeResult {
                     ok: true,
                     value: Some(value),

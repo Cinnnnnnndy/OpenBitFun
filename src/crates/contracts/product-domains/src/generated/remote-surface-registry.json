@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "digest": "fnv1a64:9fb2c42fa23d9fee",
+  "digest": "fnv1a64:975d66aad34aa784",
   "retiredCommandPrefixes": [
     {
       "prefix": "lsp_",
@@ -12,6 +12,7 @@
       "gen_ui_libraries_v1",
       "model_routing_v1",
       "model_pool_selection_v1",
+      "subagent_model_override_policy_v1",
       "magpie_discovery_v1",
       "background_result_delivery_v1",
       "dialog_queue_v1",
@@ -32,6 +33,7 @@
       "subscription_account_pools_v1",
       "subscription_account_failover_v1",
       "model_channel_routing_v1",
+      "responses_websocket_v1",
       "subscription_account_management_v1",
       "miniapp_agent_context_files_v1",
       "miniapp_agent_images_v1",
@@ -46,24 +48,29 @@
       "cancel_tool",
       "tool_catalog",
       "review_platform_v1",
+      "host_terminal_workspace_v1",
       "chat_mcp_catalog_v1",
       "workspace_icon_v1",
       "workspace_id_references_v1",
       "workspace_html_preview_v1",
       "workspace_latex_preview_v1",
       "whole_session_copy_v1",
+      "session_fork_v1",
+      "recoverable_interruption_v1",
       "session_trajectory_v1",
       "session_reference_browse_v1",
       "user_question_response",
       "user_question_interaction_v1",
       "ssh_none_auth_v1",
       "terminal_cursor_replay_v1",
-      "git_tracked_change_count_v1"
+      "git_tracked_change_count_v1",
+      "peer_attachment_status_v1"
     ],
     "desktop": [
       "gen_ui_libraries_v1",
       "model_routing_v1",
       "model_pool_selection_v1",
+      "subagent_model_override_policy_v1",
       "magpie_discovery_v1",
       "background_result_delivery_v1",
       "dialog_queue_v1",
@@ -84,6 +91,7 @@
       "subscription_account_pools_v1",
       "subscription_account_failover_v1",
       "model_channel_routing_v1",
+      "responses_websocket_v1",
       "subscription_account_management_v1",
       "miniapp_agent_context_files_v1",
       "miniapp_agent_images_v1",
@@ -98,22 +106,27 @@
       "cancel_tool",
       "tool_catalog",
       "review_platform_v1",
+      "host_terminal_workspace_v1",
       "chat_mcp_catalog_v1",
       "workspace_icon_v1",
       "workspace_id_references_v1",
       "workspace_html_preview_v1",
       "workspace_latex_preview_v1",
       "whole_session_copy_v1",
+      "session_fork_v1",
+      "recoverable_interruption_v1",
       "session_trajectory_v1",
       "session_reference_browse_v1",
       "user_question_response",
       "user_question_interaction_v1",
       "ssh_none_auth_v1",
-      "git_tracked_change_count_v1"
+      "git_tracked_change_count_v1",
+      "peer_attachment_status_v1"
     ],
     "cli": [
       "model_routing_v1",
       "model_pool_selection_v1",
+      "subagent_model_override_policy_v1",
       "magpie_discovery_v1",
       "background_result_delivery_v1",
       "dialog_queue_v1",
@@ -127,10 +140,14 @@
       "targeted_session_rollback",
       "token_usage_statistics",
       "model_channel_routing_v1",
+      "responses_websocket_v1",
       "product_control_v1",
       "remote_connect_control_v1",
       "cancel_tool",
       "tool_catalog",
+      "whole_session_copy_v1",
+      "session_fork_v1",
+      "recoverable_interruption_v1",
       "session_trajectory_v1",
       "chat_mcp_catalog_v1",
       "workspace_icon_v1",
@@ -139,7 +156,8 @@
       "user_question_response",
       "user_question_interaction_v1",
       "terminal_cursor_replay_v1",
-      "git_tracked_change_count_v1"
+      "git_tracked_change_count_v1",
+      "peer_attachment_status_v1"
     ]
   },
   "operations": [
@@ -427,8 +445,7 @@
         "kind": "proxied"
       },
       "cliPeer": {
-        "kind": "unsupported",
-        "reason": "the CLI peer host has no handler for this command"
+        "kind": "handled"
       }
     },
     {
@@ -794,8 +811,7 @@
         "kind": "proxied"
       },
       "cliPeer": {
-        "kind": "unsupported",
-        "reason": "the CLI peer host has no handler for this command"
+        "kind": "handled"
       }
     },
     {
@@ -807,7 +823,7 @@
       },
       "cliPeer": {
         "kind": "unsupported",
-        "reason": "the CLI peer host has no handler for this command"
+        "reason": "the CLI peer host does not manage subscription account sign-in"
       }
     },
     {
@@ -979,8 +995,7 @@
         "kind": "proxied"
       },
       "cliPeer": {
-        "kind": "unsupported",
-        "reason": "the CLI peer host has no handler for this command"
+        "kind": "handled"
       }
     },
     {
@@ -1014,8 +1029,7 @@
         "kind": "proxied"
       },
       "cliPeer": {
-        "kind": "unsupported",
-        "reason": "the CLI peer host has no handler for this command"
+        "kind": "handled"
       }
     },
     {
@@ -1278,8 +1292,7 @@
         "kind": "proxied"
       },
       "cliPeer": {
-        "kind": "unsupported",
-        "reason": "the CLI peer host has no handler for this command"
+        "kind": "handled"
       }
     },
     {
@@ -1478,8 +1491,7 @@
         "kind": "proxied"
       },
       "cliPeer": {
-        "kind": "unsupported",
-        "reason": "the CLI peer host has no handler for this command"
+        "kind": "handled"
       }
     },
     {
@@ -1583,8 +1595,7 @@
         "kind": "proxied"
       },
       "cliPeer": {
-        "kind": "unsupported",
-        "reason": "the CLI peer host has no handler for this command"
+        "kind": "handled"
       }
     },
     {
@@ -1755,42 +1766,6 @@
       }
     },
     {
-      "id": "dispatch_install_cli_cancel",
-      "surface": "tauri_command",
-      "remoteWorkspace": "WorkspaceAgnostic",
-      "peer": {
-        "kind": "controller_local"
-      },
-      "cliPeer": {
-        "kind": "unsupported",
-        "reason": "the controller keeps this command; peer hosts refuse it before dispatch"
-      }
-    },
-    {
-      "id": "dispatch_install_cli_poll",
-      "surface": "tauri_command",
-      "remoteWorkspace": "WorkspaceAgnostic",
-      "peer": {
-        "kind": "controller_local"
-      },
-      "cliPeer": {
-        "kind": "unsupported",
-        "reason": "the controller keeps this command; peer hosts refuse it before dispatch"
-      }
-    },
-    {
-      "id": "dispatch_install_cli_start",
-      "surface": "tauri_command",
-      "remoteWorkspace": "WorkspaceAgnostic",
-      "peer": {
-        "kind": "controller_local"
-      },
-      "cliPeer": {
-        "kind": "unsupported",
-        "reason": "the controller keeps this command; peer hosts refuse it before dispatch"
-      }
-    },
-    {
       "id": "dispatch_list_jobs",
       "surface": "tauri_command",
       "remoteWorkspace": "WorkspaceAgnostic",
@@ -1828,18 +1803,6 @@
     },
     {
       "id": "dispatch_probe_target",
-      "surface": "tauri_command",
-      "remoteWorkspace": "WorkspaceAgnostic",
-      "peer": {
-        "kind": "controller_local"
-      },
-      "cliPeer": {
-        "kind": "unsupported",
-        "reason": "the controller keeps this command; peer hosts refuse it before dispatch"
-      }
-    },
-    {
-      "id": "dispatch_provision_target",
       "surface": "tauri_command",
       "remoteWorkspace": "WorkspaceAgnostic",
       "peer": {
@@ -2294,8 +2257,7 @@
         "kind": "proxied"
       },
       "cliPeer": {
-        "kind": "unsupported",
-        "reason": "the CLI peer host has no handler for this command"
+        "kind": "handled"
       }
     },
     {
@@ -3226,8 +3188,7 @@
         "kind": "proxied"
       },
       "cliPeer": {
-        "kind": "unsupported",
-        "reason": "the CLI peer host has no handler for this command"
+        "kind": "handled"
       }
     },
     {
@@ -3260,8 +3221,7 @@
         "kind": "proxied"
       },
       "cliPeer": {
-        "kind": "unsupported",
-        "reason": "the CLI peer host has no handler for this command"
+        "kind": "handled"
       }
     },
     {
@@ -3423,7 +3383,7 @@
       },
       "cliPeer": {
         "kind": "unsupported",
-        "reason": "the CLI peer host has no handler for this command"
+        "reason": "the CLI peer host does not manage subscription account sign-in"
       }
     },
     {
@@ -3435,7 +3395,7 @@
       },
       "cliPeer": {
         "kind": "unsupported",
-        "reason": "the CLI peer host has no handler for this command"
+        "reason": "the CLI peer host does not manage subscription account sign-in"
       }
     },
     {
@@ -4182,8 +4142,7 @@
         "kind": "proxied"
       },
       "cliPeer": {
-        "kind": "unsupported",
-        "reason": "the CLI peer host has no handler for this command"
+        "kind": "handled"
       }
     },
     {
@@ -4229,8 +4188,7 @@
         "kind": "proxied"
       },
       "cliPeer": {
-        "kind": "unsupported",
-        "reason": "the CLI peer host has no handler for this command"
+        "kind": "handled"
       }
     },
     {
@@ -4448,7 +4406,7 @@
       },
       "cliPeer": {
         "kind": "unsupported",
-        "reason": "the CLI peer host has no handler for this command"
+        "reason": "the CLI peer host does not manage subscription account sign-in"
       }
     },
     {
@@ -4460,7 +4418,7 @@
       },
       "cliPeer": {
         "kind": "unsupported",
-        "reason": "the CLI peer host has no handler for this command"
+        "reason": "the CLI peer host does not manage subscription account sign-in"
       }
     },
     {
@@ -4542,8 +4500,7 @@
         "kind": "proxied"
       },
       "cliPeer": {
-        "kind": "unsupported",
-        "reason": "the CLI peer host has no handler for this command"
+        "kind": "handled"
       }
     },
     {
@@ -4611,7 +4568,7 @@
       },
       "cliPeer": {
         "kind": "unsupported",
-        "reason": "the CLI peer host has no handler for this command"
+        "reason": "the CLI peer host does not manage subscription account sign-in"
       }
     },
     {
@@ -4623,7 +4580,7 @@
       },
       "cliPeer": {
         "kind": "unsupported",
-        "reason": "the CLI peer host has no handler for this command"
+        "reason": "the CLI peer host does not manage subscription account sign-in"
       }
     },
     {
@@ -5486,6 +5443,18 @@
       }
     },
     {
+      "id": "peer_host_bridge_ready",
+      "surface": "tauri_command",
+      "remoteWorkspace": "WorkspaceAgnostic",
+      "peer": {
+        "kind": "controller_local"
+      },
+      "cliPeer": {
+        "kind": "unsupported",
+        "reason": "the controller keeps this command; peer hosts refuse it before dispatch"
+      }
+    },
+    {
       "id": "peer_host_invoke_complete",
       "surface": "tauri_command",
       "remoteWorkspace": "WorkspaceAgnostic",
@@ -5679,8 +5648,7 @@
         "kind": "proxied"
       },
       "cliPeer": {
-        "kind": "unsupported",
-        "reason": "the CLI peer host has no handler for this command"
+        "kind": "handled"
       }
     },
     {
@@ -5715,7 +5683,7 @@
       },
       "cliPeer": {
         "kind": "unsupported",
-        "reason": "the CLI peer host has no handler for this command"
+        "reason": "the CLI peer host does not manage subscription account sign-in"
       }
     },
     {
@@ -5727,7 +5695,7 @@
       },
       "cliPeer": {
         "kind": "unsupported",
-        "reason": "the CLI peer host has no handler for this command"
+        "reason": "the CLI peer host does not manage subscription account sign-in"
       }
     },
     {
@@ -6209,13 +6177,12 @@
     {
       "id": "reorder_opened_workspaces",
       "surface": "tauri_command",
-      "remoteWorkspace": "LegacyUnaudited",
+      "remoteWorkspace": "WorkspaceAgnostic",
       "peer": {
         "kind": "proxied"
       },
       "cliPeer": {
-        "kind": "unsupported",
-        "reason": "the CLI peer host has no handler for this command"
+        "kind": "handled"
       }
     },
     {
@@ -7304,8 +7271,7 @@
         "kind": "proxied"
       },
       "cliPeer": {
-        "kind": "unsupported",
-        "reason": "the CLI peer host has no handler for this command"
+        "kind": "handled"
       }
     },
     {
@@ -7329,7 +7295,7 @@
       },
       "cliPeer": {
         "kind": "unsupported",
-        "reason": "the CLI peer host has no handler for this command"
+        "reason": "the CLI peer host does not manage subscription account sign-in"
       }
     },
     {
@@ -7901,7 +7867,7 @@
       },
       "cliPeer": {
         "kind": "unsupported",
-        "reason": "the CLI peer host has no handler for this command"
+        "reason": "the CLI peer host does not manage subscription account sign-in"
       }
     },
     {
@@ -7913,7 +7879,7 @@
       },
       "cliPeer": {
         "kind": "unsupported",
-        "reason": "the CLI peer host has no handler for this command"
+        "reason": "the CLI peer host does not manage subscription account sign-in"
       }
     },
     {
@@ -8252,8 +8218,7 @@
         "kind": "proxied"
       },
       "cliPeer": {
-        "kind": "unsupported",
-        "reason": "the CLI peer host has no handler for this command"
+        "kind": "handled"
       }
     },
     {
@@ -8390,8 +8355,7 @@
         "kind": "proxied"
       },
       "cliPeer": {
-        "kind": "unsupported",
-        "reason": "the CLI peer host has no handler for this command"
+        "kind": "handled"
       }
     },
     {
@@ -8607,6 +8571,18 @@
       "cliPeer": {
         "kind": "unsupported",
         "reason": "the CLI peer host has no handler for this command"
+      }
+    },
+    {
+      "id": "write_clipboard_image",
+      "surface": "tauri_command",
+      "remoteWorkspace": "LocalOnly",
+      "peer": {
+        "kind": "controller_local"
+      },
+      "cliPeer": {
+        "kind": "unsupported",
+        "reason": "the controller keeps this command; peer hosts refuse it before dispatch"
       }
     },
     {

@@ -2,6 +2,20 @@
 
 [中文](./README.zh-CN.md) | English
 
+## Responses connection settings
+
+In **Settings → Models → provider/model editor → Advanced settings**, choose
+**HTTP** or **WebSocket** for Responses models. Existing configurations keep
+HTTP with full context. WebSocket supports either full context or incremental
+context using `previous_response_id`, with `store: false` in both cases.
+HTTP cannot use incremental context, and there is no automatic transport switch.
+
+Provider settings are defaults for its Responses models. Editing a model creates
+an override; **Use provider settings** clears it. Choose WebSocket only for a
+provider that supports Responses WebSocket connections. An unsupported Peer host
+must be upgraded before these settings can be edited or tested there.
+
+
 ## Overview
 
 This directory contains OpenBitFun’s **Web UI** (React + TypeScript). The same frontend codebase is reused by:
@@ -588,3 +602,28 @@ partial view of available events. Peer detail bodies remain owned by the canonic
 record replica. This observer UI adds no runtime or filesystem dependency for
 Remote Control or Detached Dispatch jobs. Automated fixtures simulate these routing
 and device-switch contracts; live remote and native visual checks remain manual.
+
+### Subagent model selection policy
+
+In **Settings → Execution → Subagents**, **Allow agents to choose subagent models**
+controls `ai.allow_subagent_model_override` on the executing host. It defaults to
+`true`, including when loading older configurations. When disabled, AgentSpawn, AgentFork,
+AgentSendInput, legacy Task and LaunchReviewAgent omit `model_id` from model-facing
+schemas and related instructions. Calls that still supply the field fail before
+launching or switching a subagent; remove the argument to use configured models.
+Configured defaults, model pools, Agent-specific models and backend-owned Review
+model preferences remain effective. Existing running agents keep their models.
+
+The next tool catalog reflects a setting change, including deferred tool specs
+and PTC bindings; execution rechecks the current host setting. SSH workspaces,
+mobile/IM controllers and detached jobs use the execution host's policy. In Peer
+Device Mode, the setting belongs to the peer; hosts must advertise
+`subagent_model_override_policy_v1`. Older hosts show an unsupported setting rather
+than saving a value they cannot enforce.
+
+`AgentFork` launches a background agent with a copy of the current conversation
+context and the current agent type. It takes `agent_id`, `prompt`, and optionally
+`model_id`; it does not accept `agent_type`. Use `AgentSpawn` for a fresh specialist
+conversation. Both return `bg_task_id` and support the existing AgentWait,
+AgentSendInput, and AgentControl workflow. Forks retain the existing workspace,
+permission, and nested-delegation constraints.

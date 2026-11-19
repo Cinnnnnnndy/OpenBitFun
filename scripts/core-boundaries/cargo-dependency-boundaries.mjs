@@ -52,6 +52,7 @@ function repositoryPath(root, path) {
 // Resolved feature checks still include them and their full dependency closure.
 const VENDORED_EXTERNAL_PACKAGES = new Map([
   ['third_party/eioc/Cargo.toml', { name: 'eioc', version: '0.5.0' }],
+  ['third_party/screenshots/Cargo.toml', { name: 'screenshots', version: '0.8.10' }],
   ['third_party/tao/Cargo.toml', { name: 'tao', version: '0.36.0' }],
   ['third_party/wry/Cargo.toml', { name: 'wry', version: '0.56.0' }],
 ]);
@@ -584,11 +585,17 @@ const THIRD_PARTY_CAPABILITY_PROFILES = new Map([
       ['openbitfun-webdriver', dependencyProfile(['jpeg', 'png'], {
         useDefaultFeatures: false,
       })],
+      // Preserve screenshots 0.8.10's upstream image defaults as a vendored
+      // external crate; its 0.24 image dependency is separately version-gated.
+      ['screenshots', dependencyProfile([])],
     ]),
   }],
   ['tokio-tungstenite', {
     label: 'Tokio Tungstenite',
     packages: new Map([
+      // Responses upgrades use the existing Reqwest proxy/TLS policy. This owner
+      // needs WebSocket framing/handshake, not a second TCP/TLS connector.
+      ['openbitfun-ai-adapters', dependencyProfile(['handshake'], { useDefaultFeatures: false })],
       ['openbitfun-core', { ...dependencyProfile([], { optional: true }),
         devProfile: dependencyProfile([], { kind: 'dev' }),
       }],
@@ -1071,7 +1078,6 @@ export function findServicesIntegrationsReqwestFeatureViolations(pkg) {
     ['miniapp-runtime', ['reqwest/stream']],
     ['models-dev', ['reqwest/system-proxy']],
     ['remote-connect', ['reqwest/json', 'reqwest/multipart', 'reqwest/query']],
-    ['remote-ssh-concrete', ['reqwest/stream']],
     ['review-platform', ['reqwest/json', 'reqwest/query', 'reqwest/stream']],
     ['speech', ['reqwest/stream']],
     ['web-tools', ['reqwest/json']],

@@ -12,6 +12,35 @@ use crate::remote_connect::relay_http::{
     relay_http_client, send_with_retry, BufferedRelayResponse, RelayHttpRetry,
 };
 
+/// An explicit routing request follows credential rotation for this account.
+/// A user stop or a later login invalidates pending connection retries.
+#[derive(Default)]
+pub struct RoutingIntent(AtomicU64);
+
+impl RoutingIntent {
+    pub const fn new() -> Self {
+        Self(AtomicU64::new(0))
+    }
+
+    pub fn request(&self, generation: u64) {
+        self.0.store(generation, Ordering::SeqCst);
+    }
+
+    pub fn cancel(&self) {
+        self.request(0);
+    }
+
+    pub fn requested(&self, generation: u64) -> bool {
+        generation != 0 && self.0.load(Ordering::SeqCst) == generation
+    }
+
+    pub fn rotated(&self, previous: u64, current: u64) {
+        let _ = self
+            .0
+            .compare_exchange(previous, current, Ordering::SeqCst, Ordering::SeqCst);
+    }
+}
+
 pub const MASTER_KEY_LEN: usize = 32;
 
 /// A retired official deployment has its own credential database. Authenticate
@@ -375,16 +404,6 @@ pub struct DelegateToken {
     pub device_secret: [u8; 32],
 }
 
-/// Full device credential minted for a distinct SSH host. Unlike
-/// [`DelegateToken`], this token may authenticate a device WebSocket and is
-/// therefore only issued by the narrow authenticated provisioning endpoint.
-#[derive(Clone, Serialize, Deserialize)]
-pub struct ProvisionedDeviceToken {
-    pub token: String,
-    pub user_id: String,
-    pub device_id: String,
-}
-
 // ── Relay HTTP client ───────────────────────────────────────────────────
 
 #[derive(Deserialize)]
@@ -424,6 +443,10 @@ pub fn persisted_relay_requires_migration(relay_url: &str) -> bool {
             .and_then(|host| host.parse::<std::net::Ipv4Addr>().ok())
             .is_some_and(|ip| ip.is_private() || ip.is_loopback() || ip.is_link_local())
 }
+
+#[derive(Debug, thiserror::Error)]
+#[error("{0}")]
+pub struct RelayUnauthorized(String);
 
 /// Check whether an account/relay error message indicates an invalid or
 /// expired account token (relay auth failure). Shared by Desktop, CLI, and
@@ -469,9 +492,9 @@ pub fn validate_relay_base_url(relay_url: &str) -> Result<reqwest::Url> {
                 (Some(version), None)
                     if !version.is_empty()
                         && version.len() <= 32
-                        && version
-                            .bytes()
-                            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-')) =>
+                        && version.bytes().all(|byte| {
+                            byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-')
+                        }) =>
                 {
                     true
                 }
@@ -577,6 +600,20 @@ impl AccountClient {
         AccountSession,
         openbitfun_product_domains::account::GitHubUser,
     )> {
+        self.exchange_identity(relay_url, device, device_kind, None)
+            .await
+    }
+
+    pub(super) async fn exchange_identity(
+        &self,
+        relay_url: &str,
+        device: &DeviceIdentity,
+        device_kind: &str,
+        previous: Option<&super::session_store::LoadedSession>,
+    ) -> Result<(
+        AccountSession,
+        openbitfun_product_domains::account::GitHubUser,
+    )> {
         let mut identity =
             crate::account_identity::AccountIdentityClient::from_environment().await?;
         let profile = identity
@@ -591,8 +628,11 @@ impl AccountClient {
             .user
             .identity_id()
             .ok_or_else(|| anyhow!("Unsupported account identity"))?;
-        let device_secret =
-            super::session_store::device_secret(relay_url, &account_id, &device.device_id)?;
+        let device_secret = match previous {
+            Some(saved) if saved.user_id == account_id => saved.master_key,
+            Some(_) => return Err(anyhow!("Sign in with the original device account to renew")),
+            None => super::session_store::device_secret(relay_url, &account_id, &device.device_id)?,
+        };
         let body = login_request_body(
             &access_token,
             device,
@@ -664,7 +704,7 @@ impl AccountClient {
                 "relay returned HTTP 507 Insufficient Storage (the configured account or asset quota is full)"
             );
         }
-        match serde_json::from_slice::<ErrorBody>(body) {
+        let error = match serde_json::from_slice::<ErrorBody>(body) {
             Ok(body) => {
                 let msg = body.error;
                 if let Some(retry) = body.retry_after_secs {
@@ -674,6 +714,11 @@ impl AccountClient {
                 }
             }
             Err(_) => anyhow!("relay returned HTTP {status}"),
+        };
+        if status == reqwest::StatusCode::UNAUTHORIZED {
+            RelayUnauthorized(error.to_string()).into()
+        } else {
+            error
         }
     }
 
@@ -708,51 +753,6 @@ impl AccountClient {
             user_id: auth.user_id,
             device_secret,
         })
-    }
-
-    /// Register a new account device and mint its full routing token.
-    ///
-    /// `device_kind` is what keeps the minted row out of the wrong lists: this
-    /// route serves both an SSH host being bootstrapped (`"desktop"`) and a
-    /// keyboard-less peer that cannot type a password (`"watch"`), and only the
-    /// caller knows which one it is holding.
-    /// `request_id` makes an ambiguous HTTP response safe to replay.
-    pub async fn provision_device_token(
-        &self,
-        relay_url: &str,
-        session: &AccountSession,
-        device_id: &str,
-        device_name: &str,
-        device_kind: &str,
-        request_id: uuid::Uuid,
-        device_secret: &[u8; 32],
-    ) -> Result<ProvisionedDeviceToken> {
-        let body = serde_json::json!({
-            "device_id": device_id,
-            "device_name": device_name,
-            "device_kind": device_kind,
-            "public_key": device_crypto::public_key_base64(device_secret),
-            "request_id": request_id.to_string(),
-        });
-        let resp = send_with_retry(
-            "provision account device",
-            self.http
-                .post(Self::endpoint(relay_url, "/api/auth/provision-device")?)
-                .header("Authorization", Self::auth_header(session))
-                .json(&body),
-            RelayHttpRetry::IdempotentWrite,
-        )
-        .await?;
-        if !resp.status().is_success() {
-            return Err(Self::into_buffered_error(resp));
-        }
-        let provisioned: ProvisionedDeviceToken = resp.json().await?;
-        if provisioned.user_id != session.user_id || provisioned.device_id != device_id {
-            return Err(anyhow!(
-                "relay returned a mismatched provisioned device identity"
-            ));
-        }
-        Ok(provisioned)
     }
 
     /// Revoke the account token on the relay (server-side logout).
@@ -1139,6 +1139,23 @@ fn project_device_list_entry(entry: DeviceListEntry) -> DeviceInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_requested_routing_follows_credential_rotation() {
+        let intent = RoutingIntent::new();
+        intent.rotated(1, 3);
+        assert!(!intent.requested(3));
+        intent.request(3);
+        intent.rotated(3, 5);
+        assert!(intent.requested(5));
+        assert!(!intent.requested(3));
+        intent.cancel();
+        intent.rotated(5, 7);
+        assert!(!intent.requested(7));
+        intent.request(9);
+        intent.rotated(5, 7);
+        assert!(intent.requested(9));
+    }
 
     #[test]
     fn legacy_embedded_session_migrates_without_capturing_other_private_relays() {

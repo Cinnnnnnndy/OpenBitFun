@@ -27,6 +27,15 @@ impl FixtureHost {
         format!("http://127.0.0.1:{}{}", self.port, self.prefix)
     }
 
+    async fn sign_in_official_session(&self, session: &AccountSession) {
+        *get_account_context().write().await = Some(AccountContextState {
+            session: session.clone(),
+            relay_url: self.url(),
+        });
+        // Login persists the credential. The next AuthOk supplies the device ID.
+        persist_account_session(None, None).await.unwrap();
+    }
+
     async fn credential(&self, device_id: &str, secret: [u8; 32]) -> AccountSession {
         db::UserRow::upsert_verified(&self.database, "42", "route-test")
             .await
@@ -192,15 +201,13 @@ async fn dual_relay_rpc_persistence_and_teardown_are_independent() {
     lan_service.prepare_relay(&lan_method).await.unwrap();
     *RelayRoute::Official.service().write().await = Some(official_service);
     *RelayRoute::Lan.service().write().await = Some(lan_service);
-    *get_account_context().write().await = Some(AccountContextState {
-        session: official_session.clone(),
-        relay_url: official.url(),
-    });
+    official.sign_in_official_session(&official_session).await;
     let generation = account_context_generation();
     account_connect_devices().await.unwrap();
     let mut original_owner = current_device_routing_owner_snapshot().unwrap();
     let saved = session_store::load_session_detailed().unwrap().unwrap();
     assert_eq!(saved.token, official_session.token);
+    assert_eq!(saved.device_id.as_deref(), Some(id.as_str()));
     RelayRoute::replace_lan_context(Some(AccountContextState {
         session: lan_session.clone(),
         relay_url: lan.url(),
@@ -311,10 +318,7 @@ async fn dual_relay_rpc_persistence_and_teardown_are_independent() {
         serde_json::json!({"stream_id":"dual", "epoch":1, "cursor":2}),
     );
     assert_hint(&mut lan_hints, 2).await;
-    *get_account_context().write().await = Some(AccountContextState {
-        session: official_session.clone(),
-        relay_url: official.url(),
-    });
+    official.sign_in_official_session(&official_session).await;
     account_connect_devices().await.unwrap();
     assert!(
         !invalidate_local_account_session_if_current(
@@ -752,10 +756,7 @@ async fn starting_a_connected_route_again_only_returns_its_invitation() {
         )
         .unwrap(),
     );
-    *get_account_context().write().await = Some(AccountContextState {
-        session: host_session.clone(),
-        relay_url: official.url(),
-    });
+    official.sign_in_official_session(&host_session).await;
     let generation = account_context_generation();
     account_connect_devices().await.unwrap();
     let owner = current_device_routing_owner_snapshot().unwrap();

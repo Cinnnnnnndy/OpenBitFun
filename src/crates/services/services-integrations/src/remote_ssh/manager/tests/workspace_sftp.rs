@@ -1,5 +1,5 @@
 //! Real SSH + SFTP protocol regressions with small advertised handle limits.
-use super::*;
+use super::super::*;
 use russh_sftp::protocol::{
     Attrs, Data, ExtendedReply, FileAttributes, Handle as FileHandle, Name, OpenFlags, Packet,
     Status, Version,
@@ -595,6 +595,7 @@ impl Fixture {
                 server_key: None,
                 proxy_child: None,
                 alive: Arc::new(AtomicBool::new(true)),
+                liveness: Arc::new(ConnectionLiveness::confirmed_now()),
             },
         );
         Self {

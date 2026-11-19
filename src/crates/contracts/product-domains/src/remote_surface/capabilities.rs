@@ -25,6 +25,7 @@ pub enum PeerHostCapability {
     GenUiLibrariesV1,
     ModelRoutingV1,
     ModelPoolSelectionV1,
+    SubagentModelOverridePolicyV1,
     MagpieDiscoveryV1,
     /// Versioned, execution-host-owned background report decisions are persisted and projected.
     BackgroundResultDeliveryV1,
@@ -67,6 +68,7 @@ pub enum PeerHostCapability {
     SubscriptionAccountFailoverV1,
     /// Explicit cross-provider model channels and native failover are supported.
     ModelChannelRoutingV1,
+    ResponsesWebsocketV1,
     /// Account eligibility is independent of login and survives sign-out.
     SubscriptionAccountManagementV1,
     /// `miniapp_agent_run` accepts non-empty `contextFiles`.
@@ -98,6 +100,8 @@ pub enum PeerHostCapability {
     ToolCatalog,
     /// Workspace-backed pull request context and detail pages are implemented.
     ReviewPlatformV1,
+    /// `terminal_create` can validate an owning workspace and pin the PTY to the host.
+    HostTerminalWorkspaceV1,
     /// Mode/workspace-scoped `get_chat_mcp_catalog` is implemented.
     ChatMcpCatalogV1,
     /// Workspace references can carry the owning host's persisted ID.
@@ -109,6 +113,12 @@ pub enum PeerHostCapability {
     WorkspaceLatexPreviewV1,
     /// `copy_session` copies a whole session without a caller-selected turn id.
     WholeSessionCopyV1,
+    /// `fork_session` branches a session at a persisted turn. Every Desktop host
+    /// has implemented it; CLI hosts gained it together with this key.
+    SessionForkV1,
+    /// `interrupt_dialog_turn` stops a Turn so `recover_interrupted_dialog_turn`
+    /// can resume it. Without this key a controller uses hard cancellation.
+    RecoverableInterruptionV1,
     /// Bounded session trajectory summaries and host-side body search.
     SessionTrajectoryV1,
     /// `search_referenceable_sessions` accepts an omitted query to browse.
@@ -126,6 +136,9 @@ pub enum PeerHostCapability {
     TerminalCursorReplayV1,
     /// `git_get_tracked_change_count` returns a workspace-scoped count.
     GitTrackedChangeCountV1,
+    /// `peer_mode_ping` reports `caller_attached`: whether the calling
+    /// controller is still a DeviceEvent delivery target on this host.
+    PeerAttachmentStatusV1,
 }
 
 impl PeerHostCapability {
@@ -134,6 +147,7 @@ impl PeerHostCapability {
         Self::GenUiLibrariesV1,
         Self::ModelRoutingV1,
         Self::ModelPoolSelectionV1,
+        Self::SubagentModelOverridePolicyV1,
         Self::MagpieDiscoveryV1,
         Self::BackgroundResultDeliveryV1,
         Self::DialogQueueV1,
@@ -154,6 +168,7 @@ impl PeerHostCapability {
         Self::SubscriptionAccountPoolsV1,
         Self::SubscriptionAccountFailoverV1,
         Self::ModelChannelRoutingV1,
+        Self::ResponsesWebsocketV1,
         Self::SubscriptionAccountManagementV1,
         Self::MiniappAgentContextFilesV1,
         Self::MiniappAgentImagesV1,
@@ -168,12 +183,15 @@ impl PeerHostCapability {
         Self::CancelTool,
         Self::ToolCatalog,
         Self::ReviewPlatformV1,
+        Self::HostTerminalWorkspaceV1,
         Self::ChatMcpCatalogV1,
         Self::WorkspaceIconV1,
         Self::WorkspaceIdReferencesV1,
         Self::WorkspaceHtmlPreviewV1,
         Self::WorkspaceLatexPreviewV1,
         Self::WholeSessionCopyV1,
+        Self::SessionForkV1,
+        Self::RecoverableInterruptionV1,
         Self::SessionTrajectoryV1,
         Self::SessionReferenceBrowseV1,
         Self::UserQuestionResponse,
@@ -181,6 +199,7 @@ impl PeerHostCapability {
         Self::SshNoneAuthV1,
         Self::TerminalCursorReplayV1,
         Self::GitTrackedChangeCountV1,
+        Self::PeerAttachmentStatusV1,
     ];
 
     /// The key used in the `peer_mode_ping` `capabilities` object.
@@ -189,6 +208,7 @@ impl PeerHostCapability {
             Self::GenUiLibrariesV1 => "gen_ui_libraries_v1",
             Self::ModelRoutingV1 => "model_routing_v1",
             Self::ModelPoolSelectionV1 => "model_pool_selection_v1",
+            Self::SubagentModelOverridePolicyV1 => "subagent_model_override_policy_v1",
             Self::MagpieDiscoveryV1 => "magpie_discovery_v1",
             Self::BackgroundResultDeliveryV1 => "background_result_delivery_v1",
             Self::DialogQueueV1 => "dialog_queue_v1",
@@ -209,6 +229,7 @@ impl PeerHostCapability {
             Self::SubscriptionAccountPoolsV1 => "subscription_account_pools_v1",
             Self::SubscriptionAccountFailoverV1 => "subscription_account_failover_v1",
             Self::ModelChannelRoutingV1 => "model_channel_routing_v1",
+            Self::ResponsesWebsocketV1 => "responses_websocket_v1",
             Self::SubscriptionAccountManagementV1 => "subscription_account_management_v1",
             Self::MiniappAgentContextFilesV1 => "miniapp_agent_context_files_v1",
             Self::MiniappAgentImagesV1 => "miniapp_agent_images_v1",
@@ -223,6 +244,7 @@ impl PeerHostCapability {
             Self::CancelTool => "cancel_tool",
             Self::ToolCatalog => "tool_catalog",
             Self::ReviewPlatformV1 => "review_platform_v1",
+            Self::HostTerminalWorkspaceV1 => "host_terminal_workspace_v1",
             Self::ChatMcpCatalogV1 => "chat_mcp_catalog_v1",
             Self::WorkspaceIconV1 => "workspace_icon_v1",
             Self::WorkspaceIdReferencesV1 => "workspace_id_references_v1",
@@ -231,11 +253,14 @@ impl PeerHostCapability {
             Self::SessionTrajectoryV1 => "session_trajectory_v1",
             Self::SessionReferenceBrowseV1 => "session_reference_browse_v1",
             Self::WholeSessionCopyV1 => "whole_session_copy_v1",
+            Self::SessionForkV1 => "session_fork_v1",
+            Self::RecoverableInterruptionV1 => "recoverable_interruption_v1",
             Self::UserQuestionResponse => "user_question_response",
             Self::UserQuestionInteractionV1 => "user_question_interaction_v1",
             Self::SshNoneAuthV1 => "ssh_none_auth_v1",
             Self::TerminalCursorReplayV1 => "terminal_cursor_replay_v1",
             Self::GitTrackedChangeCountV1 => "git_tracked_change_count_v1",
+            Self::PeerAttachmentStatusV1 => "peer_attachment_status_v1",
         }
     }
 
@@ -251,6 +276,7 @@ const DESKTOP_CAPABILITIES: &[PeerHostCapability] = &[
     PeerHostCapability::GenUiLibrariesV1,
     PeerHostCapability::ModelRoutingV1,
     PeerHostCapability::ModelPoolSelectionV1,
+    PeerHostCapability::SubagentModelOverridePolicyV1,
     PeerHostCapability::MagpieDiscoveryV1,
     PeerHostCapability::BackgroundResultDeliveryV1,
     PeerHostCapability::DialogQueueV1,
@@ -271,6 +297,7 @@ const DESKTOP_CAPABILITIES: &[PeerHostCapability] = &[
     PeerHostCapability::SubscriptionAccountPoolsV1,
     PeerHostCapability::SubscriptionAccountFailoverV1,
     PeerHostCapability::ModelChannelRoutingV1,
+    PeerHostCapability::ResponsesWebsocketV1,
     PeerHostCapability::SubscriptionAccountManagementV1,
     PeerHostCapability::MiniappAgentContextFilesV1,
     PeerHostCapability::MiniappAgentImagesV1,
@@ -285,18 +312,22 @@ const DESKTOP_CAPABILITIES: &[PeerHostCapability] = &[
     PeerHostCapability::CancelTool,
     PeerHostCapability::ToolCatalog,
     PeerHostCapability::ReviewPlatformV1,
+    PeerHostCapability::HostTerminalWorkspaceV1,
     PeerHostCapability::ChatMcpCatalogV1,
     PeerHostCapability::WorkspaceIconV1,
     PeerHostCapability::WorkspaceIdReferencesV1,
     PeerHostCapability::WorkspaceHtmlPreviewV1,
     PeerHostCapability::WorkspaceLatexPreviewV1,
     PeerHostCapability::WholeSessionCopyV1,
+    PeerHostCapability::SessionForkV1,
+    PeerHostCapability::RecoverableInterruptionV1,
     PeerHostCapability::SessionTrajectoryV1,
     PeerHostCapability::SessionReferenceBrowseV1,
     PeerHostCapability::UserQuestionResponse,
     PeerHostCapability::UserQuestionInteractionV1,
     PeerHostCapability::SshNoneAuthV1,
     PeerHostCapability::GitTrackedChangeCountV1,
+    PeerHostCapability::PeerAttachmentStatusV1,
 ];
 
 /// The CLI peer host has no MiniApp runtime, WSL or SSH connection setup,
@@ -304,6 +335,7 @@ const DESKTOP_CAPABILITIES: &[PeerHostCapability] = &[
 const CLI_CAPABILITIES: &[PeerHostCapability] = &[
     PeerHostCapability::ModelRoutingV1,
     PeerHostCapability::ModelPoolSelectionV1,
+    PeerHostCapability::SubagentModelOverridePolicyV1,
     PeerHostCapability::MagpieDiscoveryV1,
     PeerHostCapability::BackgroundResultDeliveryV1,
     PeerHostCapability::DialogQueueV1,
@@ -317,10 +349,14 @@ const CLI_CAPABILITIES: &[PeerHostCapability] = &[
     PeerHostCapability::TargetedSessionRollback,
     PeerHostCapability::TokenUsageStatistics,
     PeerHostCapability::ModelChannelRoutingV1,
+    PeerHostCapability::ResponsesWebsocketV1,
     PeerHostCapability::ProductControlV1,
     PeerHostCapability::RemoteConnectControlV1,
     PeerHostCapability::CancelTool,
     PeerHostCapability::ToolCatalog,
+    PeerHostCapability::WholeSessionCopyV1,
+    PeerHostCapability::SessionForkV1,
+    PeerHostCapability::RecoverableInterruptionV1,
     PeerHostCapability::SessionTrajectoryV1,
     PeerHostCapability::ChatMcpCatalogV1,
     PeerHostCapability::WorkspaceIconV1,
@@ -330,6 +366,7 @@ const CLI_CAPABILITIES: &[PeerHostCapability] = &[
     PeerHostCapability::UserQuestionInteractionV1,
     PeerHostCapability::TerminalCursorReplayV1,
     PeerHostCapability::GitTrackedChangeCountV1,
+    PeerHostCapability::PeerAttachmentStatusV1,
 ];
 
 /// The capabilities a peer host of the given kind publishes.
@@ -444,10 +481,18 @@ mod tests {
             Some(&Value::Bool(true))
         );
         assert!(!cli.contains_key("product_control_presentation_v1"));
-        assert!(!cli.contains_key("whole_session_copy_v1"));
+        // CLI hosts gained `copy_session` and `fork_session` together.
+        assert_eq!(cli["whole_session_copy_v1"], true);
+        assert_eq!(cli["session_fork_v1"], true);
+        assert_eq!(cli["recoverable_interruption_v1"], true);
         assert!(!cli.contains_key("review_platform_v1"));
+        assert!(!cli.contains_key("host_terminal_workspace_v1"));
         assert_eq!(
             capability_map(PeerHostKind::Desktop).get("review_platform_v1"),
+            Some(&Value::Bool(true))
+        );
+        assert_eq!(
+            capability_map(PeerHostKind::Desktop).get("host_terminal_workspace_v1"),
             Some(&Value::Bool(true))
         );
         assert_eq!(

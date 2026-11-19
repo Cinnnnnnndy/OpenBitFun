@@ -38,7 +38,7 @@ import {
 } from './thread-goal/ThreadGoalStripControl';
 import { formatCompactTokenCount } from '../utils/tokenUsageDisplay';
 import { ContextUsagePopover } from './usage/ContextUsagePopover';
-import type { UsageContextBreakdown } from '@/infrastructure/api/service-api/SessionAPI';
+import type { UsageContextEstimate } from '@/infrastructure/api/service-api/SessionAPI';
 import './ChatInputWorkspaceStrip.scss';
 
 export interface ChatInputWorkspaceStripProps {
@@ -56,8 +56,10 @@ export interface ChatInputWorkspaceStripProps {
     maxTokens: number;
     sessionKey?: string;
     anchorRef?: React.RefObject<HTMLElement>;
-    previewSession?: { sessionId: string; workspaceId?: string };
-    loadContext?: () => Promise<UsageContextBreakdown | undefined>;
+    previewSession?: { sessionId: string; canvasSessionId?: string; workspaceId?: string };
+    loadContext?: () => Promise<UsageContextEstimate | undefined>;
+    compactDisabled?: boolean;
+    onCompact?: () => void;
     onOpen: () => void;
   };
   /** Native-tool permission mode for this session, exposed as a compact strip control. */
@@ -850,6 +852,7 @@ export const ChatInputWorkspaceStrip: React.FC<ChatInputWorkspaceStripProps> = (
             } : undefined}
             onSelectLocal={dispatchControl.onSelectLocal}
             onSelectTarget={dispatchControl.onSelectTarget}
+            jobId={dispatchControl.syncableJobId}
           />
         ) : null}
         {!showDispatchPicker && showWorktreeToggle
@@ -1157,6 +1160,11 @@ export const ChatInputWorkspaceStrip: React.FC<ChatInputWorkspaceStripProps> = (
             loadContext={usageReport.loadContext}
             previewSession={usageReport.previewSession}
             onClose={() => setUsagePopoverOpen(false)}
+            compactDisabled={usageReport.compactDisabled}
+            onCompact={usageReport.onCompact ? () => {
+              setUsagePopoverOpen(false);
+              usageReport.onCompact?.();
+            } : undefined}
             onViewReport={() => {
               setUsagePopoverOpen(false);
               usageReport.onOpen();

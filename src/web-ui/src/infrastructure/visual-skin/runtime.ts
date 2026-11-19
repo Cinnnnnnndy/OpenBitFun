@@ -23,12 +23,43 @@ const ACTIVE_ID_ATTRIBUTE = 'data-openbitfun-skin-id';
 const SURFACE_ATTRIBUTE = 'data-openbitfun-skin-surface';
 const ARTWORK_ATTRIBUTE = 'data-openbitfun-skin-artwork';
 const BACKGROUND_SOURCE_ATTRIBUTE = 'data-openbitfun-skin-background-source';
+const VIDEO_ATTRIBUTE = 'data-openbitfun-skin-video';
+const PAINT_PLANE_ATTRIBUTE = 'data-openbitfun-skin-paint';
 const SAFE_IDENTIFIER = /^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/;
 const SAFE_STATE = /^[a-z][a-z0-9_-]{0,48}$/;
 const SAFE_BACKGROUND_POSITION = /^(?:center|top|bottom|left|right|[-+]?\d{1,3}(?:\.\d+)?%)(?:\s+(?:center|top|bottom|left|right|[-+]?\d{1,3}(?:\.\d+)?%))?$/;
 const DEFAULT_SCRIM_OPACITY = 0;
 const PAINT_ATTRIBUTES = ['data-openbitfun-paint-layer', 'data-openbitfun-edge-layer', 'data-openbitfun-component', 'data-openbitfun-product-component', 'data-openbitfun-scene', 'data-openbitfun-surface', 'data-openbitfun-skin-slot', 'data-openbitfun-part', 'data-openbitfun-product-part'];
 const PAINT_TARGET_SELECTOR = PAINT_ATTRIBUTES.map(name => `[${name}]`).join(',');
+const SURFACE_MUTATION_SELECTOR = `[data-openbitfun-surface],[${SURFACE_ATTRIBUTE}],[${PAINT_PLANE_ATTRIBUTE}]`;
+const OBSERVED_STATE_ATTRIBUTES = ['data-disabled', 'data-invalid', 'data-selected', 'data-openbitfun-state', 'aria-selected', 'aria-pressed', 'aria-current', 'aria-disabled', 'aria-checked', 'aria-expanded', 'aria-invalid', 'aria-readonly', 'aria-required', 'aria-busy', 'disabled', 'checked', 'open', 'readonly', 'required'];
+const INTERACTION_DIAGNOSTIC_EVENTS = ['pointerover', 'pointerout', 'pointerdown', 'pointerup', 'focusin', 'focusout', 'change', 'input', 'keydown', 'keyup', 'reset'] as const;
+
+function hasPartSlotRules(slots: VisualSkinStateRecipe['slots']): boolean {
+  return Object.values(slots ?? {}).some(Boolean);
+}
+
+function dynamicPartOwnerSelector(skin: StoredVisualSkin, mode: VisualSkinMode): string {
+  const selectors: string[] = [];
+  for (const recipe of skin.components ?? []) {
+    if (!SAFE_IDENTIFIER.test(recipe.component)) continue;
+    const hasSlots = hasPartSlotRules(recipe.slots)
+      || Object.entries(recipe.states ?? {}).some(([state, stateRecipe]) => Boolean(stateRecipe && SAFE_STATE.test(state) && hasPartSlotRules(stateRecipe.slots)));
+    if (!hasSlots) continue;
+    const id = cssEscape(recipe.component);
+    selectors.push(`[data-openbitfun-component="${id}"]`, `[data-openbitfun-product-component="${id}"]`, `[data-openbitfun-scene="${id}"]`);
+  }
+  for (const { surface } of resolveSkinSurfaces(skin, mode).selected) {
+    if (!SAFE_IDENTIFIER.test(surface.surface) || !isVisualSkinSurfaceId(surface.surface)) continue;
+    const hasSlots = Object.entries(surface.states ?? {}).some(([state, stateRecipe]) => Boolean(stateRecipe && SAFE_STATE.test(state) && hasPartSlotRules(stateRecipe.slots)));
+    if (hasSlots) selectors.push(`[data-openbitfun-surface="${cssEscape(surface.surface)}"]`);
+  }
+  return selectors.join(',');
+}
+
+function subtreeTouchesSelector(node: Node, selector: string): boolean {
+  return node instanceof Element && (node.matches(selector) || node.querySelector(selector) !== null);
+}
 
 
 function cssEscape(value: string): string {
@@ -55,6 +86,14 @@ function safeFit(value: unknown): value is 'cover' | 'contain' | 'fill' {
 
 function safeOpacity(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1;
+}
+
+function teardownSkinVideo(video: HTMLVideoElement): void {
+  if (!video.paused) {
+    try { video.pause?.(); } catch { /* not supported in this environment */ }
+  }
+  video.removeAttribute('src');
+  video.remove();
 }
 
 function declaration(name: string, value: string | number): string {
@@ -305,6 +344,7 @@ function compileSkinCss(skin: StoredVisualSkin, partUrls: ReadonlyMap<string, st
     if (!SAFE_IDENTIFIER.test(surface.surface) || !isVisualSkinSurfaceId(surface.surface)) return;
     const asset = surface.backgroundAssetId ? skin.assets[surface.backgroundAssetId] : undefined;
     const backgroundUrl = surface.backgroundAssetId ? partUrls.get(surface.backgroundAssetId) : undefined;
+    const isVideo = asset?.mimeType === 'video/mp4';
     if (asset?.dataUrl && !backgroundUrl) throw new Error(`Visual skin image URL is missing: ${surface.backgroundAssetId}`);
     const backgroundOpacity = surface.backgroundOpacity ?? (asset?.dataUrl ? 1 : undefined);
     const baseToken = tokenVariable(surface.baseToken ?? VISUAL_SKIN_SURFACE_BASE_TOKENS[surface.surface]);
@@ -318,9 +358,13 @@ function compileSkinCss(skin: StoredVisualSkin, partUrls: ReadonlyMap<string, st
       // pseudo-layers can then have independent opacity without exposing the
       // product canvas underneath the surface.
       baseToken ? declaration('background-color', baseOpacity === 1 ? `var(${baseToken})` : baseFill) : '',
-      backgroundUrl ? surfaceDeclaration('background-image', `url("${backgroundUrl}")`) : '',
-      asset?.dataUrl ? surfaceDeclaration('background-size', surface.fit === 'fill' ? '100% 100%' : safeFit(surface.fit) ? surface.fit : 'cover') : '',
-      asset?.dataUrl && surface.backgroundPosition && SAFE_BACKGROUND_POSITION.test(surface.backgroundPosition) ? surfaceDeclaration('background-position', surface.backgroundPosition) : '',
+      // CSS cannot paint video: an MP4 backdrop is mounted as a <video> in the
+      // surface's paint plane and positioned through object-fit/object-position.
+      backgroundUrl && !isVideo ? surfaceDeclaration('background-image', `url("${backgroundUrl}")`) : '',
+      asset?.dataUrl && !isVideo ? surfaceDeclaration('background-size', surface.fit === 'fill' ? '100% 100%' : safeFit(surface.fit) ? surface.fit : 'cover') : '',
+      asset?.dataUrl && !isVideo && surface.backgroundPosition && SAFE_BACKGROUND_POSITION.test(surface.backgroundPosition) ? surfaceDeclaration('background-position', surface.backgroundPosition) : '',
+      isVideo ? surfaceDeclaration('video-fit', safeFit(surface.fit) ? surface.fit : 'cover') : '',
+      isVideo && surface.backgroundPosition && SAFE_BACKGROUND_POSITION.test(surface.backgroundPosition) ? surfaceDeclaration('video-position', surface.backgroundPosition) : '',
       asset?.dataUrl && safeOpacity(backgroundOpacity) ? surfaceDeclaration('background-opacity', backgroundOpacity) : '',
       scrimToken && tokenVariable(scrimToken)
         ? surfaceDeclaration('scrim-color', `var(${tokenVariable(scrimToken)})`)
@@ -362,8 +406,13 @@ export class VisualSkinRuntime {
   private initializePromise: Promise<void> | null = null;
   private mutationObserver: MutationObserver | null = null;
   private projectionObserver: MutationObserver | null = null;
+  private skinObserversAttached = false;
+  private interactionListenersAttached = false;
+  private disposed = false;
   private projectionRefreshQueued = false;
-  private paintRefreshNeeded = false;
+  private surfaceRefreshNeeded = false;
+  private styleRefreshNeeded = false;
+  private modeRefreshNeeded = false;
   private appliedSkin: StoredVisualSkin | null = null;
   private readonly partImages = new VisualSkinImageResources();
 
@@ -373,6 +422,13 @@ export class VisualSkinRuntime {
 
   private collectPartImages(): void {
     this.partImages.retain([this.appliedSkin, this.snapshot.activeSkin]);
+  }
+
+  private hasVisibleProjectionWatcher(): boolean {
+    for (const isVisible of this.projectionWatchers) {
+      if (isVisible()) return true;
+    }
+    return false;
   }
 
   constructor(storage: VisualSkinStorage = createVisualSkinStorage()) {
@@ -395,8 +451,12 @@ export class VisualSkinRuntime {
   /** Interactive diagnostics are opt-in; CSS already owns live state paint. */
   watchProjection = (isVisible: () => boolean = () => true): (() => void) => {
     this.projectionWatchers.add(isVisible);
-    this.queueRefresh(false);
-    return () => { this.projectionWatchers.delete(isVisible); };
+    this.syncObservers();
+    this.queueRefresh({ diagnose: true });
+    return () => {
+      this.projectionWatchers.delete(isVisible);
+      this.syncObservers();
+    };
   };
 
   async importPackage(source: ArrayBuffer): Promise<VisualSkinCatalogEntry> {
@@ -413,25 +473,24 @@ export class VisualSkinRuntime {
     await this.applySelection(id);
   }
 
+  async deactivate(): Promise<void> {
+    await this.initialize();
+    await this.applySelection(null);
+  }
+
   async preview(id: string): Promise<void> {
     await this.initialize();
     const skin = await this.storage.get(id);
     if (!skin) throw new Error(`Visual skin is not installed: ${id}`);
     this.setSnapshot({ status: 'applying', error: undefined });
     try {
-      this.appliedSkin = skin;
-      document.documentElement.setAttribute(ACTIVE_ID_ATTRIBUTE, skin.manifest.id);
-      this.syncSurfaceMarkers(skin);
-      this.replaceStyle(this.skinCss(skin));
+      this.applyDisplayedSkin(skin);
       this.setSnapshot({ previewSkinId: skin.manifest.id, projection: createProjectionReport(skin), status: 'previewing', error: undefined });
       this.collectPartImages();
     } catch (error) {
       const restore = this.snapshot.activeSkin;
       if (restore) {
-        this.appliedSkin = restore;
-        document.documentElement.setAttribute(ACTIVE_ID_ATTRIBUTE, restore.manifest.id);
-        this.syncSurfaceMarkers(restore);
-        this.replaceStyle(this.skinCss(restore));
+        this.applyDisplayedSkin(restore);
       } else {
         this.clearAppliedSkin();
       }
@@ -450,44 +509,43 @@ export class VisualSkinRuntime {
     this.collectPartImages();
   }
 
-  private restoreDisplay(skin: StoredVisualSkin | null): void {
-    if (!skin) { this.clearAppliedSkin(); return; }
+  private applyDisplayedSkin(skin: StoredVisualSkin): void {
     this.appliedSkin = skin;
+    this.syncObservers();
     document.documentElement.setAttribute(ACTIVE_ID_ATTRIBUTE, skin.manifest.id);
     this.syncSurfaceMarkers(skin);
     this.replaceStyle(this.skinCss(skin));
   }
 
-  private async applySelection(id: string): Promise<void> {
+  private restoreDisplay(skin: StoredVisualSkin | null): void {
+    if (!skin) { this.clearAppliedSkin(); return; }
+    this.applyDisplayedSkin(skin);
+  }
+
+  private async applySelection(id: string | null): Promise<void> {
     const before = this.snapshot;
     const previousSkin = this.appliedSkin;
     let committed = false;
     try {
-      const skin = await this.storage.get(id);
-      if (!skin) throw new Error(`Visual skin is not installed: ${id}`);
-      this.partImages.ensure(skin);
+      const skin = id === null ? null : await this.storage.get(id);
+      if (id !== null && !skin) throw new Error(`Visual skin is not installed: ${id}`);
+      if (skin) this.partImages.ensure(skin);
       // Selection writes are transactional. Do not touch the visible skin
       // until IndexedDB confirms that the selection has committed.
       this.setSnapshot({ status: 'applying', error: undefined });
       await this.storage.setSelection(id);
       committed = true;
-      this.appliedSkin = skin;
-      document.documentElement.setAttribute(ACTIVE_ID_ATTRIBUTE, id);
-      this.syncSurfaceMarkers(skin);
-      this.replaceStyle(this.skinCss(skin));
-      this.setSnapshot({ initialized: true, activeSkinId: id, activeSkin: skin, previewSkinId: null, projection: createProjectionReport(skin), status: 'ready', error: undefined });
+      this.restoreDisplay(skin);
+      this.setSnapshot({ initialized: true, activeSkinId: id, activeSkin: skin, previewSkinId: null, projection: skin ? createProjectionReport(skin) : null, status: 'ready', error: undefined });
       this.collectPartImages();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      log.error('Visual skin activation failed', { skinId: id, error: message });
+      log.error('Visual skin selection failed', { skinId: id, error: message });
       if (committed) {
         await this.storage.setSelection(before.activeSkinId);
         this.clearAppliedSkin();
         if (previousSkin) {
-          this.appliedSkin = previousSkin;
-          document.documentElement.setAttribute(ACTIVE_ID_ATTRIBUTE, previousSkin.manifest.id);
-          this.syncSurfaceMarkers(previousSkin);
-          this.replaceStyle(this.skinCss(previousSkin));
+          this.applyDisplayedSkin(previousSkin);
         }
       }
       this.setSnapshot({ ...before, error: message });
@@ -535,70 +593,136 @@ export class VisualSkinRuntime {
         if (selection) await this.storage.setSelection(null);
         this.setSnapshot({ initialized: true, status: 'ready', activeSkinId: null, activeSkin: null, previewSkinId: null, projection: null });
       }
-      this.mutationObserver = new MutationObserver(() => this.queueRefresh(true));
-      this.mutationObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-color-scheme', 'data-contrast'] });
-      if (document.body) {
-        this.projectionObserver = new MutationObserver(records => {
-          let repaint = false, diagnose = false;
-          for (const record of records) {
-            if (record.type === 'attributes') {
-              diagnose = true;
-              if (PAINT_ATTRIBUTES.includes(record.attributeName!)) repaint = true;
-            } else if ([...record.addedNodes, ...record.removedNodes].some(node => node instanceof Element && (node.matches(PAINT_TARGET_SELECTOR) || node.querySelector(PAINT_TARGET_SELECTOR)))) {
-              repaint = true;
-            }
-          }
-          if (repaint || diagnose) this.queueRefresh(repaint);
-        });
-        this.projectionObserver.observe(document.body, {
-          attributes: true,
-          attributeFilter: [...PAINT_ATTRIBUTES, 'data-disabled', 'data-invalid', 'data-selected', 'data-openbitfun-state', 'aria-selected', 'aria-pressed', 'aria-current', 'aria-disabled', 'aria-checked', 'aria-expanded', 'aria-invalid', 'aria-readonly', 'aria-required', 'aria-busy', 'disabled', 'checked', 'open', 'readonly', 'required'],
-          childList: true, subtree: true,
-        });
-        for (const name of ['pointerover', 'pointerout', 'pointerdown', 'pointerup', 'focusin', 'focusout', 'change', 'input', 'keydown', 'keyup', 'reset']) {
-          document.body.addEventListener(name, this.queueProjectionRefresh, true);
-        }
-      }
+      this.syncObservers();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.setSnapshot({ initialized: true, status: 'degraded', error: message });
     }
   }
 
-  private queueProjectionRefresh = (): void => {
-    this.queueRefresh(false);
+  private handleBodyMutations = (records: MutationRecord[]): void => {
+    const skin = this.appliedSkin;
+    if (!skin) return;
+    let surfaces = false;
+    let styles = false;
+    let diagnose = false;
+    let partSelector: string | null = null;
+    const getPartSelector = (): string => {
+      if (partSelector === null) partSelector = dynamicPartOwnerSelector(skin, currentMode());
+      return partSelector;
+    };
+
+    for (const record of records) {
+      if (record.type === 'attributes') {
+        diagnose = true;
+        const attr = record.attributeName!;
+        if (attr === 'data-openbitfun-surface') surfaces = true;
+        if (PAINT_ATTRIBUTES.includes(attr) && getPartSelector()) styles = true;
+        continue;
+      }
+      for (const node of [...record.addedNodes, ...record.removedNodes]) {
+        if (!(node instanceof Element)) continue;
+        if (!surfaces && subtreeTouchesSelector(node, SURFACE_MUTATION_SELECTOR)) {
+          surfaces = true;
+          diagnose = true;
+        }
+        if (!styles) {
+          const selector = getPartSelector();
+          if (selector && (
+            subtreeTouchesSelector(node, selector)
+            || (record.target instanceof Element && record.target.closest(selector) !== null && subtreeTouchesSelector(node, PAINT_TARGET_SELECTOR))
+          )) {
+            styles = true;
+            diagnose = true;
+          }
+        }
+        if (!diagnose && this.projectionWatchers.size > 0 && subtreeTouchesSelector(node, PAINT_TARGET_SELECTOR)) {
+          diagnose = true;
+        }
+      }
+    }
+    if (surfaces || styles || diagnose) {
+      this.queueRefresh({ surfaces, styles, diagnose });
+    }
   };
 
-  private queueRefresh(repaint: boolean): void {
-    if (!repaint && ![...this.projectionWatchers].some(isVisible => isVisible())) return;
-    this.paintRefreshNeeded ||= repaint;
+  private syncObservers(): void {
+    const shouldObserveSkin = !this.disposed && this.appliedSkin !== null && typeof document !== 'undefined';
+    if (shouldObserveSkin && !this.skinObserversAttached) {
+      this.mutationObserver ??= new MutationObserver(() => this.queueRefresh({ mode: true, surfaces: true, styles: true }));
+      this.mutationObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-color-scheme', 'data-contrast'] });
+      document.addEventListener('visibilitychange', this.syncVideoPlayback);
+      if (document.body) {
+        this.projectionObserver ??= new MutationObserver(this.handleBodyMutations);
+        this.projectionObserver.observe(document.body, {
+          attributes: true,
+          attributeFilter: [...PAINT_ATTRIBUTES, ...OBSERVED_STATE_ATTRIBUTES],
+          childList: true,
+          subtree: true,
+        });
+      }
+      this.skinObserversAttached = true;
+    } else if (!shouldObserveSkin && this.skinObserversAttached) {
+      this.mutationObserver?.disconnect();
+      this.projectionObserver?.disconnect();
+      document.removeEventListener('visibilitychange', this.syncVideoPlayback);
+      this.skinObserversAttached = false;
+    }
+
+    const shouldObserveInteractions = shouldObserveSkin && this.projectionWatchers.size > 0 && Boolean(document.body);
+    if (shouldObserveInteractions && !this.interactionListenersAttached) {
+      for (const name of INTERACTION_DIAGNOSTIC_EVENTS) {
+        document.body.addEventListener(name, this.queueProjectionRefresh, true);
+      }
+      this.interactionListenersAttached = true;
+    } else if (!shouldObserveInteractions && this.interactionListenersAttached) {
+      for (const name of INTERACTION_DIAGNOSTIC_EVENTS) {
+        document.body?.removeEventListener(name, this.queueProjectionRefresh, true);
+      }
+      this.interactionListenersAttached = false;
+    }
+  }
+
+  private queueProjectionRefresh = (): void => {
+    this.queueRefresh({ diagnose: true });
+  };
+
+  private queueRefresh(options: { mode?: boolean; surfaces?: boolean; styles?: boolean; diagnose?: boolean }): void {
+    const watchDiagnostics = Boolean((options.mode || options.diagnose) && (options.mode || this.hasVisibleProjectionWatcher()));
+    const surfaces = Boolean(options.surfaces);
+    const styles = Boolean(options.styles);
+    if (!surfaces && !styles && !watchDiagnostics) return;
+    this.surfaceRefreshNeeded ||= surfaces;
+    this.styleRefreshNeeded ||= styles;
+    this.modeRefreshNeeded ||= Boolean(options.mode);
     if (this.projectionRefreshQueued || !this.appliedSkin) return;
     this.projectionRefreshQueued = true;
     queueMicrotask(() => {
       this.projectionRefreshQueued = false;
-      const repaint = this.paintRefreshNeeded;
-      this.paintRefreshNeeded = false;
+      const refreshSurfaces = this.surfaceRefreshNeeded;
+      const refreshStyles = this.styleRefreshNeeded;
+      const refreshMode = this.modeRefreshNeeded;
+      this.surfaceRefreshNeeded = false;
+      this.styleRefreshNeeded = false;
+      this.modeRefreshNeeded = false;
       if (!this.appliedSkin) return;
-      // Native CSS selectors own interactive paint. State changes update only
-      // diagnostics; ownership/mode changes are the only reasons to recompile.
-      if (repaint) {
-        this.syncSurfaceMarkers(this.appliedSkin);
-        this.replaceStyle(this.skinCss(this.appliedSkin));
+      // Native CSS selectors own interactive paint. Reconcile only the exact
+      // surface markers, part-slot CSS, or opt-in diagnostics that changed.
+      if (refreshSurfaces) this.syncSurfaceMarkers(this.appliedSkin);
+      if (refreshStyles) this.replaceStyle(this.skinCss(this.appliedSkin));
+      if (refreshMode || this.hasVisibleProjectionWatcher()) {
+        const projection = createProjectionReport(this.appliedSkin);
+        if (JSON.stringify(projection) !== JSON.stringify(this.snapshot.projection)) this.setSnapshot({ projection });
       }
-      const projection = createProjectionReport(this.appliedSkin);
-      if (JSON.stringify(projection) !== JSON.stringify(this.snapshot.projection)) this.setSnapshot({ projection });
     });
   }
 
   dispose(): void {
-    this.mutationObserver?.disconnect();
-    this.projectionObserver?.disconnect();
-    for (const name of ['pointerover', 'pointerout', 'pointerdown', 'pointerup', 'focusin', 'focusout', 'change', 'input', 'keydown', 'keyup', 'reset']) {
-      document.body?.removeEventListener(name, this.queueProjectionRefresh, true);
-    }
-    this.clearAppliedSkin();
-    this.partImages.retain([]);
+    this.disposed = true;
     this.projectionWatchers.clear();
+    this.clearAppliedSkin();
+    this.syncObservers();
+    this.partImages.retain([]);
     this.listeners.clear();
   }
 
@@ -625,8 +749,10 @@ export class VisualSkinRuntime {
     document.querySelectorAll(`[${ARTWORK_ATTRIBUTE}]`).forEach(node => node.removeAttribute(ARTWORK_ATTRIBUTE));
     document.querySelectorAll(`[${BACKGROUND_SOURCE_ATTRIBUTE}]`).forEach(node => node.removeAttribute(BACKGROUND_SOURCE_ATTRIBUTE));
     document.querySelectorAll(`[${SKIN_NODE_ATTRIBUTE}]`).forEach(node => node.removeAttribute(SKIN_NODE_ATTRIBUTE));
+    document.querySelectorAll<HTMLVideoElement>(`video[${VIDEO_ATTRIBUTE}]`).forEach(teardownSkinVideo);
     document.documentElement.removeAttribute(ACTIVE_ID_ATTRIBUTE);
     this.appliedSkin = null;
+    this.syncObservers();
   }
 
   private syncSurfaceMarkers(skin: StoredVisualSkin | null): void {
@@ -654,7 +780,64 @@ export class VisualSkinRuntime {
         else node.setAttribute(name, value);
       }
     }
+    this.syncSurfaceVideos(skin);
   }
+
+  /**
+   * MP4 backdrops are real <video> children of the surface paint plane. Existing
+   * players with an unchanged source are left running so repaints (mode flips,
+   * late-mounting surfaces) never restart playback.
+   */
+  private syncSurfaceVideos(skin: StoredVisualSkin | null): void {
+    const desired = new Map<Element, string>();
+    if (skin) {
+      const urls = this.partImages.ensure(skin);
+      resolveSkinSurfaces(skin, currentMode()).selected.map(entry => entry.surface).filter(surface => isVisualSkinSurfaceId(surface.surface)).forEach(profile => {
+        const url = profile.backgroundAssetId && skin.assets[profile.backgroundAssetId]?.mimeType === 'video/mp4'
+          ? urls.get(profile.backgroundAssetId) : undefined;
+        if (!url || (profile.backgroundOpacity ?? 1) <= 0) return;
+        document.querySelectorAll(`[data-openbitfun-surface="${cssEscape(profile.surface)}"]`).forEach(node => {
+          const plane = [...node.children].find(child => child.hasAttribute(PAINT_PLANE_ATTRIBUTE));
+          if (plane) desired.set(plane, url);
+        });
+      });
+    }
+    document.querySelectorAll<HTMLVideoElement>(`video[${VIDEO_ATTRIBUTE}]`).forEach(video => {
+      const plane = video.parentElement;
+      if (!plane || desired.get(plane) !== video.getAttribute('src')) teardownSkinVideo(video);
+    });
+    desired.forEach((url, plane) => {
+      if (plane.querySelector(`:scope > video[${VIDEO_ATTRIBUTE}]`)) return;
+      const video = document.createElement('video');
+      video.setAttribute(VIDEO_ATTRIBUTE, 'true');
+      video.setAttribute('src', url);
+      video.setAttribute('aria-hidden', 'true');
+      video.tabIndex = -1;
+      video.muted = true;
+      video.defaultMuted = true;
+      video.loop = true;
+      video.autoplay = !document.hidden;
+      video.playsInline = true;
+      video.controls = false;
+      video.disablePictureInPicture = true;
+      video.preload = 'auto';
+      plane.appendChild(video);
+      if (!document.hidden) {
+        // Autoplay is allowed for muted video; a rejection only means "not now".
+        try { void video.play?.()?.catch(() => undefined); } catch { /* not supported in this environment */ }
+      }
+    });
+  }
+
+  private syncVideoPlayback = (): void => {
+    document.querySelectorAll<HTMLVideoElement>(`video[${VIDEO_ATTRIBUTE}]`).forEach(video => {
+      if (document.hidden) {
+        try { video.pause?.(); } catch { /* not supported in this environment */ }
+      } else {
+        try { void video.play?.()?.catch(() => undefined); } catch { /* not supported in this environment */ }
+      }
+    });
+  };
 
   private setSnapshot(patch: Partial<VisualSkinSnapshot>): void {
     this.snapshot = { ...this.snapshot, ...patch };

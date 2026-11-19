@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState, type RefObject } from 'react';
 import { Card, Empty, Icon, IconButton, OverflowText, Tooltip, createOverlayPortal, useDismissibleLayer } from '@openbitfun/ui';
-import { ChartPie, ExternalLink, Minus } from 'lucide-react';
+import { ChartPie, ExternalLink, Minus, Shrink } from 'lucide-react';
 import { useI18n } from '@/infrastructure/i18n';
 import { getAppearanceOverlayHost } from '@/infrastructure/appearance/runtime/AppearanceOverlayHost';
-import type { UsageContextBreakdown } from '@/infrastructure/api/service-api/SessionAPI';
+import type { UsageContextBreakdown, UsageContextEstimate } from '@/infrastructure/api/service-api/SessionAPI';
 import { useAnchoredPopoverPosition } from '@/shared/utils/useAnchoredPopoverPosition';
 import { formatTokenCount, formatUsagePercent } from './usageReportUtils';
 import { useUsageSeriesHighlight } from './useUsageSeriesHighlight';
@@ -22,24 +22,28 @@ const isCount = (value: number | undefined): value is number => (
 
 /** Opening the overview is read-only; report and category actions are explicit. */
 export function ContextUsagePopover({
-  id, anchorRef, triggerRef, currentTokens, maxTokens, loadContext, previewSession, onClose, onViewReport,
+  id, anchorRef, triggerRef, currentTokens, maxTokens, loadContext, previewSession,
+  compactDisabled = false, onCompact, onClose, onViewReport,
 }: {
   id: string;
   anchorRef: RefObject<HTMLElement>;
   triggerRef: RefObject<HTMLButtonElement>;
   currentTokens: number;
   maxTokens: number;
-  loadContext?: () => Promise<UsageContextBreakdown | undefined>;
-  previewSession?: { sessionId: string; workspaceId?: string };
+  loadContext?: () => Promise<UsageContextEstimate | undefined>;
+  previewSession?: { sessionId: string; canvasSessionId?: string; workspaceId?: string };
+  compactDisabled?: boolean;
+  onCompact?: () => void;
   onClose: () => void;
   onViewReport: () => void;
 }) {
   const { t } = useI18n('flow-chat');
   const popoverRef = useRef<HTMLDivElement>(null);
+  const [estimate, setEstimate] = useState<UsageContextEstimate>();
   const { previewLoading, previewContext } = useContextPreview({
-    ...previewSession, reportSessionId: previewSession?.sessionId,
+    ...previewSession, reportSessionId: previewSession?.sessionId, estimate,
   });
-  const [context, setContext] = useState<UsageContextBreakdown>();
+  const context = estimate?.composition;
   const [status, setStatus] = useState<'loading' | 'ready' | 'error' | 'unsupported' | 'updateRequired'>(
     loadContext ? 'loading' : 'ready',
   );
@@ -49,7 +53,7 @@ export function ContextUsagePopover({
     let current = true;
     if (loaderRef.current) {
       void loaderRef.current().then(value => {
-        if (current) { setContext(value); setStatus('ready'); }
+        if (current) { setEstimate(value); setStatus(value ? 'ready' : 'unsupported'); }
       }, (error: unknown) => {
         if (!current) return;
         // A peer host without the report is an expected state, not a load failure.
@@ -104,6 +108,13 @@ export function ContextUsagePopover({
           <span>{t('usage.context.title')}</span>
         </Tooltip>
         <div className="context-usage-popover__header-actions">
+          {onCompact && (
+            <Tooltip content={t('chatInput.compactAction')}>
+              <IconButton size="xs" icon={<Icon glyph={Shrink} size="sm" />}
+                aria-label={t('chatInput.compactAction')} onClick={onCompact}
+                disabled={compactDisabled} data-testid="context-usage-compact" />
+            </Tooltip>
+          )}
           <Tooltip content={t('usage.context.viewReport')}>
             <IconButton size="xs" icon={<Icon glyph={ChartPie} size="sm" />}
               aria-label={t('usage.context.viewReport')} onClick={onViewReport}
@@ -168,7 +179,7 @@ export function ContextUsagePopover({
                     : status === 'updateRequired' ? t('usage.context.updateRequired')
                       : t('usage.context.unavailable')}
             </span>
-          } />
+          } description={estimate?.unavailableReason} />
         </div>}
       </div>
     </Card>,

@@ -5,7 +5,7 @@ use std::time::Duration;
 
 pub const EXEC_COMMAND_POWERSHELL_UTF8_OUTPUT_PREFIX: &str =
     "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;\n";
-pub const EXEC_COMMAND_DEFAULT_YIELD_TIME_MS: u64 = 30_000;
+pub const EXEC_COMMAND_DEFAULT_YIELD_TIME_MS: u64 = 180_000;
 pub const REMOTE_EXEC_SHELL_PROBE_TIMEOUT_MS: u64 = 3_000;
 
 const REMOTE_NON_TTY_INTERRUPT_GRACE_SECONDS: u64 = 2;
@@ -860,7 +860,14 @@ pub fn render_exec_command_response_for_assistant(data: &Value) -> String {
 }
 
 pub fn render_write_stdin_response_for_assistant(data: &Value) -> String {
-    render_exec_response_for_assistant(data, completion_status_lines(data), 4)
+    let mut notes = Vec::new();
+    if data.get("wait_end_reason").and_then(Value::as_str) == Some("steered") {
+        notes.push(
+            "WriteStdin ended its wait early because user steering arrived. The wait did not stop the process or undo submitted input. Handle the new user message before polling again; do not resend already submitted input."
+                .to_string(),
+        );
+    }
+    render_exec_response_for_assistant_with_notes(data, completion_status_lines(data), notes, 4)
 }
 
 pub fn render_exec_control_response_for_assistant(
@@ -1079,6 +1086,24 @@ mod tests {
             !rendered.contains("code -1"),
             "an unknown status must never be rendered as a failing exit code"
         );
+    }
+
+    #[test]
+    fn write_stdin_legacy_and_steered_payloads_keep_process_status_separate() {
+        let legacy = r#"{"wall_time_seconds":0.25,"output":"partial","session_id":7,"exit_code":null,"completion":null}"#;
+        let mut data: Value = serde_json::from_str(legacy).unwrap();
+        let original = render_write_stdin_response_for_assistant(&data);
+        assert!(!original.contains("<note>"));
+        let round_trip: Value =
+            serde_json::from_str(&serde_json::to_string(&data).unwrap()).unwrap();
+        assert_eq!(round_trip, data);
+        data["wait_end_reason"] = json!("steered");
+        let rendered = render_write_stdin_response_for_assistant(&data);
+        assert!(rendered.contains("Process is still running. session_id: 7"));
+        assert!(rendered.contains("user steering arrived"));
+        assert!(rendered.contains("do not resend already submitted input"));
+        assert!(rendered.contains("<output>\npartial\n</output>"));
+        assert!(!rendered.contains("Process was interrupted externally"));
     }
 
     #[test]
@@ -1416,7 +1441,7 @@ mod tests {
 
         assert_eq!(parsed.cmd, "  echo ok  ");
         assert!(!parsed.tty);
-        assert_eq!(parsed.yield_time_ms, EXEC_COMMAND_DEFAULT_YIELD_TIME_MS);
+        assert_eq!(parsed.yield_time_ms, 180_000);
         assert_eq!(exec_command_run_input_validation_message(&input), None);
 
         let blank = json!({
@@ -1439,7 +1464,7 @@ mod tests {
         assert_eq!(parsed.session_id, 7);
         assert_eq!(parsed.chars, "");
         assert!(!parsed.append_enter);
-        assert_eq!(parsed.yield_time_ms, EXEC_COMMAND_DEFAULT_YIELD_TIME_MS);
+        assert_eq!(parsed.yield_time_ms, 180_000);
         assert_eq!(write_stdin_input_validation_message(&input), None);
 
         let out_of_range = json!({
@@ -1450,6 +1475,30 @@ mod tests {
             write_stdin_input_validation_message(&out_of_range),
             Some("session_id is required for WriteStdin")
         );
+    }
+
+    #[test]
+    fn exec_command_and_write_stdin_preserve_explicit_yield_time() {
+        for yield_time_ms in [0, 1_000, 600_000] {
+            let input = json!({
+                "cmd": "echo ok",
+                "session_id": 7,
+                "yield_time_ms": yield_time_ms,
+            });
+
+            assert_eq!(
+                exec_command_run_input_from_input(&input)
+                    .expect("cmd should parse")
+                    .yield_time_ms,
+                yield_time_ms
+            );
+            assert_eq!(
+                write_stdin_input_from_input(&input)
+                    .expect("stdin input should parse")
+                    .yield_time_ms,
+                yield_time_ms
+            );
+        }
     }
 
     #[test]

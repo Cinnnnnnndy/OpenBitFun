@@ -20,7 +20,7 @@ use openbitfun_core::service::remote_connect::account_runtime::{
 use openbitfun_core::service::remote_connect::{
     self, encryption,
     relay_client::{ConnectionState, DeviceRoutingPriority, RelayClient, RelayEvent},
-    session_store, DeviceIdentity, RemoteServer,
+    DeviceIdentity, RemoteServer,
 };
 
 pub(crate) struct CliAccountRuntimeParts {
@@ -174,7 +174,7 @@ impl CliAccountRoutingHost {
 
     async fn start_routing(&self, request: AccountRoutingStartRequest) -> Result<()> {
         let runtime = self.runtime()?;
-        if !runtime.account_context_is_current(request.account_generation) {
+        if !runtime.device_routing_requested(request.account_generation) {
             return Err(anyhow!("account context changed"));
         }
         self.stop_routing().await;
@@ -195,13 +195,13 @@ impl CliAccountRoutingHost {
         let client = Arc::new(client);
         {
             let _routing_guard = self.lifecycle.write().await;
-            if !runtime.account_context_is_current(request.account_generation) {
+            if !runtime.device_routing_requested(request.account_generation) {
                 client.disconnect().await;
                 return Err(anyhow!("account context changed"));
             }
             *self.relay_client.write().await = Some(client.clone());
         }
-        if !runtime.account_context_is_current(request.account_generation) {
+        if !runtime.device_routing_requested(request.account_generation) {
             self.retire_routing_client_if_same(&client).await;
             client.disconnect().await;
             return Err(anyhow!("account context changed"));
@@ -267,6 +267,9 @@ impl CliAccountRoutingHost {
     }
 
     pub(crate) async fn stop_device_routing(&self) {
+        if let Ok(runtime) = self.runtime() {
+            runtime.cancel_device_routing();
+        }
         self.stop_routing().await;
     }
 
@@ -397,7 +400,7 @@ impl CliAccountRoutingHost {
                     tracing::warn!("Failed to adopt AuthOk device_id: {error}");
                     return;
                 }
-                if let Ok((session, relay_url)) = runtime
+                if let Ok((session, _)) = runtime
                     .read_account_context_for_generation(account_generation)
                     .await
                 {
@@ -425,13 +428,9 @@ impl CliAccountRoutingHost {
                         if let Some(old) = self.host_stream_hub.write().await.replace(hub) {
                             old.close();
                         }
-                        if let Err(error) = session_store::save_session_with_device(
-                            &session.token,
-                            &session.user_id,
-                            &session.master_key,
-                            &relay_url,
-                            Some(device_id.as_str()),
-                        ) {
+                        if let Err(error) =
+                            runtime.record_authenticated_device(&session.token, &device_id)
+                        {
                             tracing::warn!("Failed to persist AuthOk device_id: {error}");
                         }
                     }
@@ -727,6 +726,10 @@ impl AccountRuntimeHost for CliAccountRoutingHost {
     async fn stop_device_routing(&self) {
         crate::remote_control::retire_daemon_account().await;
         self.stop_routing().await;
+    }
+
+    async fn device_routing_is_active(&self) -> bool {
+        self.relay_client.read().await.is_some()
     }
 
     async fn device_routing_is_standby(&self) -> bool {
