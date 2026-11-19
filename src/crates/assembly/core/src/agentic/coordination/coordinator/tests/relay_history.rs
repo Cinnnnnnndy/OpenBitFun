@@ -186,6 +186,119 @@ async fn relay_observer_fixture(
 }
 
 #[tokio::test]
+async fn load_relay_session_turns_streams_and_replays_a_temporary_btw_child() {
+    let (workspace, coordinator, manager, parent, storage, parent_turn) =
+        relay_observer_fixture("btw-host").await;
+    let child_id = format!("btw-{parent}");
+    coordinator
+        .ensure_btw_session(
+            &parent,
+            &child_id,
+            None,
+            "side-question",
+            Some(&parent_turn),
+            Some(0),
+        )
+        .await
+        .unwrap();
+
+    let history = |before| coordinator.load_relay_history_turn(&storage, &child_id, before);
+    assert!(history(None).await.unwrap().0.is_empty());
+    for (id, question, reply) in [
+        ("side-1", "first question", "first answer"),
+        ("side-2", "follow-up", "second answer"),
+    ] {
+        manager
+            .start_dialog_turn(
+                &child_id,
+                "Standard".into(),
+                question.into(),
+                Some(id.into()),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        let message = Message::assistant(reply.to_string())
+            .with_turn_id(id.to_string())
+            .with_round_id(format!("round-{id}"));
+        manager
+            .add_message(&child_id, message.clone())
+            .await
+            .unwrap();
+        {
+            let _executing = manager.acquire_session_mutation(&child_id).await.unwrap();
+            let live = tokio::time::timeout(
+                Duration::from_secs(1),
+                coordinator.load_relay_session_turns(&storage, &child_id, Some(id)),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            assert_eq!(live.len(), 1);
+            assert_eq!(live[0].user_message.content, question);
+            assert_eq!(live[0].status, TurnStatus::InProgress);
+            assert_eq!(live[0].model_rounds[0].text_items[0].content, reply);
+        }
+        manager
+            .complete_dialog_turn(
+                &child_id,
+                id,
+                reply.into(),
+                &[message],
+                Default::default(),
+                Some("complete".into()),
+                Some(true),
+            )
+            .await
+            .unwrap();
+    }
+
+    let (latest, before) = history(None).await.unwrap();
+    assert_eq!(latest.len(), 1);
+    assert_eq!(latest[0].turn_id, "side-2");
+    assert_eq!(latest[0].status, TurnStatus::Completed);
+    assert_eq!(
+        latest[0].model_rounds[0].text_items[0].content,
+        "second answer"
+    );
+    assert_eq!(before, Some(1));
+    let (first, before) = history(before).await.unwrap();
+    assert_eq!(first.len(), 1);
+    assert_eq!(first[0].turn_id, "side-1");
+    assert_eq!(before, None);
+    assert!(history(Some(0)).await.unwrap().0.is_empty());
+    let all = coordinator
+        .load_relay_session_turns(&storage, &child_id, None)
+        .await
+        .unwrap();
+    assert_eq!(
+        all.iter()
+            .map(|turn| turn.turn_id.as_str())
+            .collect::<Vec<_>>(),
+        ["side-1", "side-2"]
+    );
+    assert!(matches!(
+        coordinator
+            .load_relay_session_turns(&storage, &child_id, Some(&parent_turn))
+            .await,
+        Err(OpenBitFunError::NotFound(_))
+    ));
+    assert!(matches!(
+        coordinator
+            .load_relay_history_turn(&workspace.path().join("other"), &child_id, None)
+            .await,
+        Err(OpenBitFunError::Validation(_))
+    ));
+    assert!(manager
+        .persistence_manager()
+        .load_visible_session_turns(&storage, &child_id)
+        .await
+        .unwrap()
+        .is_empty());
+}
+
+#[tokio::test]
 async fn load_relay_session_turns_projects_history_while_a_turn_holds_the_mutation_lease() {
     let (_workspace, coordinator, session_manager, session_id, storage, turn_id) =
         relay_observer_fixture("lease-held-observer").await;
