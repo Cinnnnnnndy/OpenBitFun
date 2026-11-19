@@ -6114,6 +6114,20 @@
       ],
       "items": [
         {
+          "id": "device-control-permission",
+          "titleZh": "本机可被控制",
+          "titleEn": "Allow control of this device",
+          "descriptionZh": "在设备与连接的概览中切换。关闭后，本机显示为离线，仍可控制其他在线设备。",
+          "descriptionEn": "Switch this in the Devices & Connections overview. When off, this device appears offline and can still control other online devices.",
+          "control": {
+            "kind": "open",
+            "reasonCode": "unstructuredInteraction",
+            "reasonZh": "请在当前设备的「设备与连接」概览中切换「本机可被控制」，选择其他设备能否连接这台设备。",
+            "reasonEn": "Choose “Allow control of this device” in the local Devices & Connections overview to set whether other devices can connect to this one."
+          },
+          "evidence": ["command:remote_connect_set_allowed"]
+        },
+        {
           "id": "connection-methods",
           "titleZh": "使用免部署官方 Relay 或桌面端局域网 Relay（可同时开启）",
           "titleEn": "Use the zero-setup official Relay or Desktop LAN Relay concurrently",

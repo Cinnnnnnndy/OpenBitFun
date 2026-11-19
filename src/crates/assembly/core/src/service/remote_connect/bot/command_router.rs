@@ -634,6 +634,9 @@ pub async fn bootstrap_im_chat_after_pairing(state: &mut BotChatState) -> String
 
 /// Mark chat paired, run assistant/session bootstrap, return main menu.
 pub async fn complete_im_bot_pairing(state: &mut BotChatState) -> HandleResult {
+    if let Err(error) = super::super::device::require_remote_control() {
+        return result_from_menu(state, MenuView::plain(error.to_string()));
+    }
     state.paired = true;
     let language = current_bot_language().await;
     let s = strings_for(language);
@@ -817,6 +820,9 @@ pub async fn handle_command(
     cmd: BotCommand,
     images: Vec<super::super::remote_server::ImageAttachment>,
 ) -> HandleResult {
+    if let Err(error) = super::super::device::require_remote_control() {
+        return result_from_menu(state, MenuView::plain(error.to_string()));
+    }
     if state.active_remote_device.is_none()
         && !state.account_remote_context
         && state.current_workspace.as_ref().is_some_and(|workspace| {

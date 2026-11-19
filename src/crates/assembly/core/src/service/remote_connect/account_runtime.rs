@@ -531,7 +531,9 @@ impl AccountRuntime {
             user_id,
             relay_url,
             routing_owner_replaced: retired_background_owner,
-            routing_connected: routing.is_ok() && !routing_standby,
+            routing_connected: routing.is_ok()
+                && !routing_standby
+                && self.host.device_routing_is_active().await,
             routing_standby,
             routing_error: routing.err().map(|error| error.to_string()),
         })

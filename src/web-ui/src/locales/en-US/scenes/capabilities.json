@@ -332,6 +332,7 @@
           "title": "Remote Connect, Bots & Peer Devices",
           "summary": "Follow sessions, approve permissions, and keep working from Mobile Web or a WeChat, Feishu, or Telegram bot—or enter Peer Device Mode to browse and drive another same-account computer right from your current OpenBitFun window.",
           "items": {
+            "device-control-permission": "Allow control of this device",
             "connection-methods": "Use the zero-setup official Relay or Desktop LAN Relay concurrently",
             "start-stop-status": "Start or stop Remote Connect channels and inspect live connection status",
             "network": "Inspect LAN IP addresses, network interfaces, and shareable QR invitations",

@@ -10,7 +10,7 @@ use openbitfun_core::service::remote_connect::session_store::{
 };
 use openbitfun_core::service::remote_connect::{
     bot::{self, weixin, BotConfig},
-    lan, session_store, AccountClient, AccountSession, ConnectionMethod, ConnectionResult,
+    device, lan, session_store, AccountClient, AccountSession, ConnectionMethod, ConnectionResult,
     DeviceIdentity, RemoteConnectConfig, RemoteConnectService,
 };
 use openbitfun_events::AI_MODEL_CATALOG_UPDATED_EVENT;
@@ -263,8 +263,8 @@ fn tag_peer_event_source(payload: serde_json::Value, source_device_id: &str) -> 
     }
 }
 
-fn emit_device_presence(devices: &[OnlineDeviceInfo]) {
-    let payload = serde_json::json!({ "devices": devices });
+fn emit_device_presence(devices: &[OnlineDeviceInfo], controller_only: bool) {
+    let payload = serde_json::json!({ "devices": devices, "controllerOnly": controller_only });
     emit_account_event("account://device-presence", payload);
 }
 
@@ -274,7 +274,7 @@ fn emit_device_presence(devices: &[OnlineDeviceInfo]) {
 async fn disconnect_route_controllers(route: RelayRoute, reason: &'static str) {
     clear_route_delivery_targets(route, reason);
     if route == RelayRoute::Official {
-        emit_device_presence(&[]);
+        emit_device_presence(&[], false);
     }
 }
 
@@ -1445,8 +1445,31 @@ async fn maintain_device_session() -> anyhow::Result<bool> {
     Ok(true)
 }
 
+fn monitor_remote_control_permission() {
+    let mut allowed = device::remote_control_allowed().unwrap_or(false);
+    tokio::spawn(async move {
+        loop {
+            allowed = device::wait_for_remote_control_change(allowed).await;
+            if allowed {
+                restore_saved_bots().await;
+            } else {
+                if let Err(error) = remote_connect_stop(None).await {
+                    log::warn!("Failed to stop remote control: {error}");
+                }
+                bot_control().suspend().await;
+            }
+            if read_account_context().await.is_ok() {
+                if let Err(error) = account_connect_devices_with_retry().await {
+                    log::warn!("Failed to update account connection after remote control setting changed: {error}");
+                }
+            }
+        }
+    });
+}
+
 pub fn init_on_startup() {
     register_page_tool_hosts();
+    monitor_remote_control_permission();
     tokio::spawn(async {
         let startup_generation = account_context_generation();
         let error = session_store::renew_session_if_due(false).await.err();
@@ -1732,6 +1755,8 @@ pub struct RemoteConnectStatusResponse {
     pub clients: Vec<openbitfun_services_integrations::remote_connect::RemoteControlClient>,
     pub bot_connected: Option<String>,
     pub bot_verbose_mode: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_control_allowed: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]
@@ -2076,6 +2101,7 @@ pub async fn remote_connect_start(
     ensure_service().await?;
     let method = parse_connection_method(&request.method, request.lan_ip)?;
     let _start_stop = RELAY_START_STOP_LOCK.lock().await;
+    device::require_remote_control().map_err(|e| e.to_string())?;
     if matches!(
         method,
         ConnectionMethod::BotFeishu | ConnectionMethod::BotTelegram | ConnectionMethod::BotWeixin
@@ -2236,7 +2262,18 @@ pub async fn remote_connect_status() -> Result<RemoteConnectStatusResponse, Stri
         clients,
         bot_connected: service.bot_connected_info().await,
         bot_verbose_mode: bot::load_bot_persistence().verbose_mode,
+        remote_control_allowed: Some(device::remote_control_allowed().map_err(|e| e.to_string())?),
     })
+}
+
+#[derive(Deserialize)]
+pub struct SetRemoteControlRequest {
+    allowed: bool,
+}
+
+#[tauri::command]
+pub async fn remote_connect_set_allowed(request: SetRemoteControlRequest) -> Result<(), String> {
+    device::set_remote_control_allowed(request.allowed).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -2667,6 +2704,10 @@ async fn connect_route_devices_for_generation(
     account_generation: u64,
 ) -> Result<Vec<OnlineDeviceInfo>, String> {
     let operation_guard = route.lock_operation(account_generation).await?;
+    let serves_device = device::remote_control_allowed().map_err(|e| e.to_string())?;
+    if !serves_device && route == RelayRoute::Lan {
+        return Err("Remote control is disabled on this device".into());
+    }
     if route == RelayRoute::Official && !ROUTING_INTENT.requested(account_generation) {
         return Err("device routing stopped".to_string());
     }
@@ -2684,11 +2725,14 @@ async fn connect_route_devices_for_generation(
     if let Some(devices) =
         device_presence_for_account_on_route(route, account_generation, &session.token)
     {
-        let is_connected = service.is_device_connected().await;
+        let connected_role = service.account_socket_serves_device().await;
         if !route.matches(account_generation, &session.token).await {
             return Err("account context changed".to_string());
         }
-        if is_connected {
+        if connected_role == Some(serves_device) {
+            if !serves_device {
+                return Ok(devices);
+            }
             let local_id = DeviceIdentity::from_current_machine()
                 .ok()
                 .map(|d| d.device_id);
@@ -2719,7 +2763,7 @@ async fn connect_route_devices_for_generation(
             &session,
             &device_name,
             // Desktop serves the device ahead of a CLI/daemon on this machine.
-            openbitfun_core::service::remote_connect::relay_client::DeviceRoutingPriority::Primary,
+            serves_device.then_some(openbitfun_core::service::remote_connect::relay_client::DeviceRoutingPriority::Primary),
             Arc::new(DesktopHostStreamNotifier(route)),
         )
         .await
@@ -2731,7 +2775,7 @@ async fn connect_route_devices_for_generation(
             // The reconnect kept the previous roster; without a connection it
             // no longer describes reachable devices.
             if route == RelayRoute::Official {
-                emit_device_presence(&[]);
+                emit_device_presence(&[], false);
             }
             // Token invalidation re-enters the account transition path, so the
             // current account-operation lease must be released first.
@@ -2837,7 +2881,7 @@ async fn connect_route_devices_for_generation(
                         break 'routing_events;
                     }
                     if route == RelayRoute::Official {
-                        emit_device_presence(&devices);
+                        emit_device_presence(&devices, !serves_device);
                     }
                 }
                 RelayEvent::DeviceMessageReceived {
@@ -2881,10 +2925,22 @@ async fn connect_route_devices_for_generation(
                                         // webview only sees the records they read back.
                                         continue;
                                     }
-                                    emit_account_event(
-                                        &event,
-                                        tag_peer_event_source(payload, &source_device_id),
-                                    );
+                                    if should_fanout_peer_ui_event(&event)
+                                        || event == "account://settings-applied"
+                                        || (serves_device
+                                            && device::remote_control_allowed().unwrap_or(false))
+                                    {
+                                        emit_account_event(
+                                            &event,
+                                            tag_peer_event_source(payload, &source_device_id),
+                                        );
+                                    }
+                                }
+                                Ok(_)
+                                    if !serves_device
+                                        || device::require_remote_control().is_err() =>
+                                {
+                                    continue
                                 }
                                 Ok(RemoteCommand::ExecuteOnDevice {
                                     session_id,
@@ -3126,7 +3182,7 @@ async fn connect_route_devices_for_generation(
                         break 'routing_events;
                     }
                     if route == RelayRoute::Official {
-                        emit_device_presence(&[]);
+                        emit_device_presence(&[], false);
                     }
                 }
                 RelayEvent::Reconnected => {
@@ -3194,6 +3250,40 @@ pub async fn account_execute_on_device(
     let (session, relay_url) = read_account_context_for_generation(account_generation).await?;
 
     use openbitfun_core::service::remote_connect::remote_server::RemoteCommand;
+    if !device::remote_control_allowed().map_err(|e| e.to_string())? {
+        // User-scoped sockets can call peer commands, but only a machine host
+        // can send the legacy one-way ExecuteOnDevice event.
+        use openbitfun_core::service::remote_connect::remote_server::RemoteResponse;
+        let request = RemoteCommand::HostInvoke {
+            command: "start_dialog_turn".into(),
+            args: serde_json::json!({ "request": {
+                "sessionId": session_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
+                "turnId": uuid::Uuid::new_v4().to_string(),
+                "userInput": content,
+                "agentType": agent_type.unwrap_or_else(|| "Standard".into()),
+                "workspacePath": workspace_path,
+            }}),
+        };
+        let command_json = serde_json::to_string(&request).map_err(|e| e.to_string())?;
+        let response = AccountClient::new()
+            .device_rpc(&relay_url, &session, &target_device_id, &command_json)
+            .await
+            .map_err(|e| e.to_string())?;
+        if !account_context_matches(account_generation, &session.token).await {
+            return Err("account context changed".into());
+        }
+        return match serde_json::from_str(&response)
+            .map_err(|e| format!("Invalid peer reply: {e}"))?
+        {
+            RemoteResponse::HostInvokeResult { ok: true, .. } => Ok(()),
+            RemoteResponse::HostInvokeResult {
+                error: Some(message),
+                ..
+            }
+            | RemoteResponse::Error { message } => Err(message),
+            _ => Err("The peer did not acknowledge the remote turn".into()),
+        };
+    }
     let envelope = serde_json::to_string(&RemoteCommand::ExecuteOnDevice {
         session_id,
         content,

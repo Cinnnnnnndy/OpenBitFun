@@ -332,6 +332,7 @@
           "title": "Remote Connect 远控与多设备互控",
           "summary": "离开工位也能用手机网页，或接入微信、飞书、Telegram 中的聊天机器人查看对话进度、审批权限并继续指挥；同账号多台电脑还能开启 Peer Device Mode，在一个窗口里直接切换操作另一台机器的工作区与会话。",
           "items": {
+            "device-control-permission": "本机可被控制",
             "connection-methods": "使用免部署官方 Relay 或桌面端局域网 Relay（可同时开启）",
             "start-stop-status": "一键启动、停用远控渠道并查看实时连接与设备信息",
             "network": "查看本机局域网地址、网络网卡状态与扫码邀请链接",

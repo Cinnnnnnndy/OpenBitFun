@@ -759,6 +759,17 @@ enum DaemonAction {
     Uninstall,
     /// Show daemon and auto-start service status
     Status,
+    /// Show or change whether this device accepts remote control (shared with Desktop)
+    RemoteControl {
+        #[arg(value_enum)]
+        setting: Option<RemoteControlSetting>,
+    },
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum RemoteControlSetting {
+    On,
+    Off,
 }
 
 #[derive(Subcommand)]
@@ -1597,6 +1608,23 @@ async fn run_cli() -> Result<()> {
             DaemonAction::Install => daemon::install_service()?,
             DaemonAction::Uninstall => daemon::uninstall_service()?,
             DaemonAction::Status => daemon::print_status()?,
+            DaemonAction::RemoteControl { setting } => {
+                use openbitfun_core::service::remote_connect::device;
+                if let Some(setting) = setting {
+                    device::set_remote_control_allowed(matches!(
+                        setting,
+                        RemoteControlSetting::On
+                    ))?;
+                }
+                println!(
+                    "{}",
+                    if device::remote_control_allowed()? {
+                        "on"
+                    } else {
+                        "off"
+                    }
+                );
+            }
         },
 
         Some(Commands::Dispatch { action }) => {
