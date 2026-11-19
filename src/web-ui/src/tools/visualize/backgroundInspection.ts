@@ -23,6 +23,7 @@ export async function inspectInBackground(source: string): Promise<string | null
   // Keep a real layout viewport without occupying a conversation row or taking focus.
   frame.style.cssText =
     'position:fixed;left:0;top:0;width:min(760px,100vw);height:460px;opacity:0;pointer-events:none;z-index:-1';
+  let kitPort: MessagePort | undefined;
   const ready = (event: MessageEvent) => {
     if (
       event.source !== frame.contentWindow ||
@@ -45,7 +46,6 @@ export async function inspectInBackground(source: string): Promise<string | null
     kitPort = kit.port1;
     frame.contentWindow?.postMessage({ type: 'codex-visualization-initialize' }, '*', [kit.port2]);
   };
-  let kitPort: MessagePort | undefined;
   window.addEventListener('message', ready);
   try {
     return await new Promise((resolve) => {

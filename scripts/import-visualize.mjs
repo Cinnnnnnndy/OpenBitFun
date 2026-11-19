@@ -108,13 +108,11 @@ async function syncGuide(destination, expected) {
 }
 
 const packagedGuides = path.join(target, guidePrefix);
-const main = await readFile(path.join(packagedGuides, 'SKILL.md'), 'utf8');
-await syncGuide(path.join(owner, 'SKILL.md'), flowChatEntry(main, 'upstream/skills/visualize'));
 for (const entry of Object.keys(manifest.files)) {
   if (!entry.startsWith(guidePrefix) || !entry.endsWith('.md')) continue;
   const name = entry.slice(guidePrefix.length);
   const expected = name === 'SKILL.md'
-    ? flowChatEntry(main, '../upstream/skills/visualize')
+    ? flowChatEntry(await readFile(path.join(packagedGuides, name), 'utf8'), '../upstream/skills/visualize')
     : name === 'maps.md'
       ? (await readFile(path.join(target, entry), 'utf8'))
         .replace('# Maps', '# Maps\n\nFor city, regional and multi-city marker maps use the packaged regional atlas. Write the diagram once to the FlowChat URI with a heading and `<script type="application/json" data-visual-atlas="1">{"places":[{"name":"京都","country":"JP"},{"name":"大阪","country":"JP"}]}</script>`. A place takes its local name and optional ISO-2 country, first-level region, or sourced coordinates [longitude, latitude]. Optional bounds are [west,south,east,north]. Use this same path for any covered region. It already supplies real coastlines, rivers, lakes and boundaries. Use custom geometry only for more local detail or a layer this atlas does not contain.')

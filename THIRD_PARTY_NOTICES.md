@@ -322,3 +322,5 @@ The complete upstream Apache-2.0 license follows:
    See the License for the specific language governing permissions and
    limitations under the License.
 ```
+
+The FlowChat figure guest also bundles D3, TopoJSON Client, US Atlas, Lucide and Floating UI. Their notices accompany the built frontend in `third-party/visualize-NOTICES.txt`. The release source includes Natural Earth regional map layers and records their upstream and distributed SHA-256 hashes in `scripts/visualize-regional-atlas.json`.

@@ -1,6 +1,7 @@
 // The listener is scoped to one frame/document, including cancellation on retry or unmount.
 export function watchFigureInspection(frame: HTMLIFrameElement, done: (issue: string | null) => void) {
   let port: MessagePort | undefined;
+  let timer: number;
   const stop = () => {
     window.clearTimeout(timer);
     window.removeEventListener('message', receive);
@@ -10,7 +11,7 @@ export function watchFigureInspection(frame: HTMLIFrameElement, done: (issue: st
     stop();
     done(issue);
   };
-  const timer = window.setTimeout(() => finish('The visualization renderer did not finish loading.'), 12000);
+  timer = window.setTimeout(() => finish('The visualization renderer did not finish loading.'), 12000);
   function receive(e: MessageEvent) {
     if (
       e.source !== frame.contentWindow ||

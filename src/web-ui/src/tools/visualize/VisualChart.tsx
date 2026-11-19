@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { init, use } from 'echarts/core';
+import { init, use as registerCharts } from 'echarts/core';
 import {
   BarChart,
   LineChart,
@@ -31,7 +31,7 @@ import { chartOptions } from './chartOptions';
 import type { VisualSpec, VisualTable } from './document';
 import { useHostAppearance } from '../generative-ui/components/openui/scheme';
 
-use([
+registerCharts([
   BarChart,
   LineChart,
   PieChart,

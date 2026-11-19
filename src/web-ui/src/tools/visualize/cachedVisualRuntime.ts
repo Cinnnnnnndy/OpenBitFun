@@ -4,7 +4,10 @@ const loaders = import.meta.glob<string>('../../../../../.visualize-runtime/*.{j
   query: '?raw',
   import: 'default',
 });
-const modules = new Map(Object.entries(loaders).map(([path, load]) => [path.split('/').pop()!, load]));
+const bundled = import.meta.glob<string>('../../../../../third_party/visualize/runtime/*.{js,json}', {
+  query: '?raw', import: 'default',
+});
+const modules = new Map(Object.entries({ ...loaders, ...bundled }).map(([path, load]) => [path.split('/').pop()!, load]));
 type Asset = keyof typeof release;
 const names = Object.keys(release) as Asset[];
 const inline = (body: string) => '<script>' + body.replace(/<\/script/gi, '<\\/script') + '</script>';
@@ -70,6 +73,9 @@ export async function cachedVisualRuntime(fragment: string) {
   const esm: [string[], string][] = [];
   for (const key of selected) {
     let code = sources.get(key);
+    // Original third-party widgets keep their published module URL in builds
+    // without the optional compatibility cache. The standard atlas is local.
+    if (!code && !modules.has(key) && release[key].url.startsWith('https://persistent.oaistatic.com/')) continue;
     if (!code) throw Error('Missing packaged visualization runtime: ' + key);
     if (key.endsWith('.umd.js')) continue;
     const url = release[key].url;

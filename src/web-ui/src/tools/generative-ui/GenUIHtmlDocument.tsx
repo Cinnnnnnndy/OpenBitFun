@@ -19,7 +19,8 @@ export default function GenUIHtmlDocument({ source, specification, designSpecId,
 }) {
   const frameRef = useRef<HTMLIFrameElement>(null);
   const themeRef = useRef<HTMLDivElement>(null);
-  const { scheme: colorScheme, revision } = useHostAppearance(themeRef);
+  const appearance = useHostAppearance(themeRef);
+  const colorScheme = appearance.scheme;
   const hostStyleResourceCss = useMemo(() => {
     if (typeof document === 'undefined') return '';
     const computed = getComputedStyle(themeRef.current ?? document.documentElement);
@@ -32,8 +33,8 @@ export default function GenUIHtmlDocument({ source, specification, designSpecId,
       // into the opaque document's inline stylesheet.
       if (value && !/[{};]/.test(value)) tokens.push(`${name}:${value};`);
     }
-    return `:root{color-scheme:${colorScheme};${tokens.join('')}}html,body{margin:0;min-height:100%;color:var(--openbitfun-color-content-primary);background:var(--openbitfun-color-surface-canvas);font-family:var(--openbitfun-type-body-md-font-family);font-size:var(--openbitfun-type-body-md-font-size);line-height:var(--openbitfun-type-body-md-line-height);}`;
-  }, [colorScheme, revision]);
+    return `:root{color-scheme:${appearance.scheme};${tokens.join('')}}html,body{margin:0;min-height:100%;color:var(--openbitfun-color-content-primary);background:var(--openbitfun-color-surface-canvas);font-family:var(--openbitfun-type-body-md-font-family);font-size:var(--openbitfun-type-body-md-font-size);line-height:var(--openbitfun-type-body-md-line-height);}`;
+  }, [appearance]);
   const inspectionEnabled = Boolean(inspection);
   const canRunScript = Boolean(scriptEnabled && bridge && source.script?.trim() && !inspectionEnabled);
   const sanitized = useMemo(() => sanitizeGenUIHtmlSource(source, specification, hostStyleResourceCss, canRunScript, inspectionEnabled, false, colorScheme), [source, specification, hostStyleResourceCss, canRunScript, inspectionEnabled, colorScheme]);

@@ -1,4 +1,5 @@
-// Classic worker, packaged with the pinned D3 and TopoJSON engines at build time.
+import * as d3 from 'd3-geo';
+import * as topojson from 'topojson-client';
 self.onmessage = async ({ data: { spec, urls, language, labels: strings } }) => {
   const esc = (s) =>
     String(s).replace(

@@ -1,23 +1,19 @@
 import atlasStyle from '../../../../shared/generative-ui/regional-map.css?raw';
 import { i18nService } from '@/infrastructure/i18n';
 
-// Produce ordinary, portable SVG before publication. All worker inputs are bundled
-// product assets. Only the JSON map description comes from the authored fragment.
-const assets = import.meta.glob<string>('../../../../../.visualize-runtime/regional/*.{js,json}', {
-  query: '?url&no-inline',
-  import: 'default',
-  eager: true,
-});
-const urls = Object.fromEntries(
-  Object.entries(assets).map(([key, url]) => [
-    key.split('/').pop()!.split('.')[0],
-    new URL(url, location.href).href,
-  ]),
-);
+import land from '../../../../../third_party/visualize/atlas/land.json?url&no-inline';
+import rivers from '../../../../../third_party/visualize/atlas/rivers.json?url&no-inline';
+import lakes from '../../../../../third_party/visualize/atlas/lakes.json?url&no-inline';
+import places from '../../../../../third_party/visualize/atlas/places.json?url&no-inline';
+import borders from '../../../../../third_party/visualize/atlas/borders.json?url&no-inline';
+import provinces from '../../../../../third_party/visualize/atlas/provinces.json?url&no-inline';
+import seas from '../../../../../third_party/visualize/atlas/seas.json?url&no-inline';
+
+const layers = { land, rivers, lakes, places, borders, provinces, seas };
 
 async function project(spec: unknown, language: string): Promise<string> {
-  if (!urls.project) throw Error('The offline regional atlas is not installed on this host.');
-  const worker = new Worker(urls.project);
+  const urls = Object.fromEntries(Object.entries(layers).map(([key, url]) => [key, new URL(url, location.href).href]));
+  const worker = new Worker(new URL('./regionalProjection.js', import.meta.url), { type: 'module' });
   try {
     return await new Promise<string>((resolve, reject) => {
       const timeout = window.setTimeout(() => reject(Error('The regional map projection timed out.')), 10000);

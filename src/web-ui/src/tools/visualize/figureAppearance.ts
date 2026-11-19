@@ -23,6 +23,9 @@ const colors = {
   '--border': 'color.border.default',
   '--input': 'color.border.strong',
   '--ring': 'color.focus.ring',
+  '--blue': 'color.status.info.content',
+  '--red': 'color.status.danger.content',
+  '--green': 'color.status.success.content',
   '--viz-series-1': 'color.accent.default',
   '--viz-series-2': 'color.status.warning.content',
   '--viz-series-3': 'color.status.success.content',
@@ -41,9 +44,9 @@ const typography = Object.entries(guestTypography).map(([name, role]) => ({ name
 export const staticFigureTypography = '@layer visualize-base {:root{' +
   typography.map(({ name, variable }) => name + ':var(' + variable + ')').join(';') + '}}';
 
-export function readFigureStyle(host: HTMLElement): Record<string, string> {
+export function readFigureStyle(host: HTMLElement, scheme?: string): Record<string, string> {
   const style = getComputedStyle(host);
-  const resolved: Record<string, string> = {};
+  const resolved: Record<string, string> = scheme ? { 'color-scheme': scheme } : {};
   for (const [name, token] of Object.entries(colors)) {
     const value = style.getPropertyValue(themeCssVariables[token]).trim();
     if (value && CSS.supports('color', value)) resolved[name] = value;

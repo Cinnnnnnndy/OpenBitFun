@@ -1758,6 +1758,7 @@ const MarkdownSurface = React.memo<MarkdownRendererProps & { thinking?: boolean;
   }), [
     thinking,
     renderArtifactLinkRef,
+    renderArtifactReferenceRef,
     onFileDownloadRef,
     onImageReadRef,
     onImagePreviewRef,

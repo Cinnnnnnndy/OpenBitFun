@@ -8,17 +8,17 @@ import assert from 'node:assert/strict';
 const run = promisify(execFile);
 const local = new URL('../.visualize-runtime/regional/', import.meta.url);
 const manifest = JSON.parse(await readFile(new URL('./visualize-regional-atlas.json', import.meta.url)));
-const check = process.argv.includes('--check');
+const output = new URL('../third_party/visualize/atlas/', import.meta.url);
+await mkdir(output, { recursive: true });
 await mkdir(new URL('sources/', local), { recursive: true });
 const hash = (data) => createHash('sha256').update(data).digest('hex');
 async function install(name, data) {
-  const dest = new URL(name, local);
+  const dest = new URL(name, output);
   const installed = await readFile(dest).catch((error) => {
     if (error.code !== 'ENOENT') throw error;
   });
   if (installed && hash(installed) === hash(data)) return;
-  if (check) throw Error('Missing or stale regional atlas ' + name);
-  const tmp = new URL(name + '.' + randomUUID() + '.tmp', local);
+  const tmp = new URL(name + '.' + randomUUID() + '.tmp', output);
   await writeFile(tmp, data);
   await rename(tmp, dest);
 }
@@ -28,7 +28,7 @@ for (const [key, entry] of Object.entries(manifest)) {
   try {
     data = await readFile(src);
   } catch (e) {
-    if (check || e.code !== 'ENOENT') throw e;
+    if (e.code !== 'ENOENT') throw e;
     const tmp = fileURLToPath(src) + '.' + randomUUID() + '.tmp';
     await run(
       'curl',
@@ -74,14 +74,7 @@ for (const [key, entry] of Object.entries(manifest)) {
       geometries: JSON.parse(data).features.map((f) => f.geometry),
     });
   }
+  assert.equal(hash(data), entry.packagedSha256, key + ' packaged');
   await install(key + '.json', data);
 }
-const libs = await Promise.all(
-  ['d3.js', 'topojson.js'].map((name) => readFile(new URL('../' + name, local), 'utf8')),
-);
-const worker = await readFile(
-  new URL('../src/web-ui/src/tools/visualize/regionalProjection.js', import.meta.url),
-  'utf8',
-);
-await install('project.js', [...libs, worker].join('\n'));
-console.log('Verified offline regional map datasets and drawing worker.');
+console.log('Refreshed packaged regional map layers.');

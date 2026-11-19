@@ -11,7 +11,7 @@ import {
 import { z } from 'zod/v4';
 import { useI18n } from '@/infrastructure/i18n';
 import { useHostAppearance } from '../generative-ui/components/openui/scheme';
-import { buildCodexFrame, hasCodexRuntime } from './codexFrameDocument';
+import { buildCodexFrame } from './codexFrameDocument';
 import { watchFigureInspection } from './figureInspection';
 import { readFigureStyle } from './figureAppearance';
 import { readWidgetState } from './widgetStateStorage';
@@ -79,10 +79,11 @@ export default function CodexFigure({
   const { t, currentLanguage } = useI18n('flow-chat');
   const ref = useRef<HTMLIFrameElement>(null);
   const wrapper = useRef<HTMLDivElement>(null);
-  const { scheme, revision } = useHostAppearance(wrapper);
+  const appearance = useHostAppearance(wrapper);
+  const { scheme } = appearance;
   const figureStyle = useMemo(
-    () => (wrapper.current ? readFigureStyle(wrapper.current) : {}),
-    [revision],
+    () => (wrapper.current ? readFigureStyle(wrapper.current, appearance.scheme) : {}),
+    [appearance],
   );
   const [height, setHeight] = useState(180);
   const [expanded, setExpanded] = useState(false);
@@ -122,8 +123,9 @@ export default function CodexFigure({
   const [liveValues, setLiveValues] = useState<BoundValues>({});
   const [requests, setRequests] = useState<Record<string, string>>({});
   const [watching, setWatching] = useState<string[]>([]);
+  const canFollow = Boolean(follow);
   useEffect(() => {
-    if (!declarations || !follow) return;
+    if (!declarations || !canFollow) return;
     const timers = watching.map((name) => {
       const binding = declarations[name];
       if (binding.type !== 'library' && binding.type !== 'tool') return;
@@ -138,7 +140,7 @@ export default function CodexFigure({
       return window.setInterval(refresh, binding.refreshIntervalSeconds * 1000);
     });
     return () => timers.forEach((t) => window.clearInterval(t));
-  }, [declarations, !!follow, watching, getSession, uri, write.subagentSessionId]);
+  }, [declarations, canFollow, watching, getSession, uri, write.subagentSessionId]);
   const modelContent = useRef<unknown>(null);
   useEffect(() => {
     if (!declarations || !Object.keys(requests).length) return;
@@ -165,7 +167,6 @@ export default function CodexFigure({
   const [passed, setPassed] = useState(0);
   const [issue, setIssue] = useState<string | null>(null);
   useEffect(() => {
-    if (!hasCodexRuntime) return;
     let mounted = true;
     let state = null;
     try {
@@ -380,12 +381,6 @@ export default function CodexFigure({
     };
   }, [source, storageKey, built]);
 
-  if (!hasCodexRuntime)
-    return (
-      <p role="status">
-        {title} · {t('visualize.kitMissing')}
-      </p>
-    );
   const verified = !!source && passed === built?.version;
   const visible = groups.filter((group) => group.targets[0].visible);
   const names = Object.keys(declarations ?? {});

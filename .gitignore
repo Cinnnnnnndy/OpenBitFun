@@ -150,7 +150,6 @@ external/
 AGENTS.override.md
 
 # Locally imported, version-verified Codex Visualize distribution.
-/src/crates/assembly/core/builtin_skills/visualize/SKILL.md
 /src/crates/assembly/core/builtin_skills/visualize/upstream/
 /src/crates/assembly/core/builtin_skills/visualize/authoring/
 

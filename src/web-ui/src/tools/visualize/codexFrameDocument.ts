@@ -1,5 +1,7 @@
 import type { BoundValues, Declarations } from './visualBindings';
 import { cachedVisualRuntime } from './cachedVisualRuntime';
+import builtInGuest from './figureGuest.js?raw';
+import builtInStyles from './inlineDocument.css?raw';
 import extras from './codexFrameExtras.js?raw';
 import inspection from './inspectRenderedFigure.js?raw';
 
@@ -38,7 +40,7 @@ const csp = (images: string[]) =>
     ...['media', 'font'].map((type) => type + '-src blob: data: ' + cdns),
   ].join('; ');
 
-export const hasCodexRuntime = !!assets['visualize.html'] && !!assets['standalone-host-bridge.js'];
+const hasReferenceKit = !!assets['visualize.html'] && !!assets['standalone-host-bridge.js'];
 
 export async function buildCodexFrame(
   fragment: string,
@@ -47,19 +49,18 @@ export async function buildCodexFrame(
   declarations: Declarations,
   values: BoundValues,
 ) {
-  if (!hasCodexRuntime) throw Error('Codex visualization package unavailable');
   if (fragment.includes('data-visual-atlas')) {
     const { materializeRegionalMaps } = await import('./regionalAtlas');
     fragment = await materializeRegionalMaps(fragment);
   }
   // Use Tweak's existing hidden-attribute observer for tabs and conditional content as well as variants.
-  const tweak = assets['tweak.js'].split('.viz-carousel > [data-variant][hidden]').join('[hidden]');
-  let extensions = script(assets['standalone-host-bridge.js']) + script(extras) + script(inspection) + script(tweak);
-  if (/<viz-calendar\b/i.test(fragment) && !/\/widgets\/[^/]+\/(?:calendar|element)\.js/.test(fragment)) {
+  const tweak = assets['tweak.js']?.split('.viz-carousel > [data-variant][hidden]').join('[hidden]') ?? '';
+  let extensions = script(assets['standalone-host-bridge.js'] ?? builtInGuest) + script(extras) + script(inspection) + script(tweak);
+  if (hasReferenceKit && /<viz-calendar\b/i.test(fragment) && !/\/widgets\/[^/]+\/(?:calendar|element)\.js/.test(fragment)) {
     extensions += script(assets['calendar.js']);
   }
   if (
-    /<(?:experimental-)?dash-[a-z-]+\b|<dash-sources\b|data-dashboard-|class=["'][^"']*dashboard-/.test(
+    hasReferenceKit && /<(?:experimental-)?dash-[a-z-]+\b|<dash-sources\b|data-dashboard-|class=["'][^"']*dashboard-/.test(
       fragment,
     )
   ) {
@@ -72,13 +73,17 @@ export async function buildCodexFrame(
       extensions += script(assets[name]);
     }
   }
+  if (/\becharts\s*\./.test(fragment)) {
+    const { default: charts } = await import('echarts/dist/echarts.min.js?raw');
+    extensions += script(charts);
+  }
   const images = Object.values(declarations).flatMap((binding) =>
     binding.type === 'image' ? [new URL(binding.url).origin] : [],
   );
   const bindings = JSON.stringify({ declarations, values }).replace(/</g, '\\u003c');
   const initial = JSON.stringify({ widgetState: state, statePersistence: 'local' }).replace(/</g, '\\u003c');
   const cache = await cachedVisualRuntime(fragment);
-  let kit = assets['visualize.html'].replace(
+  let kit = (assets['visualize.html'] ?? '<!--__INLINE_VISUALIZATION_FRAGMENT__-->').replace(
     '<!--__INLINE_VISUALIZATION_FRAGMENT__-->',
     () => extensions + cache.fragment,
   );
@@ -91,7 +96,7 @@ export async function buildCodexFrame(
     csp(images) +
     '">' +
     '<meta name="viewport" content="width=device-width, initial-scale=1"><style>' +
-    assets['visualize.css'] +
+    (assets['visualize.css'] ?? builtInStyles) +
     '\n:root{--control-spacing:8px}.btn,.nav-link{border-radius:8px}html>body{padding:0;margin:0}' +
     // Honor the fragment's hidden state even when its layout uses flex or grid.
     '[hidden]:not([hidden="until-found" i]){display:none!important}</style></head><body>' +

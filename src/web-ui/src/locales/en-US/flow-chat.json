@@ -7,7 +7,6 @@
     "preparation": "Creating visualization",
     "options": "Visualization options",
     "expandFailed": "Full screen is unavailable.",
-    "kitMissing": "Codex visualization package is unavailable on this build.",
     "expand": "Expand view",
     "collapse": "Collapse view",
     "annotate": "Comment on a block",
