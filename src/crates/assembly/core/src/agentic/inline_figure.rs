@@ -53,12 +53,31 @@ pub(super) fn reference_hint(uri: &str) -> String {
     format!("\nFlowChat attaches this figure to your final reply automatically. Reply in ordinary prose. For explicit placement among several figures, the optional standalone reference is:\nvisualize{}", serde_json::json!({ "path": uri }))
 }
 
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct FigureCheckRequest {
+    pub source: String,
+    pub uri: String,
+    pub session_id: Option<String>,
+    pub turn_id: Option<String>,
+    pub tool_call_id: Option<String>,
+}
+
+#[derive(serde::Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct FigureCheckResult {
+    pub rendered_source: Option<String>,
+    pub bindings: Option<serde_json::Map<String, serde_json::Value>>,
+    #[serde(default)]
+    pub deferred: bool,
+}
+
 /// Implemented by the producing host. Headless runtimes defer the check to the reader.
 pub type FigureVerifier = std::sync::Arc<
     dyn Fn(
-            String,
+            FigureCheckRequest,
         ) -> std::pin::Pin<
-            Box<dyn std::future::Future<Output = Result<Option<String>, String>> + Send>,
+            Box<dyn std::future::Future<Output = Result<FigureCheckResult, String>> + Send>,
         > + Send
         + Sync,
 >;
@@ -68,18 +87,43 @@ pub fn register_figure_verifier(verifier: FigureVerifier) {
 }
 
 pub(super) async fn verify_written_figure(
+    context: &ToolUseContext,
     uri: &str,
     source: &str,
     data: &mut serde_json::Value,
     message: &mut String,
 ) {
+    if context
+        .custom_data
+        .get(openbitfun_agent_runtime::remote_file_delivery::TOOL_CONTEXT_REMOTE_FILE_DELIVERY_KEY)
+        .and_then(serde_json::Value::as_bool)
+        == Some(true)
+    {
+        data["visualization_checked"] = false.into();
+        message.push_str("\nThis reader needs a downloadable file. Write a standalone SVG or HTML in the workspace and include its computer:// link in the final answer.");
+        return;
+    }
+    if source.trim().is_empty() || source.len() > MAX_SOURCE_BYTES {
+        data["visualization_checked"] = false.into();
+        message.push_str("\nThis revision cannot be published. Write a nonempty figure of at most 1 MiB before replying.");
+        return;
+    }
     let Some(verifier) = VERIFIER.get() else {
+        data["visualization_check_deferred"] = true.into();
         message.push_str("\nThis runtime has no background renderer. FlowChat will check this revision on display.");
         message.push_str(&reference_hint(uri));
         return;
     };
-    match verifier(source.to_owned()).await.and_then(|rendered| {
+    let request = FigureCheckRequest {
+        source: source.to_owned(),
+        uri: uri.into(),
+        session_id: context.session_id.clone(),
+        turn_id: context.dialog_turn_id.clone(),
+        tool_call_id: context.tool_call_id.clone(),
+    };
+    match verifier(request).await.and_then(|rendered| {
         if rendered
+            .rendered_source
             .as_ref()
             .is_some_and(|s| s.is_empty() || s.len() > MAX_SOURCE_BYTES)
         {
@@ -89,7 +133,16 @@ pub(super) async fn verify_written_figure(
         }
     }) {
         Ok(rendered) => {
-            if let Some(html) = rendered {
+            if rendered.deferred {
+                data["visualization_check_deferred"] = true.into();
+                message.push_str("\nThe producing turn is unavailable to the background renderer. FlowChat will verify this revision with its recorded data on display.");
+                message.push_str(&reference_hint(uri));
+                return;
+            }
+            if let Some(bindings) = rendered.bindings {
+                data["visualization_bindings"] = bindings.into();
+            }
+            if let Some(html) = rendered.rendered_source {
                 data["visualization_rendered_bytes"] = html.len().into();
                 data["visualization_rendered_source"] = html.into();
             }

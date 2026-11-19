@@ -14,7 +14,7 @@ const inline = (body: string) => '<script>' + body.replace(/<\/script/gi, '<\\/s
 
 // Module identity is observable through import.meta.url. Keep each verified
 // release URL as its logical identity even when its bytes are served offline.
-export async function cachedVisualRuntime(fragment: string) {
+export async function cachedVisualRuntime(fragment: string, offlineGuest = false) {
   const selected = new Set<Asset>(['lucide.js', 'floating-core.js', 'floating-dom.js']);
   if (fragment.includes('/charts/1.6.5/')) {
     selected.add('chart.js');
@@ -66,7 +66,20 @@ export async function cachedVisualRuntime(fragment: string) {
   await Promise.all(
     [...selected].map(async (name) => {
       const load = modules.get(name);
-      if (load) sources.set(name, await load());
+      if (load) {
+        sources.set(name, await load());
+      } else if (offlineGuest && release[name].url.startsWith('https://persistent.oaistatic.com/plugins/visualize/')) {
+        // Only the host can load a missing pinned release. Fetch verifies the
+        // manifest digest before the bytes enter the offline guest's import map.
+        const asset = release[name];
+        const integrity = 'sha256-' + btoa(String.fromCharCode(...asset.sha256.match(/../g)!.map(hex => parseInt(hex, 16))));
+        const response = await fetch(asset.url, {
+          integrity, credentials: 'omit', mode: 'cors', redirect: 'error', referrerPolicy: 'no-referrer',
+          signal: AbortSignal.timeout(4000),
+        });
+        if (!response.ok) throw Error('Packaged visualization dependency unavailable: ' + name);
+        sources.set(name, await response.text());
+      }
     }),
   );
   let scripts = '';

@@ -3,17 +3,20 @@ import { projectEffectiveToolItem } from '@/flow_chat/utils/toolInvocationIdenti
 import { splitFilePathAndContent } from '@/shared/utils/partialJsonParser';
 import { isCodexVisualUri, visualReplyParts, visualArtifactUri, visualReceiptPath } from './reference';
 
-/** Some models replace the content-reference marker with prose. Recover only
- * completed figure receipts preceding the final answer in this exact turn. */
+function finalText(turn: DialogTurn, subagentSessionId?: string) {
+  for (let r = turn.modelRounds.length - 1; r >= 0; r--) {
+    const items = turn.modelRounds[r].items;
+    for (let i = items.length - 1; i >= 0; i--) {
+      const item = items[i];
+      if (item.type === 'text' && item.subagentSessionId === subagentSessionId) return item;
+    }
+  }
+}
+
+/** Recover sealed figures for the final reply, or preceding receipts in older sessions. */
 export function missingInlineFigures(turn: DialogTurn | undefined, reply: FlowTextItem): string[] {
   if (turn?.status !== 'completed' || reply.status !== 'completed' || reply.isStreaming) return [];
-  const lastRound = turn.modelRounds[turn.modelRounds.length - 1];
-  const lastText =
-    lastRound &&
-    [...lastRound.items]
-      .reverse()
-      .find((item) => item.type === 'text' && item.subagentSessionId === reply.subagentSessionId);
-  if (lastText?.id !== reply.id) return [];
+  if (finalText(turn, reply.subagentSessionId)?.id !== reply.id) return [];
   const generated = new Set<string>();
   const displayed = new Set<string>();
   for (const round of turn.modelRounds) {
@@ -25,7 +28,12 @@ export function missingInlineFigures(turn: DialogTurn | undefined, reply: FlowTe
         }
         if (item.id === reply.id) {
           const published = turn.publishedFigures;
-          return [...generated].filter(uri => !displayed.has(uri) && (!published || Object.prototype.hasOwnProperty.call(published, uri)));
+          if (published && !reply.subagentSessionId) {
+            return Object.entries(published)
+              .filter(([uri, snapshot]) => snapshot && isCodexVisualUri(uri) && !displayed.has(uri))
+              .map(([uri]) => uri);
+          }
+          return [...generated].filter(uri => !displayed.has(uri));
         }
       }
       if (
@@ -41,8 +49,10 @@ export function missingInlineFigures(turn: DialogTurn | undefined, reply: FlowTe
         typeof uri === 'string' &&
         isCodexVisualUri(uri) &&
         (effective.toolName === 'Write' || effective.toolName === 'Edit')
-      )
-        generated.add(uri);
+      ) {
+        if (effective.toolResult?.result?.visualization_checked === false) generated.delete(uri);
+        else generated.add(uri);
+      }
     }
   }
   return [];
@@ -52,11 +62,8 @@ export function missingInlineFigures(turn: DialogTurn | undefined, reply: FlowTe
  * host snapshot and scopes bindings to results preceding that reply. */
 export function publishedFigureReply(turn: DialogTurn, textId: string, uri: string) {
   if (turn.status !== 'completed' || !Object.prototype.hasOwnProperty.call(turn.publishedFigures ?? {}, uri)) return;
-  for (const round of [...turn.modelRounds].reverse()) {
-    const text = [...round.items].reverse().find((item): item is FlowTextItem =>
-      item.type === 'text' && !item.subagentSessionId);
-    if (text) return text.id === textId ? text : undefined;
-  }
+  const text = finalText(turn);
+  return text?.id === textId ? text : undefined;
 }
 
 export function findVisualWrite(
@@ -64,6 +71,7 @@ export function findVisualWrite(
   textId: string,
   uri: string,
   turnId?: string,
+  anchor: 'write' | 'revision' = 'write',
 ): FlowToolItem | undefined {
   if (!session || !visualArtifactUri.test(uri)) return;
   for (const turn of session.dialogTurns) {
@@ -81,15 +89,16 @@ export function findVisualWrite(
           continue;
         if (visualReceiptPath(item.toolResult.result) !== uri) continue;
         const effective = projectEffectiveToolItem(item);
-        // A follow-up turn can edit an existing session figure without another
-        // Write. Its own full receipt is sufficient to replay that turn.
+        // Keep the original Write as the widget-state identity. A full Edit
+        // can anchor its own source and bindings, including in a follow-up turn.
         if (
           effective.toolName === 'Write' ||
-          (!writes.has(item.subagentSessionId) &&
+          ((anchor === 'revision' || !writes.has(item.subagentSessionId)) &&
             effective.toolName === 'Edit' &&
             isCodexVisualUri(uri) &&
             effective.toolCall.input?.file_path === effective.toolResult?.result?.file_path &&
-            typeof effective.toolResult?.result?.visualization_source === 'string')
+            (typeof effective.toolResult?.result?.visualization_source === 'string' ||
+             effective.toolResult?.result?.visualization_checked === false))
         ) {
           writes.set(item.subagentSessionId, item);
         }

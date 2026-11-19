@@ -17,6 +17,7 @@ import { VisualStackTrace } from './VisualStackTrace';
 import { WidgetView, useWidgetState } from './WidgetView';
 import './VisualAnswer.scss';
 import { isCodexVisualUri } from './reference';
+import type { BoundValues } from './visualBindings';
 import { staticFigureTypography } from './figureAppearance';
 import inlineDocumentCss from './inlineDocument.css?raw';
 
@@ -366,9 +367,24 @@ export default function VisualAnswer({
     [getSession, textId, uri, turnId],
   );
   const item = useSyncExternalStore(subscribe, getWrite);
+  const getRevision = useCallback(
+    () => findVisualWrite(getSession(), textId, uri, turnId, 'revision') ?? item,
+    [getSession, textId, uri, turnId, item],
+  );
+  const revision = useSyncExternalStore(subscribe, getRevision);
+  const getCheckedBindings = useCallback((): BoundValues | undefined => {
+    for (const turn of getSession()?.dialogTurns ?? []) {
+      if ((!turnId || turn.id === turnId) && publishedFigureReply(turn, textId, uri)) {
+        return turn.publishedFigures?.[uri]?.bindings;
+      }
+    }
+    const receipt = revision?.type === 'tool' ? revision.toolResult?.result : undefined;
+    if (receipt?.visualization_checked === true) return receipt.visualization_bindings;
+  }, [getSession, textId, turnId, uri, revision]);
+  const checkedBindings = useSyncExternalStore(subscribe, getCheckedBindings);
   const getSource = useCallback(
-    () => readVisualRevision(getSession(), item, textId, uri),
-    [getSession, item, textId, uri],
+    () => readVisualRevision(getSession(), revision, textId, uri),
+    [getSession, revision, textId, uri],
   );
   const html = useSyncExternalStore(subscribe, getSource);
   const doc = useMemo(() => {
@@ -423,7 +439,8 @@ export default function VisualAnswer({
           wide={wide}
           follow={follow}
           uri={uri}
-          write={item}
+          checkedBindings={checkedBindings}
+          write={revision ?? item}
           getSession={getSession}
           subscribe={subscribe}
         />

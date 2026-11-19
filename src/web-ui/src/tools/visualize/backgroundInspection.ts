@@ -1,16 +1,15 @@
 import { buildCodexFrame } from './codexFrameDocument';
 import { watchFigureInspection } from './figureInspection';
-import { readBindings, type BoundValues } from './visualBindings';
+import { readBindings, inspectionBindings, usesRecordedData, type BoundValues, type FigureOwner } from './visualBindings';
+import type { Session } from '@/flow_chat/types/flow-chat';
+import { localizeFigureImages } from './figureImages';
 import { readFigureStyle } from './figureAppearance';
 
-export async function inspectInBackground(source: string): Promise<string | null> {
+export async function inspectInBackground(source: string, snapshot?: BoundValues): Promise<string | null> {
   const declarations = readBindings(source);
   if (!declarations) return 'The visualization binding declaration is invalid.';
-  const values: BoundValues = {};
-  for (const [name, entry] of Object.entries(declarations)) {
-    if (entry.type === 'json') values[name] = { kind: 'json', value: entry.value };
-    if (entry.type === 'image') values[name] = { kind: 'image', value: entry.url };
-  }
+  const values = snapshot ?? inspectionBindings(declarations, undefined);
+  if (!values) return 'This figure requires the producing turn’s binding snapshot.';
   const figureStyle = readFigureStyle(document.body);
   const doc = await buildCodexFrame(source, null, document.documentElement.lang, declarations, values, figureStyle);
   const frame = document.createElement('iframe');
@@ -60,4 +59,38 @@ export async function inspectInBackground(source: string): Promise<string | null
     kitPort?.close();
     frame.remove();
   }
+}
+
+interface CheckedFigure {
+  renderedSource?: string;
+  bindings?: BoundValues;
+  deferred?: boolean;
+}
+
+export async function inspectWrittenFigure(
+  request: FigureOwner & { source: string },
+  getProducer: (id: string) => Promise<Session | undefined>,
+): Promise<CheckedFigure> {
+  const declarations = readBindings(request.source);
+  if (!declarations) throw Error('Invalid visualization bindings.');
+  const entries = Object.values(declarations);
+  const needsHistory = entries.some(usesRecordedData);
+  const producer = needsHistory && request.sessionId ? await getProducer(request.sessionId) : undefined;
+  let bindings = inspectionBindings(declarations, producer, request);
+  if (!bindings) return { deferred: true };
+  const privateImages = entries.some(entry => entry.type !== 'image') && entries.some(entry => entry.type === 'image');
+  if (privateImages) bindings = await localizeFigureImages(declarations, bindings);
+  const { materializeRegionalMaps } = await import('./regionalAtlas');
+  const html = await materializeRegionalMaps(request.source);
+  const issue = await inspectInBackground(html, bindings);
+  if (issue) {
+    if (needsHistory && Object.entries(declarations).some(([key, entry]) => usesRecordedData(entry) && !bindings[key])) {
+      return { deferred: true };
+    }
+    throw Error(issue);
+  }
+  return {
+    renderedSource: html === request.source ? undefined : html,
+    bindings: needsHistory || privateImages ? bindings : undefined,
+  };
 }

@@ -238,7 +238,8 @@ export interface SessionTurnCatalog {
   entries: SessionTurnCatalogEntry[];
 }
 
-export type PublishedFigures = Record<string, { source: string; contentBytes: number } | null>;
+export type FigureBindingSnapshot = Record<string, { kind: 'json' | 'file' | 'image'; value: unknown }>;
+export type PublishedFigures = Record<string, { source: string; contentBytes: number; bindings?: FigureBindingSnapshot } | null>;
 
 export interface DialogTurnData {
   publishedFigures?: PublishedFigures;

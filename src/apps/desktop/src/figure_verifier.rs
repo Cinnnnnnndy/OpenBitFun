@@ -1,10 +1,10 @@
 //! The producing desktop shell checks a figure without navigating a webview.
-use openbitfun_core::agentic::inline_figure::register_figure_verifier;
+use openbitfun_core::agentic::inline_figure::{register_figure_verifier, FigureCheckResult};
 use std::{sync::Arc, time::Duration};
 use tauri::{AppHandle, Emitter, EventTarget, Listener, Manager};
 
 pub(crate) fn install(app: AppHandle) {
-    register_figure_verifier(Arc::new(move |source| {
+    register_figure_verifier(Arc::new(move |request| {
         let app = app.clone();
         Box::pin(async move {
             if app.get_webview("main").is_none() {
@@ -15,7 +15,7 @@ pub(crate) fn install(app: AppHandle) {
             let (send, receive) = tokio::sync::oneshot::channel();
             let handle = app.once(reply, move |event| {
                 let result =
-                    serde_json::from_str::<Result<Option<String>, String>>(event.payload())
+                    serde_json::from_str::<Result<FigureCheckResult, String>>(event.payload())
                         .map_err(|_| "Invalid renderer response".to_owned())
                         .and_then(|result| result);
                 let _ = send.send(result);
@@ -31,10 +31,10 @@ pub(crate) fn install(app: AppHandle) {
             app.emit_to(
                 EventTarget::webview("main"),
                 "figure-check",
-                serde_json::json!({"id": id, "source": source}),
+                serde_json::json!({"id": id, "request": request}),
             )
             .map_err(|e| e.to_string())?;
-            tokio::time::timeout(Duration::from_secs(20), receive)
+            tokio::time::timeout(Duration::from_secs(30), receive)
                 .await
                 .map_err(|_| {
                     "FlowChat renderer did not respond on the producing device".to_owned()

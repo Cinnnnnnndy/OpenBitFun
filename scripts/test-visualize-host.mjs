@@ -35,7 +35,8 @@ async function testHost() {
     assert.equal(await page.$('.flow-tool-card-wrapper'), null);
     const until = Date.now() + 30000;
     while (Date.now() < until) {
-      const frame = await iframe.contentFrame();
+      const container = await iframe.contentFrame();
+      const frame = container?.childFrames()[0] ?? container;
       if (
         frame &&
         (await frame
@@ -81,13 +82,51 @@ async function testHost() {
     }, {}, reader, selector, before);
     await reader.dispose();
   }
-  if (process.env.OPENBITFUN_VISUALIZE_OFFLINE === '1') {
-    await page.setRequestInterception(true);
-    page.on('request', (request) => {
-      if (/^https:\/\//.test(request.url())) void request.abort();
-      else void request.continue();
-    });
+  const photo = 'https://images.example.test/diagram.png';
+  await page.setRequestInterception(true);
+  page.on('request', request => {
+    if (request.url() === photo) {
+      void request.respond({
+        status: 200, contentType: 'image/png', headers: { 'Access-Control-Allow-Origin': '*' },
+        body: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aT1sAAAAASUVORK5CYII=', 'base64'),
+      });
+    } else if (process.env.OPENBITFUN_VISUALIZE_OFFLINE === '1' && request.url().startsWith('https://')) {
+      void request.abort();
+    } else void request.continue();
+  });
+  const privateFigure = await open('<!-- vis-bindings\n' + JSON.stringify({
+    rows: { type: 'json', value: [2, 3] }, photo: { type: 'image', url: photo },
+  }) + '\n-->\n' +
+    '<output>Loading</output><img alt="Diagram"><script>const visual = window.openai.visualization;' +
+    'visual.onData("rows", rows => { document.querySelector("output").textContent=String(rows.length); });' +
+    'visual.onData("photo", src => { document.querySelector("img").src=src; });</script>');
+  assert.equal(await privateFigure.$eval('output', el => el.textContent), '2');
+  await privateFigure.waitForFunction(() => document.querySelector('img').naturalWidth === 1);
+  assert.match(await privateFigure.$eval('img', el => el.src), /^data:image\/png;base64,/);
+  for (const frame of [privateFigure, privateFigure.parentFrame()]) {
+    const policy = await frame.$eval('meta[http-equiv="Content-Security-Policy"]', el => el.content);
+    assert.ok(policy.includes("frame-src 'none'"));
+    assert.ok(!policy.includes('https:'));
   }
+  const checkedCsv = await page.evaluate(async () => {
+    const { inspectWrittenFigure } = await import('/src/tools/visualize/backgroundInspection.ts');
+    const root = 'openbitfun://current-session/artifacts/visualizations/v2/';
+    const csv = 'city,count\nShanghai,3';
+    const request = { sessionId: 'owner', turnId: 'turn', toolCallId: 'plot', uri: root + 'map.html',
+      source: '<!-- vis-bindings\n{"rows":{"type":"file","path":"./cities.csv"}}\n-->\n' +
+        '<main data-visual-map><svg viewBox="0 0 120 80"></svg></main><script>openai.visualization.onData("rows", async f => {' +
+        `if ((await f.blob.text()).includes("Shanghai,3")) document.querySelector("svg").innerHTML='<path d="M2 3L90 4L60 60Z"/>'; });</script>`,
+    };
+    const file = { type:'tool', toolName:'Write', status:'completed', toolCall: { id:'csv', input:{payload:'+++ '+root+'cities.csv\n'+csv} },
+      toolResult:{success:true,result:{file_path:root+'cities.csv',content_bytes:csv.length}} };
+    const write = { type:'tool', toolName:'Write', toolCall:{id:'plot',input:{}} };
+    const session = { sessionId:'owner', dialogTurns:[{ id:'turn',modelRounds:[{items:[file,write]}] }] };
+    return { checked: await inspectWrittenFigure(request, async () => session),
+      unattached: await inspectWrittenFigure(request, async () => undefined) };
+  });
+  assert.equal(checkedCsv.checked.bindings.rows.value.text, 'city,count\nShanghai,3');
+  assert.deepEqual(checkedCsv.unattached, { deferred: true });
+  console.log('Passed private frame policy and background rendering with the producing call’s CSV snapshot.');
   const background = await page.evaluate(async () => {
     const { inspectInBackground } = await import('/src/tools/visualize/backgroundInspection.ts');
     const backgroundFrames = () => document.querySelectorAll('body > iframe[inert][aria-hidden="true"]').length;

@@ -197,7 +197,7 @@ describe('scoped v2 data bindings', () => {
   const tool = { ...write('data', ''), toolName: 'CallDeferredTool', toolCall: { id: 'data', input: { tool_name: 'Counts', args: { b: 2, a: 1 } } }, toolResult: { success: true, result: { count: 9 } } };
   const header = (declarations: unknown) => '<!-- vis-bindings\n' + JSON.stringify(declarations) + '\n-->\n<output/>';
   it('delivers only the matching producer, source and arguments; replay excludes later data', async () => {
-    const { readBindings, resolveBindingSnapshots } = await import('./visualBindings');
+    const { readBindings, resolveBindingSnapshots, inspectionBindings } = await import('./visualBindings');
     const source = header({
       rows: { type: 'file', path: './counts.csv' }, catalog: { type: 'library', libraryFileId: 'libfile_sales', refreshIntervalSeconds: 15 },
       counts: { type: 'tool', tool: 'Counts', arguments: { a: 1, b: 2 }, refreshIntervalSeconds: 60 }, baseline: { type: 'json', value: 0 },
@@ -210,6 +210,11 @@ describe('scoped v2 data bindings', () => {
     const later = { ...tool, toolResult: { success: true, result: { count: 1000 } } };
     const session = history([file, library, tool, other, figure, later]);
     const result = resolveBindingSnapshots(readBindings(source)!, session, figure, figureUri);
+    session.sessionId = 'producer';
+    const owner = { sessionId: session.sessionId, turnId: session.dialogTurns[0].id, toolCallId: figure.toolCall.id, uri: figureUri };
+    expect(inspectionBindings(readBindings(source)!, session, owner)).toEqual(result);
+    expect(inspectionBindings(readBindings(source)!, session, { ...owner, sessionId: 'other' })).toBeUndefined();
+    expect(inspectionBindings(readBindings(source)!, session, { ...owner, toolCallId: 'unknown' })).toBeUndefined();
     expect(result.counts).toEqual({ kind: 'json', value: { count: 9 } });
     expect(result.rows.value).toEqual({ text: 'n\n2', name: 'counts.csv', mimeType: 'text/csv' });
     expect(result.catalog.value).toMatchObject({ text: 'latest' });
@@ -228,6 +233,9 @@ describe('scoped v2 data bindings', () => {
     const source = '<b>Δ</b>';
     Object.assign(edit.toolResult.result, { visualization_source: source, content_bytes: new TextEncoder().encode(source).length });
     expect(readVisualRevision(history([original, edit, message]), original, message.id, figureUri)).toBe(source);
+    const editedTurn = history([original, edit, message]);
+    expect(findVisualWrite(editedTurn, message.id, figureUri)).toBe(original);
+    expect(findVisualWrite(editedTurn, message.id, figureUri, undefined, 'revision')).toBe(edit);
     const nextTurn = history([original], [edit, message]);
     expect(readVisualRevision(nextTurn, findVisualWrite(nextTurn, message.id, figureUri), message.id, figureUri)).toBe(source);
     Object.assign(edit.toolResult.result, { content_bytes: 0 });
@@ -269,6 +277,18 @@ describe('scoped v2 data bindings', () => {
       reply.content = content;
       expect(missingInlineFigures(turn, reply)).toEqual([]);
     }
+  });
+  it('recovers sealed main figures after receipts are compacted, respecting markers, tombstones and child ownership', () => {
+    const another = figureUri.replace(/[^/]+$/, 'second.html');
+    const rejected = figureUri.replace(/[^/]+$/, 'removed.html');
+    const reply: FlowTextItem = { ...message, status: 'completed', isStreaming: false, content: '[Shown](' + another + ')' };
+    const child = { ...reply, id: 'child', subagentSessionId: 'child-agent', content: 'Child summary' };
+    const turn = history([reply, child]).dialogTurns[0];
+    turn.modelRounds.push({ ...turn.modelRounds[0], items: [] });
+    turn.status = 'completed';
+    turn.publishedFigures = { [figureUri]: { source: 'x', contentBytes: 1 }, [another]: { source: 'y', contentBytes: 1 }, [rejected]: null };
+    expect(missingInlineFigures(turn, reply)).toEqual([figureUri]);
+    expect(missingInlineFigures(turn, child)).toEqual([]);
   });
   it('rejects entire malformed declarations, credentialed image URLs and traversal', async () => {
     const { readBindings } = await import('./visualBindings');

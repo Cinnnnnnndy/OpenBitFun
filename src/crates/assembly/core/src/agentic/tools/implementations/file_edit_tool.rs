@@ -352,10 +352,9 @@ impl Tool for FileEditTool {
         // The editor supports normalized and fuzzy matches. Preserve its exact
         // output for inline replay instead of reimplementing those rules in JS.
         let mut assistant_message = edit_success_message(&resolved.logical_path);
-        if let Some(uri) = written_figure_uri(context, &resolved)
-            .filter(|_| (1..=MAX_SOURCE_BYTES).contains(&edit_result.new_content.len()))
-        {
+        if let Some(uri) = written_figure_uri(context, &resolved) {
             verify_written_figure(
+                context,
                 &uri,
                 &edit_result.new_content,
                 &mut data,
@@ -364,7 +363,9 @@ impl Tool for FileEditTool {
             .await;
             data["visualization_uri"] = json!(uri);
             data["content_bytes"] = json!(edit_result.new_content.len());
-            data["visualization_source"] = json!(edit_result.new_content);
+            if (1..=MAX_SOURCE_BYTES).contains(&edit_result.new_content.len()) {
+                data["visualization_source"] = json!(edit_result.new_content);
+            }
         }
         let result = ToolResult::Result {
             data,

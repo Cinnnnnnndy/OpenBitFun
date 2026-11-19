@@ -159,6 +159,61 @@ fn completed_figure_source(
     }
 }
 
+/// Older writers omitted the URI on empty or oversized writes. Recover that
+/// rejection from recorded sizes without consulting the current file.
+fn restore_rejected_revisions(turn: &mut DialogTurnData, local_root: Option<&Path>) {
+    let mut rejected = std::collections::HashSet::new();
+    for item in turn.model_rounds.iter_mut().flat_map(|r| &mut r.tool_items) {
+        if item.subagent_session_id.is_some()
+            || item.is_subagent_item == Some(true)
+            || item
+                .status
+                .as_deref()
+                .is_some_and(|status| status != "completed")
+        {
+            continue;
+        }
+        let (name, _) = effective_tool_invocation(&item.tool_name, &item.tool_call.input);
+        if !matches!(name, "Write" | "Edit") {
+            continue;
+        }
+        let Some(receipt) = item.tool_result.as_mut().filter(|result| result.success) else {
+            continue;
+        };
+        let result = &mut receipt.result;
+        let Some(uri) = result["visualization_uri"]
+            .as_str()
+            .and_then(|s| figure_uri(s, None))
+            .or_else(|| {
+                result["file_path"]
+                    .as_str()
+                    .and_then(|s| figure_uri(s, local_root))
+            })
+        else {
+            continue;
+        };
+        if result["visualization_uri"].is_null()
+            && result
+                .get("content_bytes")
+                .and_then(Value::as_u64)
+                .is_some_and(|n| n == 0 || n > MAX_SOURCE_BYTES as u64)
+        {
+            result["visualization_uri"] = json!(uri);
+            result["visualization_checked"] = json!(false);
+        }
+        if result["visualization_checked"] == false {
+            rejected.insert(uri);
+        } else {
+            rejected.remove(&uri);
+        }
+    }
+    for uri in rejected {
+        if let Some(snapshot) = turn.published_figures.get_mut(&uri) {
+            *snapshot = None;
+        }
+    }
+}
+
 impl PersistenceManager {
     /// Terminal history reconciliation sends this snapshot to live readers as well as replay.
     /// Keep the original tool input/result intact for readers displaying earlier messages.
@@ -169,6 +224,7 @@ impl PersistenceManager {
     ) {
         use openbitfun_services_core::session::PublishedFigure;
         use std::collections::BTreeSet;
+        restore_rejected_revisions(turn, None);
         if !turn.published_figures.is_empty() {
             return;
         }
@@ -199,10 +255,20 @@ impl PersistenceManager {
                     children.insert(uri);
                 } else {
                     checked.remove(&uri);
-                    if let Some(passed) = receipt.result["visualization_checked"].as_bool() {
+                    if let Some(passed) =
+                        receipt.result["visualization_checked"]
+                            .as_bool()
+                            .or_else(|| {
+                                (receipt.result["visualization_check_deferred"] == true)
+                                    .then_some(true)
+                            })
+                    {
                         let exact = Revision::recorded(item, Some(&root))
                             .and_then(|(_, revision)| revision.apply(None));
-                        checked.insert(uri.clone(), exact.filter(|_| passed));
+                        let bindings = receipt.result["visualization_bindings"]
+                            .as_object()
+                            .cloned();
+                        checked.insert(uri.clone(), (exact.filter(|_| passed), bindings));
                     }
                     registered.insert(uri);
                 }
@@ -242,19 +308,21 @@ impl PersistenceManager {
             let since = (!attested).then_some(turn.start_time);
             let filename = uri.rsplit('/').next().unwrap().to_owned();
             let session = root.clone();
-            let source = if let Some(exact) = checked.remove(uri) {
+            let (source, bindings) = if let Some(exact) = checked.remove(uri) {
                 exact
             } else {
-                tokio::task::spawn_blocking(move || {
+                let source = tokio::task::spawn_blocking(move || {
                     completed_figure_source(&session, &filename, since)
                 })
                 .await
                 .ok()
-                .flatten()
+                .flatten();
+                (source, None)
             };
             turn.published_figures.insert(
                 uri.clone(),
                 source.map(|source| PublishedFigure {
+                    bindings,
                     content_bytes: source.len(),
                     source,
                 }),
@@ -350,6 +418,7 @@ impl PersistenceManager {
                     && figure_uri(path, Some(root)).is_some()
             });
         if !needs_restore {
+            restore_rejected_revisions(turn, None);
             return;
         }
         // A workspace file on an SSH machine can have the same spelling as a host path.
@@ -370,6 +439,7 @@ impl PersistenceManager {
                         == Some(super::LOCAL_WORKSPACE_SSH_HOST)
             })
             .map(|_| root);
+        restore_rejected_revisions(turn, local_root);
         let mut sources = HashMap::new();
         for item in turn
             .model_rounds

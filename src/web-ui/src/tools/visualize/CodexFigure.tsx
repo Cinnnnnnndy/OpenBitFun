@@ -61,11 +61,13 @@ export default function CodexFigure({
   follow,
   uri,
   write,
+  checkedBindings,
   getSession,
   subscribe,
 }: {
   uri: string;
   write: FlowToolItem | FlowTextItem;
+  checkedBindings?: BoundValues;
   getSession: () => Session | undefined;
   subscribe: (notify: () => void) => () => void;
   html: string;
@@ -115,8 +117,8 @@ export default function CodexFigure({
   const presentation = useRef<MessagePort | null>(null);
   const declarations = useMemo(() => readBindings(html), [html]);
   const bindings = useMemo(
-    () => resolveBindingSnapshots(declarations ?? {}, getSession(), write, uri),
-    [declarations, getSession, write, uri],
+    () => checkedBindings ?? resolveBindingSnapshots(declarations ?? {}, getSession(), write, uri),
+    [checkedBindings, declarations, getSession, write, uri],
   );
   const [sourcesOpen, setSourcesOpen] = useState(false);
   const [selectedSources, setSelectedSources] = useState<string[] | null>(null);

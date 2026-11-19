@@ -126,12 +126,39 @@ export function fileValue(name: string, text: string): BoundValue | undefined {
   };
 }
 
+export function usesRecordedData(binding: Binding) {
+  return binding.type === 'file' || binding.type === 'library' || binding.type === 'tool';
+}
+
+export interface FigureOwner {
+  sessionId?: string | null;
+  turnId?: string | null;
+  toolCallId?: string | null;
+  uri: string;
+}
+
+/** A missing producing call can be a headless or temporarily detached reader.
+ * It must not borrow data from the selected chat or a later call. */
+export function inspectionBindings(declarations: Declarations, session: Session | undefined, owner?: FigureOwner) {
+  if (!Object.values(declarations).some(usesRecordedData)) {
+    return resolveBindingSnapshots(declarations, undefined, undefined, owner?.uri ?? '');
+  }
+  if (!owner?.toolCallId || !session || session.sessionId !== owner.sessionId) return;
+  const turn = session.dialogTurns.find(item => item.id === owner.turnId);
+  const candidates = turn?.modelRounds.flatMap(round => round.items).filter((item): item is FlowToolItem =>
+    item.type === 'tool' && item.toolCall.id === owner.toolCallId && !item.importedSource);
+  if (candidates?.length !== 1) return;
+  const [write] = candidates;
+  if (!['Write', 'Edit'].includes(projectEffectiveToolItem(write).toolName)) return;
+  return resolveBindingSnapshots(declarations, session, write, owner.uri);
+}
+
 // Only the producing turn, subagent, and successful inputs available before the
 // figure was written can supply its data. Replay never resolves an owner path on the reader.
 export function resolveBindingSnapshots(
   declarations: Declarations,
   session: Session | undefined,
-  write: FlowToolItem | FlowTextItem,
+  write: FlowToolItem | FlowTextItem | undefined,
   uri: string,
 ): BoundValues {
   const values: BoundValues = Object.create(null);
@@ -140,7 +167,7 @@ export function resolveBindingSnapshots(
     if (binding.type === 'json') values[key] = { kind: 'json', value: binding.value };
     if (binding.type === 'image') values[key] = { kind: 'image', value: binding.url };
   }
-  if (!entries.some(([, b]) => ['file', 'library', 'tool'].includes(b.type))) return values;
+  if (!write || !entries.some(([, b]) => usesRecordedData(b))) return values;
   const turn = session?.dialogTurns.find((t) => t.modelRounds.some((r) => r.items.includes(write)));
   for (const round of turn?.modelRounds ?? []) {
     for (const raw of round.items) {

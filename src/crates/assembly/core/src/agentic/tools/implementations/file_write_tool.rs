@@ -1,7 +1,7 @@
 use super::plan_artifact_diagnostics::{
     diagnose_plan_artifact, is_plan_artifact_path, PlanArtifactIssue,
 };
-use crate::agentic::inline_figure::{verify_written_figure, written_figure_uri, MAX_SOURCE_BYTES};
+use crate::agentic::inline_figure::{verify_written_figure, written_figure_uri};
 use crate::agentic::tools::file_permissions::file_permission_intents_allowing_managed_plan_edits;
 use crate::agentic::tools::file_tool_guidance::is_file_tool_guidance_message;
 use crate::agentic::tools::framework::{
@@ -159,7 +159,7 @@ impl FileWriteTool {
         parameter_names
     }
 
-    async fn check_figure(result: &mut ToolResult, source: &str) {
+    async fn check_figure(context: &ToolUseContext, result: &mut ToolResult, source: &str) {
         if let ToolResult::Result {
             data,
             result_for_assistant: Some(message),
@@ -167,7 +167,7 @@ impl FileWriteTool {
         } = result
         {
             if let Some(uri) = data["visualization_uri"].as_str().map(str::to_owned) {
-                verify_written_figure(&uri, source, data, message).await;
+                verify_written_figure(context, &uri, source, data, message).await;
                 data["message"] = json!(message);
             }
         }
@@ -215,7 +215,6 @@ impl FileWriteTool {
             assistant_message
                 .push_str("\nUse Edit on the written file to fix these issues before finishing.");
         }
-        let figure_uri = figure_uri.filter(|_| (1..=MAX_SOURCE_BYTES).contains(&content_bytes));
         let mut data = json!({
             "file_path": logical_path,
             "bytes_written": outcome.bytes_written,
@@ -556,7 +555,7 @@ impl Tool for FileWriteTool {
                 &ignored_parameter_names,
                 plan_artifact_issues.as_deref(),
             );
-            Self::check_figure(&mut result, &content).await;
+            Self::check_figure(context, &mut result, &content).await;
             return Ok(vec![result]);
         }
 
@@ -599,7 +598,7 @@ impl Tool for FileWriteTool {
             plan_artifact_issues.as_deref(),
         );
 
-        Self::check_figure(&mut result, &content).await;
+        Self::check_figure(context, &mut result, &content).await;
         Ok(vec![result])
     }
 }
@@ -838,6 +837,62 @@ mod tests {
                 .expect("successful existence probe should retain Write behavior");
             assert_eq!(fs.writes.load(Ordering::SeqCst), expected_writes);
         }
+    }
+
+    #[tokio::test]
+    async fn visual_artifact_receipts_invalidate_replacements_and_select_mobile_delivery() {
+        let root = tempfile::tempdir().unwrap();
+        let mut context = local_context(root.path().join("workspace"));
+        context.session_id = Some("owner".into());
+        context
+            .custom_data
+            .insert("__openbitfun_test_runtime_root".into(), json!(root.path()));
+        let uri = "openbitfun://current-session/artifacts/visualizations/v2/map.html";
+        let write = |content: &str| json!({"payload": format!("+++ {uri}\n{content}")});
+        for body in ["".into(), "x".repeat(1024 * 1024 + 1)] {
+            let result = FileWriteTool::new()
+                .call_impl(&write(&body), &context)
+                .await
+                .unwrap();
+            let ToolResult::Result { data, .. } = &result[0] else {
+                panic!("missing receipt")
+            };
+            assert_eq!(data["visualization_uri"], uri);
+            assert_eq!(data["visualization_checked"], false);
+        }
+        context.custom_data.insert(
+            openbitfun_agent_runtime::remote_file_delivery::TOOL_CONTEXT_REMOTE_FILE_DELIVERY_KEY
+                .into(),
+            true.into(),
+        );
+        let result = FileWriteTool::new()
+            .call_impl(&write("<h1>Map</h1>"), &context)
+            .await
+            .unwrap();
+        let ToolResult::Result {
+            data,
+            result_for_assistant,
+            ..
+        } = &result[0]
+        else {
+            panic!("missing receipt")
+        };
+        assert_eq!(data["visualization_checked"], false);
+        let hint = result_for_assistant.as_deref().unwrap();
+        assert!(hint.contains("computer://"));
+        assert!(!hint.contains("automatically"));
+        let svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 20 20\"><circle cx=\"10\" cy=\"10\" r=\"4\"/></svg>";
+        let standalone = format!("+++ artifacts/map.svg\n{svg}");
+        FileWriteTool::new()
+            .call_impl(&json!({"payload":standalone}), &context)
+            .await
+            .unwrap();
+        assert_eq!(
+            tokio::fs::read_to_string(root.path().join("workspace/artifacts/map.svg"))
+                .await
+                .unwrap(),
+            svg
+        );
     }
 
     #[tokio::test]

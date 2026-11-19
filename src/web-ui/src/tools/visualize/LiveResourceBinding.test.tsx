@@ -11,12 +11,19 @@ const host = vi.hoisted(() => ({
   read: vi.fn(),
   current: vi.fn(),
 }));
+vi.mock('@/infrastructure/services/business/workspaceManager', () => ({
+  workspaceManager: { getState: () => ({
+    openedWorkspaces: new Map([['project', { id: 'project', workspaceKind: 'normal' }]]),
+    recentWorkspaces: [{ id: 'ssh', workspaceKind: 'remote' }],
+  }) },
+}));
 vi.mock('@/infrastructure/api/service-api/ChatMcpAPI', () => ({ getChatMcpCatalog: vi.fn() }));
 vi.mock('@/infrastructure/i18n', () => ({ useI18n: () => ({ t: (s: string) => s }) }));
 vi.mock('@/infrastructure/api/service-api/MCPAPI', () => ({
   MCPAPI: { getServers: host.servers, listResources: host.list, readResource: host.read },
 }));
-vi.mock('@/infrastructure/peer-device/deviceSurface', () => ({
+vi.mock('@/infrastructure/peer-device/deviceSurface', async importOriginal => ({
+  ...await importOriginal<typeof import('@/infrastructure/peer-device/deviceSurface')>(),
   getActiveSurfaceScope: () => ({ surfaceId: 'local', isCurrent: host.current, assertCurrent: () => {} }),
   isLocalSurface: () => true,
 }));
@@ -51,7 +58,7 @@ it('polls only a reader-selected resource, retries offline, and drops replies af
     .mockResolvedValue({ contents: [{ uri: 'weather://daily', text: '{"temp":17}' }] });
   const received = vi.fn();
   const view = render(
-    <LiveResourceBinding session={{} as Session} format="json" interval={15} onData={received} />,
+    <LiveResourceBinding session={{ workspaceId: 'project' } as Session} format="json" interval={15} onData={received} />,
   );
   await act(async () => {
     view.querySelector('button')!.click();
@@ -76,11 +83,11 @@ it('polls only a reader-selected resource, retries offline, and drops replies af
   root = undefined;
   expect(vi.getTimerCount()).toBe(0);
 });
-it('gates remote workspace data instead of consulting the reader machine', async () => {
+it.each([{ workspaceId: 'ssh' }, { workspaceId: 'missing' }, {}, { workspaceId: 'project', remoteConnectionId: 'ssh-other' }])('requires an identified local workspace for discovery: %o', async (session) => {
   host.current.mockReturnValue(true);
   const view = render(
     <LiveResourceBinding
-      session={{ remoteConnectionId: 'ssh-other' } as Session}
+      session={session as Session}
       format="file"
       interval={15}
       onData={vi.fn()}

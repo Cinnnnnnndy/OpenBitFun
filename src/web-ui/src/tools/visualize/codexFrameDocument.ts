@@ -1,4 +1,5 @@
 import type { BoundValues, Declarations } from './visualBindings';
+import { localizeFigureImages } from './figureImages';
 import { cachedVisualRuntime } from './cachedVisualRuntime';
 import builtInGuest from './figureGuest.js?raw';
 import builtInControls from './figureDesignControls.js?raw';
@@ -28,6 +29,29 @@ const cdns = [
   'https://fonts.gstatic.com',
 ].join(' ');
 const components = 'https://persistent.oaistatic.com/plugins/visualize/';
+// Private figures run entirely on packaged scripts and local bytes. Keep a
+// trusted parent around the guest so its own frame navigations are also scoped.
+const offlineCsp = [
+  "default-src 'none'", "base-uri 'none'", "form-action 'none'", "frame-src 'none'", "object-src 'none'",
+  "script-src 'unsafe-inline' 'unsafe-eval' blob: data:", "style-src 'unsafe-inline' blob: data:",
+  "connect-src blob: data:", "worker-src blob:", "img-src blob: data:", "font-src blob: data:",
+  "media-src blob: data:", "webrtc 'block'",
+].join('; ');
+
+function offlineFrame(document: string) {
+  const serialized = JSON.stringify(document).replace(/</g, '\\u003c');
+  return '<!doctype html><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="' +
+    offlineCsp + '"><meta http-equiv="x-dns-prefetch-control" content="off">' +
+    '<style>html,body,iframe{width:100%;height:100%;margin:0;border:0;display:block;overflow:hidden}</style><body>' +
+    script(`const frame=document.createElement('iframe');frame.setAttribute('sandbox','allow-scripts');
+      frame.referrerPolicy='no-referrer';frame.title='Visualization';
+      addEventListener('message',event=>{
+        const target=event.source===parent?frame.contentWindow:event.source===frame.contentWindow?parent:null;
+        if(target)target.postMessage(event.data,'*',event.ports);
+      });
+      frame.srcdoc=${serialized};document.body.append(frame);`);
+}
+
 const csp = (images: string[]) =>
   [
     "default-src 'none'",
@@ -81,23 +105,28 @@ export async function buildCodexFrame(
     const { default: charts } = await import('echarts/dist/echarts.min.js?raw');
     extensions += script(charts) + script(chartTheme);
   }
+  const privateData = state != null || Object.values(declarations).some(binding => binding.type !== 'image') ||
+    Object.values(values).some(entry => entry.kind !== 'image');
   const images = Object.values(declarations).flatMap((binding) =>
-    binding.type === 'image' ? [new URL(binding.url).origin] : [],
+    binding.type === 'image' && binding.url.startsWith('https:') ? [new URL(binding.url).origin] : [],
   );
-  const bindings = JSON.stringify({ declarations, values, figureStyle }).replace(/</g, '\\u003c');
+  if (privateData) values = await localizeFigureImages(declarations, values);
+  const guestDeclarations = privateData ? Object.fromEntries(Object.entries(declarations).map(([name, binding]) =>
+    [name, binding.type === 'image' ? { type: 'image', url: values[name].value } : binding])) : declarations;
+  const bindings = JSON.stringify({ declarations: guestDeclarations, values, figureStyle }).replace(/</g, '\\u003c');
   const initial = JSON.stringify({ widgetState: state, statePersistence: 'local' }).replace(/</g, '\\u003c');
-  const cache = await cachedVisualRuntime(fragment);
+  const cache = await cachedVisualRuntime(fragment, privateData);
   let kit = (assets['visualize.html'] ?? '<!--__INLINE_VISUALIZATION_FRAGMENT__-->').replace(
     '<!--__INLINE_VISUALIZATION_FRAGMENT__-->',
     () => extensions + cache.fragment,
   );
   if (cache.lucide) kit = kit.replace(/<script id="codex-visualization-lucide"[^>]*><\/script>/, '');
-  return (
+  const document = (
     '<!doctype html><html lang="' +
     (/^[a-z\d-]+$/i.test(lang) ? lang : 'en') +
     '"><head>' +
     '<meta charset="utf-8"><meta name="referrer" content="no-referrer"><meta http-equiv="Content-Security-Policy" content="' +
-    csp(images) +
+    (privateData ? offlineCsp : csp(images)) +
     '">' +
     '<meta name="viewport" content="width=device-width, initial-scale=1"><style>' +
     (assets['visualize.css'] ?? builtInStyles) +
@@ -115,4 +144,5 @@ export async function buildCodexFrame(
     kit +
     '</body></html>'
   );
+  return privateData ? offlineFrame(document) : document;
 }

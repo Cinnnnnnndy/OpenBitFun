@@ -5474,6 +5474,8 @@ mod tests {
         receipt["visualization_checked"] = true.into();
         receipt["visualization_rendered_source"] = "<svg/>".into();
         receipt["visualization_rendered_bytes"] = 6.into();
+        receipt["visualization_bindings"] =
+            serde_json::json!({"rows":{"kind":"json","value":[1,2]}});
         manager
             .seal_completed_figures(workspace.path(), &mut checked)
             .await;
@@ -5481,6 +5483,27 @@ mod tests {
             checked.published_figures[uri].as_ref().unwrap().source,
             "<svg/>"
         );
+        let persisted = serde_json::to_value(&checked).unwrap();
+        assert_eq!(
+            persisted["publishedFigures"][uri]["bindings"]["rows"]["value"],
+            serde_json::json!([1, 2])
+        );
+        for n in [0, 1024 * 1024 + 1] {
+            let mut overwritten = checked.clone();
+            let mut replacement = overwritten.model_rounds[0].tool_items[0].clone();
+            replacement.tool_result.as_mut().unwrap().result =
+                serde_json::json!({"file_path":uri, "content_bytes":n});
+            overwritten.model_rounds[0].tool_items.push(replacement);
+            manager
+                .seal_completed_figures(workspace.path(), &mut overwritten)
+                .await;
+            assert_eq!(overwritten.published_figures[uri], None);
+            overwritten.published_figures.clear();
+            manager
+                .seal_completed_figures(workspace.path(), &mut overwritten)
+                .await;
+            assert_eq!(overwritten.published_figures[uri], None);
+        }
         checked.published_figures.clear();
         checked.model_rounds[0].tool_items[0]
             .tool_result
