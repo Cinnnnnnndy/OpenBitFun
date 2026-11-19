@@ -1,7 +1,7 @@
 import type { FlowItem, FlowTextItem, FlowToolItem } from '../types/flow-chat';
 import { READ_TOOL_NAMES, SEARCH_TOOL_NAMES } from '../tool-cards/toolCardMetadata';
 import { splitFilePathAndContent } from '@/shared/utils/partialJsonParser';
-import { isCodexVisualUri, visualArtifactUri, visualSidecarUri, visualReceiptPath } from '@/tools/visualize/reference';
+import { isCodexVisualUri, visualArtifactUri, visualSidecarUri, visualReceiptPath, visualArtifactRoot } from '@/tools/visualize/reference';
 import { DEFERRED_TOOL_GATEWAY_NAME, projectEffectiveToolItem } from './toolInvocationIdentity';
 
 /** Shared by leaf cards and transcript composition so hidden cards leave no row. */
@@ -16,16 +16,26 @@ export function isToolCardVisible(toolItem: FlowToolItem): boolean {
     || (item.status !== 'completed' && (item.acpPermission || (item.requiresConfirmation && !item.userConfirmed)))) {
     return true;
   }
-  if (item.isParamsStreaming && item.toolName === DEFERRED_TOOL_GATEWAY_NAME && !item.toolCall?.input?.tool_name) {
+  const input = item.toolCall?.input;
+  if (item.isParamsStreaming && toolItem.toolName === DEFERRED_TOOL_GATEWAY_NAME &&
+      (!toolItem.toolCall.input?.tool_name || ['Skill', 'Write', 'Edit'].some(name =>
+        name !== item.toolName && name.startsWith(item.toolName)))) {
     return false;
+  }
+  if (item.toolName === 'Skill') {
+    const skill = item.toolResult?.result?.skill_name ?? input?.command;
+    if (item.isParamsStreaming && (!skill || 'visualize'.startsWith(skill))) return false;
+    return skill !== 'visualize';
   }
   if (item.toolName === 'Edit') {
     const path = visualReceiptPath(item.toolResult?.result) ?? item.toolCall?.input?.file_path;
-    return typeof path !== 'string' || !isCodexVisualUri(path);
+    // Partial JSON can contain only the first characters of the destination.
+    if (item.isParamsStreaming && (!path || (typeof path === 'string' &&
+        (visualArtifactRoot.startsWith(path) || path.startsWith(visualArtifactRoot))))) return false;
+    return typeof path !== 'string' || !(isCodexVisualUri(path) || visualSidecarUri.test(path));
   }
   if (item.toolName !== 'Write') return true;
 
-  const input = item.toolCall?.input;
   const payload = input?.payload;
   const destination = visualReceiptPath(item.toolResult?.result)
     ?? splitFilePathAndContent(payload)?.filePath

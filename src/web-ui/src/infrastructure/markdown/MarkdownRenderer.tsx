@@ -934,7 +934,6 @@ export interface MarkdownRendererProps {
   isStreaming?: boolean;
   expandDetailsByDefault?: boolean;
   renderArtifactLink?: (href: string, label: string, wide?: boolean) => React.ReactNode;
-  renderArtifactReference?: (text: string) => React.ReactNode;
   onOpenVisualization?: (visualization: any) => void;
   onFileViewRequest?: (filePath: string, fileName: string, lineRange?: LineRange) => void;
   /** File IO belongs to the supplied callback; host explorer/browser actions are unavailable. */
@@ -968,7 +967,6 @@ const MarkdownSurface = React.memo<MarkdownRendererProps & { thinking?: boolean;
   expandDetailsByDefault = false,
   onOpenVisualization,
   renderArtifactLink,
-  renderArtifactReference,
   onFileViewRequest,
   fileActionsViaCallbackOnly = false,
   onImageRead,
@@ -995,7 +993,6 @@ const MarkdownSurface = React.memo<MarkdownRendererProps & { thinking?: boolean;
   const currentWorkspacePathRef = useLiveValueRef(fileAccess?.scope.workspacePath ?? currentWorkspacePath);
   const expandDetailsByDefaultRef = useLiveValueRef(expandDetailsByDefault);
   const renderArtifactLinkRef = useLiveValueRef(renderArtifactLink);
-  const renderArtifactReferenceRef = useLiveValueRef(renderArtifactReference);
   const onOpenVisualizationRef = useLiveValueRef(onOpenVisualization);
   const onFileViewRequestRef = useLiveValueRef(onFileViewRequest);
   const fileActionsViaCallbackOnlyRef = useLiveValueRef(fileActionsViaCallbackOnly);
@@ -1736,10 +1733,6 @@ const MarkdownSurface = React.memo<MarkdownRendererProps & { thinking?: boolean;
     
     p({ node, children, align, style, className, ...props }: any) {
       const only = node?.children?.length === 1 ? node.children[0] : undefined;
-      if (renderArtifactReferenceRef.current && only?.type === 'text') {
-        const artifact = renderArtifactReferenceRef.current(only.value);
-        if (artifact) return artifact;
-      }
       if (renderArtifactLinkRef.current && only?.tagName === 'a'
         && only.children?.length === 1 && only.children[0].type === 'text') {
         const artifact = renderArtifactLinkRef.current(only.properties?.href, only.children[0].value);
@@ -1758,7 +1751,6 @@ const MarkdownSurface = React.memo<MarkdownRendererProps & { thinking?: boolean;
   }), [
     thinking,
     renderArtifactLinkRef,
-    renderArtifactReferenceRef,
     onFileDownloadRef,
     onImageReadRef,
     onImagePreviewRef,

@@ -17,7 +17,7 @@ For city and regional maps use that declaration directly with the requested plac
 
 For architectural diagrams and mockups, use readable HTML and SVG. Label responsibilities, relationships and direction. Provide a working selection or input when it explains something. Use native buttons and inputs, explicit axis labels and units, responsive dimensions and theme variables such as --foreground, --background, --muted-foreground and --viz-series-1. Tabs with role="tab" select panels by aria-controls. For charts the frame supplies Apache ECharts when the fragment uses echarts.init(). Give the chart a nonzero height and resize it with its container. For a simulation implement the moving object and mark it with data-visual-motion so the host can check it. Respect reduced motion and keep essential labels visible.
 
-Write and Edit check the fragment in the background. For a map the host resolves the atlas declaration and checks the resulting geometry. Read the tool result and repair reported errors with Edit on the same URI. Skip temporary scripts, local servers and browser previews. Put the successful reference on its own line in the final answer, using the returned path.
+Write and Edit check the fragment in the background. For a map the host resolves the atlas declaration and checks the resulting geometry. Read the tool result and repair reported errors with Edit on the same URI. Skip temporary scripts, local servers and browser previews. Finish with a short reader-facing reply. FlowChat attaches the checked figure automatically. To position multiple figures in a particular order, copy each exact reference onto its own line.
 
     visualize{"path":"openbitfun://current-session/artifacts/visualizations/v2/city-map.html"}
 

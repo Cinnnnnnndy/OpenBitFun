@@ -124,7 +124,7 @@ const FlowToolCardCard: React.FC<FlowToolCardProps> = React.memo(({
     fallbackContent: staticAgentWaitCapsule ? undefined : <ToolCapsuleRecord item={effectiveToolItem} />,
   } : undefined;
 
-  if (!isToolCardVisible(effectiveToolItem)) return null;
+  if (!isToolCardVisible(toolItem)) return null;
 
   return (
     <div

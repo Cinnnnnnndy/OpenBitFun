@@ -50,7 +50,7 @@ pub(super) fn written_figure_uri(
 }
 
 pub(super) fn reference_hint(uri: &str) -> String {
-    format!("\nFlowChat has the inline source. To display it, put this reference on its own line in your final reply:\nvisualize{}", serde_json::json!({ "path": uri }))
+    format!("\nFlowChat attaches this figure to your final reply automatically. Reply in ordinary prose. For explicit placement among several figures, the optional standalone reference is:\nvisualize{}", serde_json::json!({ "path": uri }))
 }
 
 /// Implemented by the producing host. Headless runtimes defer the check to the reader.

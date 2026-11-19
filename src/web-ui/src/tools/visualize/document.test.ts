@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { FlowTextItem, FlowToolItem, Session } from '@/flow_chat/types/flow-chat';
 import { buildFlowItemGroups } from '@/flow_chat/grouping/roundGroups';
 import { isToolCardVisible } from '@/flow_chat/utils/flowItemVisibility';
+import { visualReplyParts } from './reference';
 import { filterVisualTable, parseVisualDocument } from './document';
 import { findVisualWrite, missingInlineFigures, readVisualWrite, readVisualRevision } from './writeSnapshot';
 
@@ -116,6 +117,25 @@ describe('session-scoped visual sources', () => {
     expect(isToolCardVisible({ ...visual, status: 'pending_confirmation' })).toBe(true);
     expect(isToolCardVisible({ ...visual, status: 'error' })).toBe(true);
     expect(isToolCardVisible({ ...visual, importedSource: 'codex' })).toBe(true);
+  });
+
+  it.each([false, true])('keeps background cards absent from the first parameter fragment (deferred=%s)', deferred => {
+    const path = 'openbitfun://current-session/artifacts/visualizations/v2/map.html';
+    function streaming(name: string, args: Record<string, unknown>): FlowToolItem {
+      return { ...write('id', ''), toolName: deferred ? 'CallDeferredTool' : name,
+        toolCall: { id: 'id', input: deferred ? { tool_name: name, args } : args },
+        status: 'streaming', isParamsStreaming: true, toolResult: undefined };
+    }
+    for (let end = 0; end <= path.length; end++) {
+      expect(isToolCardVisible(streaming('Edit', { file_path: path.slice(0, end) }))).toBe(false);
+    }
+    for (let end = 0; end <= 'visualize'.length; end++) {
+      expect(isToolCardVisible(streaming('Skill', { command: 'visualize'.slice(0, end) }))).toBe(false);
+    }
+    expect(isToolCardVisible(streaming('Edit', { file_path: 'src/app.js' }))).toBe(true);
+    expect(isToolCardVisible(streaming('Skill', { command: 'search' }))).toBe(true);
+    expect(isToolCardVisible({ ...streaming('Edit', { file_path: path }), status: 'pending_confirmation' })).toBe(true);
+    if (deferred) expect(isToolCardVisible(streaming('Edi', {}))).toBe(false);
   });
 
   it('reopens the matching successful revision in an old serialized tool turn', () => {
@@ -234,6 +254,17 @@ describe('scoped v2 data bindings', () => {
     turn.status = 'completed';
     expect(missingInlineFigures(turn, reply)).toEqual([figureUri]);
     expect(missingInlineFigures({ ...turn, status: 'error' }, reply)).toEqual([]);
+    const damaged = '㈀visualize㈁' + JSON.stringify({ path: figureUri }) + '㈂';
+    reply.content = 'Before.\n\n' + damaged + '\n\nAfter.';
+    expect(missingInlineFigures(turn, reply)).toEqual([figureUri]);
+    expect(visualReplyParts(reply.content).join('')).toMatch(/^Before\.\s+After\.$/);
+    for (const marker of [damaged, 'visualize' + JSON.stringify({ path: figureUri }) + '']) {
+      for (let end = 1; end < marker.length; end++) {
+        expect(visualReplyParts(marker.slice(0, end))).toEqual([]);
+      }
+    }
+    expect(visualReplyParts('A ' + figureUri + ' B')).toEqual(['A  B']);
+    expect(visualReplyParts('[Map](' + figureUri + ')')).toEqual([{ path: figureUri, title: 'Map', wide: false }]);
     for (const content of ['[Diagram](' + figureUri + ')', 'visualize' + JSON.stringify({ path: figureUri }) + '']) {
       reply.content = content;
       expect(missingInlineFigures(turn, reply)).toEqual([]);

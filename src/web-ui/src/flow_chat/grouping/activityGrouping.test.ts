@@ -28,7 +28,9 @@ describe('execution activity grouping', () => {
   it('collects scratch edits across visualize rounds and keeps project changes and approval requests visible', () => {
     const prepare = figurePreparation('/work/project');
     const activation = model('load', [tool('activate', 'Skill', { command: 'visualize' })]);
-    expect(prepare(activation.data)?.[0].type).toBe('visualize');
+    expect(prepare(activation.data)).toEqual([]);
+    const streamingSkill = { ...tool('activate', 'Skill', { command: 'visualize' }, 'streaming'), isParamsStreaming: true };
+    expect(prepare(model('load', [streamingSkill]).data)?.some(group => group.type === 'visualize')).toBe(false);
     const scratch = tool('scratch', 'Write', { payload: '+++ /tmp/map/build.js\nexample' });
     const approval = tool('approval', 'ExecCommand', { cmd: 'inspect' }, 'pending_confirmation');
     const project = tool('project', 'Edit', { file_path: '/work/project/build.js' });

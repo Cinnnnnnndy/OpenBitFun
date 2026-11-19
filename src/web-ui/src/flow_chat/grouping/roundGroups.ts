@@ -223,12 +223,13 @@ export function buildFlowItemGroups({ items, disabled = false, retainCandidates 
   for (const item of items) {
     // A still-undecided call is a grouping boundary even while the leaf waits
     // for its destination. Otherwise the previous group swallows its reasoning.
-    if (!isFlowItemVisible(item) && !(item.type === 'tool' && (item as FlowToolItem).isParamsStreaming)) continue;
+    const visible = isFlowItemVisible(item);
+    if (!visible && !(item.type === 'tool' && (item as FlowToolItem).isParamsStreaming)) continue;
     if (!disabled && isFlowGroupCompanion(item)) {
       pending.push(item);
       continue;
     }
-    const nextCategory = disabled ? undefined : figureMembers?.has(item.id) ? 'visualize' : classifyFlowGroupItem(item, policyOptions);
+    const nextCategory = disabled || !visible ? undefined : figureMembers?.has(item.id) ? 'visualize' : classifyFlowGroupItem(item, policyOptions);
     if (nextCategory) {
       const joinedCategory = joinedFlowGroupCategory(category, nextCategory);
       const continuing = category !== undefined && joinedCategory !== undefined

@@ -1,7 +1,7 @@
 import type { DialogTurn, FlowTextItem, FlowToolItem, Session } from '@/flow_chat/types/flow-chat';
 import { projectEffectiveToolItem } from '@/flow_chat/utils/toolInvocationIdentity';
 import { splitFilePathAndContent } from '@/shared/utils/partialJsonParser';
-import { isCodexVisualUri, readVisualReference, visualArtifactUri, visualReceiptPath } from './reference';
+import { isCodexVisualUri, visualReplyParts, visualArtifactUri, visualReceiptPath } from './reference';
 
 /** Some models replace the content-reference marker with prose. Recover only
  * completed figure receipts preceding the final answer in this exact turn. */
@@ -20,10 +20,8 @@ export function missingInlineFigures(turn: DialogTurn | undefined, reply: FlowTe
     for (const item of round.items) {
       if (item.subagentSessionId !== reply.subagentSessionId) continue;
       if (item.type === 'text') {
-        for (const paragraph of (typeof item.content === 'string' ? item.content : '').split(/\n\s*\n/)) {
-          const text = paragraph.trim();
-          const uri = readVisualReference(text)?.path ?? /^\[[^\]\n]+\]\(([^()\s]+)\)$/.exec(text)?.[1];
-          if (uri && isCodexVisualUri(uri)) displayed.add(uri);
+        for (const part of visualReplyParts(typeof item.content === 'string' ? item.content : '')) {
+          if (typeof part !== 'string') displayed.add(part.path);
         }
         if (item.id === reply.id) {
           const published = turn.publishedFigures;

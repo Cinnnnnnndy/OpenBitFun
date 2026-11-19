@@ -17,7 +17,7 @@ import { parseDeepResearchContent } from '../deep-research/deepResearchProtocol'
 import { hasSessionFileProvider, readImageThroughSession, downloadFileThroughSession } from '../session-drivers/sessionFileNavigation';
 import { resolveSessionDriverId } from '../session-drivers/resolve';
 import { markdownSections } from '@/infrastructure/markdown/markdownSections';
-import { readVisualReference, visualArtifactUri } from '@/tools/visualize/reference';
+import { visualReplyParts, visualArtifactRoot, visualArtifactUri } from '@/tools/visualize/reference';
 import { missingInlineFigures } from '@/tools/visualize/writeSnapshot';
 import { flowChatStore } from '../store/FlowChatStore';
 import './FlowTextBlock.scss';
@@ -219,14 +219,18 @@ export const FlowTextBlock = React.memo<FlowTextBlockProps>(({
       onTabOpen={onTabOpen}
       onHttpLinkClick={onHttpLinkClick}
       onOpenVisualization={handleOpenVisualization}
-      renderArtifactLink={markdownContent.includes('openbitfun://current-session/artifacts/visualizations/') ? renderArtifactLink : undefined}
-      renderArtifactReference={markdownContent.includes('visualize') ? text => {
-        const ref = readVisualReference(text);
-        return ref ? renderArtifactLink(ref.path, ref.title, ref.wide) : null;
-      } : undefined}
+      renderArtifactLink={markdownContent.includes(visualArtifactRoot) ? renderArtifactLink : undefined}
       traceContext={markdownTraceContext}
     />
   );
+
+  const renderReply = (source: string, key?: React.Key, streaming = markdownStreaming, continuation = false) =>
+    visualReplyParts(source).map((part, index) => {
+      const partKey = `${key ?? 'text'}:${index}`;
+      if (typeof part !== 'string') return <React.Fragment key={partKey}>{renderArtifactLink(part.path, part.title, part.wide)}</React.Fragment>;
+      if (!part) return null;
+      return textItem.isMarkdown ? renderMarkdown(part, partKey, streaming, continuation) : part;
+    });
 
   const renderStructuredContent = () => (
     <div className="deep-research-protocol" data-openbitfun-component="flow-text-block" data-openbitfun-part="protocol">
@@ -240,7 +244,7 @@ export const FlowTextBlock = React.memo<FlowTextBlockProps>(({
               />
             )
           : textItem.isMarkdown
-            ? renderMarkdown(segment.content, `markdown:${index}`)
+            ? renderReply(segment.content, `markdown:${index}`)
             : (
                 <div
                   className="text-content"
@@ -248,7 +252,7 @@ export const FlowTextBlock = React.memo<FlowTextBlockProps>(({
                   data-openbitfun-part="protocolTextContent"
                   key={`text:${index}`}
                 >
-                  {segment.content}
+                  {renderReply(segment.content)}
                 </div>
               )
       ))}
@@ -275,11 +279,11 @@ export const FlowTextBlock = React.memo<FlowTextBlockProps>(({
       {parsedContent.hasProtocol ? (
         renderStructuredContent()
       ) : textItem.isMarkdown ? (
-        sections.map((section, index) => renderMarkdown(displayContent.slice(section.start, section.end),
+        sections.map((section, index) => renderReply(displayContent.slice(section.start, section.end),
           `markdown:${section.start}`, markdownStreaming && index === sections.length - 1, index > 0))
       ) : (
         <div data-openbitfun-component="flow-text-block" data-openbitfun-part="textContent" className="text-content">
-          {displayContent}
+          {renderReply(displayContent)}
         </div>
       )}
     </div>
