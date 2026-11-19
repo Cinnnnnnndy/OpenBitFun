@@ -553,6 +553,11 @@ pub struct DialogTurnData {
     #[serde(alias = "user_message")]
     pub user_message: UserMessageData,
 
+    /// Immutable sources published in the final reply, keyed by canonical session URI.
+    /// A null entry records that its file was unavailable at completion.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub published_figures: std::collections::BTreeMap<String, Option<PublishedFigure>>,
+
     /// Model interaction rounds
     #[serde(alias = "model_rounds")]
     pub model_rounds: Vec<ModelRoundData>,
@@ -621,6 +626,13 @@ pub struct DialogTurnData {
 
     /// Turn status
     pub status: TurnStatus,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PublishedFigure {
+    pub source: String,
+    pub content_bytes: usize,
 }
 
 /// Provider-reported token usage attached to a dialog turn.
@@ -1377,6 +1389,7 @@ impl DialogTurnData {
             kind,
             agent_type,
             user_message,
+            published_figures: Default::default(),
             model_rounds: Vec::new(),
             start_time: now,
             end_time: None,

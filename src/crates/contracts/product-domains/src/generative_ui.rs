@@ -11,112 +11,11 @@ pub fn catalog() -> &'static Value {
     })
 }
 
-/// Returns the official OpenUI lang-core prompt for a selectable GenUI profile.
-/// Profiles are the product's fixed routing boundary: a turn uses the one
-/// library selected in settings, while this prompt supplies shared rules and
-/// worked examples without inflating the tool input schema.
-pub fn system_prompt_for_profile(profile: &str) -> Option<&'static str> {
-    catalog()["genuiSystemPrompts"][profile].as_str()
-}
-
-pub const OPENUI_LANG_RESOURCE_ID_PREFIX: &str = "openbitfun.genui.openui-lang";
-
-pub fn system_prompt_resource_id_for_profile(profile: &str) -> Option<String> {
-    system_prompt_for_profile(profile)?;
-    Some(format!("{OPENUI_LANG_RESOURCE_ID_PREFIX}/{profile}"))
-}
-
-pub fn system_prompt_for_resource_id(resource_id: &str) -> Option<&'static str> {
-    let profile = resource_id.strip_prefix(&format!("{OPENUI_LANG_RESOURCE_ID_PREFIX}/"))?;
-    system_prompt_for_profile(profile)
-}
-
-#[cfg(test)]
-mod system_prompt_resource_tests {
-    use super::{
-        system_prompt_for_profile, system_prompt_for_resource_id,
-        system_prompt_resource_id_for_profile,
-    };
-
-    #[test]
-    fn stable_resource_id_resolves_the_selected_profile_prompt() {
-        let profile = "openbitfun";
-        let resource_id = system_prompt_resource_id_for_profile(profile).unwrap();
-        assert_eq!(
-            system_prompt_for_resource_id(&resource_id),
-            system_prompt_for_profile(profile)
-        );
-        assert!(system_prompt_for_resource_id("openbitfun.genui.openui-lang/unknown").is_none());
-    }
-}
-
 fn resolve(schema: &Value) -> &Value {
     match schema.get("$ref").and_then(Value::as_str) {
         Some(reference) => &catalog()["$defs"][reference.trim_start_matches("#/$defs/")],
         None => schema,
     }
-}
-
-/// Preferences restrict new generation, never persisted app rendering.
-pub fn generation_schema_for_profile(profile: &str) -> Result<Value, String> {
-    let catalog = catalog();
-    let selected = catalog["profiles"][profile]["templates"].as_array().ok_or_else(|| {
-        format!("Unsupported GenUI component collection: {profile}; select an installed collection in settings")
-    })?;
-    let design_spec_id = catalog["profiles"][profile]["designSpec"]
-        .as_str()
-        .ok_or("Selected component collection has no UI design specification")?;
-    let design_spec = catalog["designSpecs"][design_spec_id].clone();
-    let mut schema = catalog["generation"].clone();
-    schema["$defs"] = catalog["$defs"].clone();
-    let messages = schema["properties"]["messages"]["items"]["anyOf"]
-        .as_array_mut()
-        .ok_or("GenUI generation schema has no message branches")?;
-    messages.retain(|branch| {
-        branch["properties"].get("createSurface").is_some()
-            || branch["properties"].get("updateDataModel").is_some()
-    });
-    if let Some(message) = messages[0].as_object_mut() {
-        message.insert(
-            "description".into(),
-            Value::String(
-                "One protocol message object. Keep messages as a JSON array; never serialize this array into a string.".into(),
-            ),
-        );
-    }
-    let create = &mut messages[0]["properties"]["createSurface"];
-    create["properties"]["template"]["enum"] = Value::Array(selected.clone());
-    let selected_library_ids = selected
-        .iter()
-        .filter_map(Value::as_str)
-        .filter_map(|template_id| catalog["templates"][template_id]["library"].as_str())
-        .collect::<Vec<_>>();
-    let selected_library_id = selected_library_ids
-        .first()
-        .copied()
-        .ok_or("Selected component collection has no library")?;
-    let revision = catalog["libraryAdapters"][selected_library_id]["revision"]
-        .as_i64()
-        .ok_or("Selected component collection has no library revision")?;
-    create["properties"]["libraryId"]["enum"] = serde_json::json!([selected_library_id]);
-    create["properties"]["libraryRevision"] = serde_json::json!({"const": revision});
-    let required = create["required"].as_array_mut().unwrap();
-    if !required.iter().any(|field| field == "source") {
-        required.push(Value::String("source".into()));
-    }
-    create["properties"]["designSpec"]["properties"]["id"]["enum"] =
-        serde_json::json!([design_spec_id]);
-    create["properties"]["designSpec"]["properties"]["revision"] =
-        serde_json::json!({"const": design_spec["revision"]});
-    schema["description"] = serde_json::json!(format!(
-        "Generate the openbitfun.genui.v1 protocol for the selected GenUI profile. The GenerativeUI tool receives a JSON protocol object and messages must remain a JSON array of message objects, never a JSON-encoded string. When createSurface.source.kind is openui-lang, source.content must contain the raw OpenUI Lang program. Load host resource `{}` for the official OpenUI Lang rules, component signatures and worked examples before generating. Selected adapter collection: {profile}; allowed createSurface.template: {}; selected design specification {design_spec_id}: {}. New applications must send a complete source document in createSurface.source and may send updateDataModel for initial values.",
-        system_prompt_resource_id_for_profile(profile)
-            .as_deref()
-            .ok_or("Selected component collection has no OpenUI Lang prompt resource")?,
-        selected[0],
-        design_spec,
-    ));
-    Ok(schema)
 }
 
 pub fn validate_profile(profile: &str, app: &Value) -> Result<(), String> {
@@ -462,36 +361,8 @@ mod tests {
         );
     }
     #[test]
-    fn collection_schema_restricts_generation_but_keeps_saved_apps_readable() {
+    fn saved_profiles_accept_their_pinned_templates_and_libraries() {
         for (id, profile) in catalog()["profiles"].as_object().unwrap() {
-            let schema = generation_schema_for_profile(id).unwrap();
-            assert_eq!(
-                schema["properties"]["messages"]["items"]["anyOf"][0]["properties"]
-                    ["createSurface"]["properties"]["template"]["enum"],
-                Value::Array(
-                    profile["templates"]
-                        .as_array()
-                        .unwrap()
-                        .iter()
-                        .cloned()
-                        .collect()
-                )
-            );
-            assert!(
-                schema["properties"]["messages"]["items"]["anyOf"][0]["properties"]
-                    ["createSurface"]["required"]
-                    .as_array()
-                    .unwrap()
-                    .contains(&Value::String("source".into()))
-            );
-            assert_eq!(
-                schema["properties"]["messages"]["items"]["anyOf"]
-                    .as_array()
-                    .unwrap()
-                    .len(),
-                2,
-                "new generation exposes only source creation and initial state updates"
-            );
             for template in profile["templates"].as_array().unwrap() {
                 let template_id = template.as_str().unwrap();
                 let library_id = catalog()["templates"][template_id]["library"].clone();
@@ -499,44 +370,7 @@ mod tests {
                     catalog()["libraryAdapters"][library_id.as_str().unwrap()]["revision"].clone();
                 assert!(validate_profile(id, &serde_json::json!({"template": template, "libraryId": library_id, "libraryRevision": revision})).is_ok());
             }
-            let schema_text = schema["description"].as_str().unwrap();
-            assert!(schema_text.contains("raw OpenUI Lang program"));
-            assert!(schema_text.contains("messages must remain a JSON array"));
-            assert!(
-                schema["properties"]["messages"]["items"]["anyOf"][0]["description"]
-                    .as_str()
-                    .is_some_and(|text| text.contains("never serialize this array into a string"))
-            );
-            assert!(schema_text.contains("official OpenUI lang-core rules"));
-            assert!(schema_text.contains("complete source document"));
-            assert!(!schema_text.contains("updateComponents"));
-            assert!(!schema_text.contains("updateLogic"));
-            let selected_template = profile["templates"][0].as_str().unwrap();
-            assert!(schema_text.contains(selected_template));
-            for (other_id, other_profile) in catalog()["profiles"].as_object().unwrap() {
-                if other_id != id {
-                    for template in other_profile["templates"].as_array().unwrap() {
-                        assert!(!schema_text.contains(template.as_str().unwrap()));
-                    }
-                }
-            }
-            assert!(schema_text.contains(&format!("Selected adapter collection: {id}")));
-            assert!(schema_text.contains(
-                catalog()["designSpecs"][profile["designSpec"].as_str().unwrap()]["label"]
-                    .as_str()
-                    .unwrap()
-            ));
-            let official_prompt = system_prompt_for_profile(id).unwrap();
-            assert!(
-                official_prompt.contains("You are an AI assistant that responds using openui-lang")
-            );
-            assert!(official_prompt.contains("## Examples"));
-            assert!(official_prompt.contains("## Important Rules"));
-            assert!(
-                !schema_text.contains("You are an AI assistant that responds using openui-lang")
-            );
         }
-        assert!(generation_schema_for_profile("future.collection").is_err());
         let examples: Value = serde_json::from_str(include_str!(
             "../../../../shared/generative-ui/examples.json"
         ))

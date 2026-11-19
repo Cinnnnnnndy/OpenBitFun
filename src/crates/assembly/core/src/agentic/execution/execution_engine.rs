@@ -1741,29 +1741,11 @@ impl ExecutionEngine {
         prompt_context: Option<&PromptBuilderContext>,
         prompt_policy_id: Option<&str>,
     ) -> OpenBitFunResult<String> {
-        // The GenUI profile is a fixed product route, just like the upstream
-        // Open Intelligent UI pages. Keep its official lang-core prompt in the
-        // system message, but scope it to the GenerativeUI tool because OpenBitFun
-        // still runs a general agent whose outer response is a JSON tool call.
-        // Include the profile in the cache key so changing the setting cannot
-        // reuse a prompt generated for the previous component library.
-        let genui_scope = "|genui-profile:disabled";
         let identity = match prompt_policy_id {
-            Some(policy_id) => {
-                SystemPromptCacheIdentity::new(format!("harness:{policy_id}{genui_scope}"))
-            }
-            None => prompt_context
-                .map(|context| {
-                    let mut identity =
-                        current_agent.system_prompt_cache_identity(context.model_name.as_deref());
-                    identity.scope_key.push_str(&genui_scope);
-                    identity
-                })
-                .unwrap_or_else(|| {
-                    let mut identity = current_agent.system_prompt_cache_identity(None);
-                    identity.scope_key.push_str(&genui_scope);
-                    identity
-                }),
+            Some(policy_id) => SystemPromptCacheIdentity::new(format!("harness:{policy_id}")),
+            None => current_agent.system_prompt_cache_identity(
+                prompt_context.and_then(|context| context.model_name.as_deref()),
+            ),
         };
 
         if let Some(cached_system_prompt) = self

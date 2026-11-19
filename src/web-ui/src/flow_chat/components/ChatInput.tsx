@@ -2434,13 +2434,14 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 
   React.useEffect(() => {
     const handleFillInput = (event: Event) => {
-      const customEvent = event as CustomEvent<{ message: string; sessionId?: string }>;
+      const customEvent = event as CustomEvent<{ message: string; sessionId?: string; append?: boolean }>;
       if (customEvent.detail?.sessionId ? customEvent.detail.sessionId !== effectiveTargetSessionIdRef.current : Boolean(conversationScope)) return;
       const message = customEvent.detail?.message;
       
       if (message) {
-        clearPendingLargePastes();
-        dispatchInput({ type: 'SET_VALUE', payload: message });
+        const previous = customEvent.detail.append ? inputValueRef.current : '';
+        if (!customEvent.detail.append) clearPendingLargePastes();
+        dispatchInput({ type: 'SET_VALUE', payload: previous ? previous + '\n' + message : message });
         
         if (richTextInputRef.current) {
           richTextInputRef.current.focus();

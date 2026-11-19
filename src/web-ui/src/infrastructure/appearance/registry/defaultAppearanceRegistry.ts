@@ -108,7 +108,6 @@ import { flexiblePanelAppearanceDescriptor } from '@/app/components/panels/base/
 import { btwSessionPanelAppearanceDescriptor } from '@/flow_chat/components/btw/BtwSessionPanel.appearance';
 import { conversationExcerptAppearanceDescriptor } from '@/flow_chat/selection/ConversationExcerpt.appearance';
 import { modernFlowChatAppearanceDescriptor, virtualMessageListAppearanceDescriptor } from '@/flow_chat/components/modern/appearance';
-import { genUILibrarySettingsAppearanceDescriptor } from '@/app/scenes/settings/pages/ai/GenUILibrarySection.appearance';
 import { modelSettingsAppearanceDescriptor } from '@/app/scenes/settings/pages/ai/ModelSettingsPage.appearance';
 import { reasoningConfigPanelAppearanceDescriptor } from '@/infrastructure/config/components/ReasoningConfigPanel.appearance';
 import { reasoningPresetEditorAppearanceDescriptor } from '@/infrastructure/config/components/ReasoningPresetEditor.appearance';
@@ -392,7 +391,6 @@ export function createDefaultAppearanceRegistry(): AppearanceRegistry {
     .registerComponent(modernFlowChatAppearanceDescriptor)
     .registerComponent(virtualMessageListAppearanceDescriptor)
     .registerComponent(modelSettingsAppearanceDescriptor)
-    .registerComponent(genUILibrarySettingsAppearanceDescriptor)
     .registerComponent(reasoningConfigPanelAppearanceDescriptor)
     .registerComponent(reasoningPresetEditorAppearanceDescriptor)
     .registerComponent(externalSourcesConfigAppearanceDescriptor)

@@ -238,7 +238,10 @@ export interface SessionTurnCatalog {
   entries: SessionTurnCatalogEntry[];
 }
 
+export type PublishedFigures = Record<string, { source: string; contentBytes: number } | null>;
+
 export interface DialogTurnData {
+  publishedFigures?: PublishedFigures;
   turnId: string;
   turnIndex: number;
   sessionId: string;

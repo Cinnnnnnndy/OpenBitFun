@@ -378,11 +378,12 @@ export default function GenUIOpenUIDocument({
     onStateUpdate?.(fromOpenUIState(state, ownerStateRef.current));
   }, [onStateUpdate]);
   const handleAction = useCallback((event: GenUIOpenUIActionEvent) => {
+    if (readOnly) return;
     // Custom actions have a safe product default. The callback still receives
     // the event so an owning host can observe it or add its own delivery.
     if (executeActions) void runGenUIAction(event);
     void onAction?.(event);
-  }, [executeActions, onAction]);
+  }, [executeActions, onAction, readOnly]);
   const onErrorRef = useRef(onError);
   onErrorRef.current = onError;
   // Errors and parse metadata arrive in separate effects. Coalesce both before

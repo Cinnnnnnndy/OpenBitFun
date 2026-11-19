@@ -10231,6 +10231,7 @@ export class FlowChatStore {
 
       const converted = {
       id: turn.turnId,
+      publishedFigures: turn.publishedFigures,
       sessionId: turn.sessionId,
       kind: turn.kind || 'user_dialog',
       agentType: turn.agentType,

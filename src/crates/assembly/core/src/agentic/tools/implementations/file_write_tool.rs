@@ -1,6 +1,7 @@
 use super::plan_artifact_diagnostics::{
     diagnose_plan_artifact, is_plan_artifact_path, PlanArtifactIssue,
 };
+use crate::agentic::inline_figure::{verify_written_figure, written_figure_uri, MAX_SOURCE_BYTES};
 use crate::agentic::tools::file_permissions::file_permission_intents_allowing_managed_plan_edits;
 use crate::agentic::tools::file_tool_guidance::is_file_tool_guidance_message;
 use crate::agentic::tools::framework::{
@@ -158,9 +159,25 @@ impl FileWriteTool {
         parameter_names
     }
 
+    async fn check_figure(result: &mut ToolResult, source: &str) {
+        if let ToolResult::Result {
+            data,
+            result_for_assistant: Some(message),
+            ..
+        } = result
+        {
+            if let Some(uri) = data["visualization_uri"].as_str().map(str::to_owned) {
+                verify_written_figure(&uri, source, data, message).await;
+                data["message"] = json!(message);
+            }
+        }
+    }
+
     fn write_success_result(
         logical_path: &str,
+        figure_uri: Option<&str>,
         outcome: WriteLocalFileOutcome,
+        content_bytes: usize,
         missing_path_fallback: bool,
         path_format_warning: Option<&str>,
         ignored_parameter_names: &[String],
@@ -198,9 +215,11 @@ impl FileWriteTool {
             assistant_message
                 .push_str("\nUse Edit on the written file to fix these issues before finishing.");
         }
+        let figure_uri = figure_uri.filter(|_| (1..=MAX_SOURCE_BYTES).contains(&content_bytes));
         let mut data = json!({
             "file_path": logical_path,
             "bytes_written": outcome.bytes_written,
+            "content_bytes": content_bytes,
             "lines_written": outcome.lines_written,
             "success": true,
             "status": outcome.status.as_str(),
@@ -208,6 +227,9 @@ impl FileWriteTool {
             "path_format_warning": path_format_warning,
             "message": assistant_message,
         });
+        if let Some(uri) = figure_uri {
+            data["visualization_uri"] = json!(uri);
+        }
         if let Some(issues) = plan_artifact_issues {
             data["plan_format"] = json!({
                 "valid": issues.is_empty(),
@@ -344,6 +366,7 @@ impl Tool for FileWriteTool {
             "properties": {
                 "file_path": {"type": "string"},
                 "bytes_written": {"type": "integer"},
+                "content_bytes": {"type": "integer"},
                 "lines_written": {"type": "integer"},
                 "success": {"type": "boolean"},
                 "status": {"type": "string"},
@@ -523,14 +546,17 @@ impl Tool for FileWriteTool {
         if file_already_exists
             && Self::existing_file_matches_content(context, &resolved, &content).await?
         {
-            let result = Self::write_success_result(
+            let mut result = Self::write_success_result(
                 &resolved.logical_path,
+                written_figure_uri(context, &resolved).as_deref(),
                 write_same_content_outcome(&resolved.logical_path),
+                content.len(),
                 missing_path_fallback,
                 path_format_warning.as_deref(),
                 &ignored_parameter_names,
                 plan_artifact_issues.as_deref(),
             );
+            Self::check_figure(&mut result, &content).await;
             return Ok(vec![result]);
         }
 
@@ -562,15 +588,18 @@ impl Tool for FileWriteTool {
             .await;
         }
 
-        let result = Self::write_success_result(
+        let mut result = Self::write_success_result(
             &resolved.logical_path,
+            written_figure_uri(context, &resolved).as_deref(),
             outcome,
+            content.len(),
             missing_path_fallback,
             path_format_warning.as_deref(),
             &ignored_parameter_names,
             plan_artifact_issues.as_deref(),
         );
 
+        Self::check_figure(&mut result, &content).await;
         Ok(vec![result])
     }
 }
@@ -812,6 +841,94 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn visual_artifact_writes_use_the_owning_runtime_for_local_and_ssh_sessions() {
+        let root = tempfile::tempdir().expect("temporary runtime root");
+        let remote_fs = Arc::new(RemoteWriteFs {
+            expected_path: "/remote/workspace/unused".into(),
+            read_error: None,
+            exists: Ok(false),
+            writes: AtomicUsize::new(0),
+        });
+        let local = local_context(root.path().join("workspace"));
+        let remote = remote_context(remote_fs.clone());
+        let uri = "openbitfun://current-session/artifacts/visualizations/v2/latency.html";
+        for (session, mut context) in [("local", local), ("ssh", remote)] {
+            context.session_id = Some(session.into());
+            context
+                .custom_data
+                .insert("__openbitfun_test_runtime_root".into(), json!(root.path()));
+            let html = format!("<figure>{session}</figure>");
+            let result = FileWriteTool::new()
+                .call_impl(&json!({"payload": format!("+++ {uri}\n{html}")}), &context)
+                .await
+                .expect("write session artifact");
+            let ToolResult::Result { data, .. } = &result[0] else {
+                panic!("expected Write receipt");
+            };
+            assert_eq!(data["file_path"], uri);
+            assert_eq!(data["content_bytes"], html.len());
+            let expected_reference = format!("visualize{}", json!({ "path": uri }));
+            assert!(data["message"]
+                .as_str()
+                .unwrap()
+                .contains(&expected_reference));
+            let file = root
+                .path()
+                .join("sessions")
+                .join(session)
+                .join("artifacts/visualizations/v2/latency.html");
+            assert_eq!(tokio::fs::read_to_string(&file).await.unwrap(), html);
+            let edits = super::super::file_edit_tool::FileEditTool::new()
+                .call_impl(
+                    &json!({"file_path": uri, "old_string": session, "new_string": "edited"}),
+                    &context,
+                )
+                .await
+                .expect("edit session artifact");
+            let ToolResult::Result {
+                data,
+                result_for_assistant,
+                ..
+            } = &edits[0]
+            else {
+                panic!("missing edit result");
+            };
+            let saved = tokio::fs::read_to_string(&file).await.unwrap();
+            assert_eq!(data["visualization_source"], saved);
+            assert_eq!(data["content_bytes"], saved.len());
+            assert!(result_for_assistant
+                .as_deref()
+                .unwrap()
+                .contains(&expected_reference));
+            assert!(!result_for_assistant
+                .as_deref()
+                .unwrap()
+                .contains("<figure>"));
+            if session == "local" {
+                let edits = super::super::file_edit_tool::FileEditTool::new()
+                    .call_impl(
+                        &json!({"file_path":file,"old_string":"edited","new_string":"tick"}),
+                        &context,
+                    )
+                    .await
+                    .unwrap();
+                let ToolResult::Result { data, .. } = &edits[0] else {
+                    panic!("missing absolute edit")
+                };
+                assert_eq!(data["visualization_uri"], uri);
+                assert_eq!(data["visualization_source"], "<figure>tick</figure>");
+            } else {
+                let resolved = context.resolve_tool_path(file.to_str().unwrap()).unwrap();
+                assert!(
+                    crate::agentic::inline_figure::written_figure_uri(&context, &resolved)
+                        .is_none()
+                );
+            }
+        }
+        assert_eq!(remote_fs.writes.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
     async fn remote_write_requires_its_workspace_filesystem() {
         let mut context = remote_context(Arc::new(RemoteWriteFs {
             expected_path: "/remote/workspace/result.txt".into(),
@@ -895,6 +1012,7 @@ mod tests {
         assert_eq!(data["bytes_written"], 0);
         assert_eq!(data["lines_written"], 0);
         assert_eq!(data["status"], "already_exists_same_content");
+        assert_eq!(data["content_bytes"], "same content".len());
         assert!(result_for_assistant
             .as_deref()
             .unwrap_or_default()
@@ -1069,7 +1187,9 @@ mod tests {
 
         let result = FileWriteTool::write_success_result(
             logical_path,
+            None,
             super::write_file_success_outcome(logical_path, false, content),
+            content.len(),
             false,
             None,
             &[],
@@ -1124,7 +1244,9 @@ mod tests {
             .expect("normalization should produce a warning");
         let result = FileWriteTool::write_success_result(
             &resolved.logical_path,
+            None,
             super::write_file_success_outcome(&resolved.logical_path, false, "content"),
+            "content".len(),
             false,
             Some(&warning),
             &[],

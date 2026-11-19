@@ -66,7 +66,7 @@ describe('generative widget projection', () => {
     });
     const preview = projectGenerativeWidgetTool(session(), item)!;
     expect(preview.app).toMatchObject({ id: app.id, source: app.source });
-    expect(preview).toMatchObject({ isStreaming: true, readOnly: false });
+    expect(preview).toMatchObject({ isStreaming: true, readOnly: true });
   });
   it('rejects a removed graph message instead of previewing it', () => {
     const generation = describeGenUIApp({ schemaVersion: 2, id: 'source', title: 'Source', template: 'openbitfun.app', libraryId: 'openbitfun.composable.v1', libraryRevision: 2, designSpec: { id: 'openbitfun.desktop.v1', revision: 1 }, root: 'root', state: {}, source: { kind: 'openui-lang', content: 'root = Col([])' } } as GenUIAppDefinition);

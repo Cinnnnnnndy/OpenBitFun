@@ -1,8 +1,66 @@
-# GenUI 双路径应用架构
+# 对话可视化与历史 GenUI
+
+## FlowChat 的交互式可视化
+
+新回复可以保存为 `openbitfun://current-session/artifacts/visualizations/v2/<slug>.html`。FlowChat 按原始内容引用中的 URI 找到同一轮、同一子 Agent 的成功 Write，使用调用中保存的字节创建隔离的 iframe。同轮 Edit 在回复发出前生效。执行端在成功的 Write 和 Edit 结果中记录会话 URI；通过该会话本地存储目录的绝对路径修改图时，也会带上同一 URI。新的 Edit 还保存该次修改的完整源码。执行端完成对话轮次时，将最后一次通过检查的 Write 或 Edit 中的原始源码和 UTF-8 字节数保存在该轮记录中。旧版写入记录沿用完成时的文件快照。通过脚本生成的图也能发布，前提是该轮使用了可视化技能，且被引用的文件在该轮内生成或修改。FlowChat 收到已完成的回复和重开历史消息时都使用这份源码。读取旧回复时，执行端从已记录的 Write 或完整 Edit 开始，按顺序精确回放截至该条回复的修改。后续对话可以只修改已有图，新的回复使用当轮 Edit 返回的完整源码，上一条回复保持修改前的样子。生成成功后，图直接出现在回复里。若模型在最终文本里漏写内容引用，FlowChat 会在已完成的该轮回复中补上有成功记录的图，已引用的图只显示一次。原版图表的 `mountChart`、四个专用组件、地图、插图、变体轮播和设计控件都能使用同一入口。参考图仅用于测试。模型按用户的题目自行编排内容。 FlowChat 将当前聊天区域的颜色和字体通过展示通道传给已打开的图。切换主题或皮肤时，图内使用原版 CSS 变量的标记和控件会随之更新，交互状态留在原来的文档中。
+
+从源码构建完整的对话可视化功能，需要先在构建机提供 Codex Visualize 1.0.103 安装包。Git 中保存导入器、固定版本的文件清单和 OpenBitFun 宿主实现。技能入口、原版指南与渲染资源在构建机上生成。运行 `pnpm run visualize:prepare` 后即可启动 Desktop 或构建。后续准备会复用已校验的导入副本和本地缓存。也可以运行 `node scripts/import-visualize.mjs <插件路径>` 指定来源。导入器按文件清单校验整个插件，从原版指南生成适用于 FlowChat 的交付说明，并缓存固定版本的图表、组件和地图依赖。桌面端的 Write 和 Edit 把会话图稿提交给本机 FlowChat，在独立的隔离 iframe 内实际渲染。成功时返回可放入最终回复的引用，失败时向本轮模型返回诊断。未连接图形宿主的运行时会说明检查推迟到阅读时。阅读端也检查实际挂载的 iframe，通过后显示同一实例。运行 `pnpm run visualize:verify` 可复核 SHA-256。图表沿用原包的 `render.py --check` 检查实际 HTML，交互状态可用 `--chart-state` 一并校验。地图在后台检查底图和标注，经典脚本形式的固定版本 d3-array 和 d3-geo 也由本地包提供。原包的声明和授权标识保存在本地导入目录，版本清单进入源码管理。构建时 Rust 嵌入技能，Vite 打包阅读端资源。终端用户使用这样的构建时，运行图表无需另行安装 Codex。早期声明式消息仍可回放。
+
+普通城市标注图可以在技能交付的 HTML 中声明地点及可选范围。FlowChat 使用随产品分发的 Natural Earth 底图与地名，将声明投影成 SVG，检查城市标注和底图并保存该次检查的 SVG。断网重开历史图时，地理图层已经包含在回复中。皮肤控制画布和字体，水域、陆地、标记各自使用独立的语义颜色。
+
+![暖色主题下的长三角城市标注图](../images/flowchat-regional-map.png)
+
+宿主绑定 `window.openai.setWidgetState`、`visualization.onData` 和 Tweak。阅读状态按设备来源、会话、对话轮次、模型轮次、写入及 URI 保存，单份上限 16 KiB。追问可携带 `modelContent`。`privateContent` 留在阅读端。部分已有图把选择保存在 `privateContent`，却从 `widgetState` 顶层读取。阅读端提供不可枚举的同名读取属性，保留已有顶层字段，持久化和追问仍使用原有格式。原版导出脚本支持按需生成独立 HTML。
+
+数据声明使用片段开头的 `vis-bindings`。JSON 直接返回，图片声明提供 HTTPS 地址，相对文件和 `libfile_…` 数据从同一轮已完成的写入中取值，工具输入必须与同轮成功的调用一致。打开「数据来源」可以查看声明、订阅此会话以后完成的匹配结果，或将刷新请求放入输入框，由正常的 Agent 工具权限流程执行。读者还可选取已连接的 MCP 服务所公布的只读资源，按声明的间隔更新 JSON 或文件。关闭来源面板时连接继续，离开图表时结束。连接失败或未能取得数据时，来源面板显示当前状态。使用远程工作区时，图表回放读取原会话记录，连接宿主 MCP 资源会提示不可用。
+
+浏览器验收运行 `node scripts/test-visualize-host.mjs`。默认使用本地 Vite 测试页，`OPENBITFUN_VISUALIZE_OFFLINE=1` 拦截外部网络，`OPENBITFUN_REFERENCE_FRAGMENT` 可指定用于对照的原图。使用 `OPENBITFUN_VISUALIZE_TEST_SKIN` 可替换默认测试皮肤。
+
+## 早期 visualize 会话产物
+
+启用内置 `visualize` 技能的会话可以通过普通 Write 生成 HTML。模型在回复里用单独一段 Markdown 链接引用 `openbitfun://current-session/artifacts/visualizations/<slug>.html`，链接文字提供纯文本摘要。组件输入及示例见[技能契约](../../src/crates/assembly/core/builtin_skills/visualize/references/components.md)。
+
+FlowChat 按会话、轮次和子 Agent 身份查找该段文字之前最后一次成功的对应 Write。历史呈现使用工具调用中已记录的 HTML，并对照 Write 结果的 UTF-8 长度；同名文件的后续修改不会改变此前回复。已有 Write 记录可用 bytes_written 校验，新结果另外包含 content_bytes，支持重复写入相同内容时的校验。记录缺失、传输截断或格式未知时保留文字摘要并说明交互不可用。读取记录不需要沿链接打开文件或访问控制端的工作区。无图形渲染的入口可以呈现原有 Markdown。
+
+版本 1 使用惰性 HTML 模板解析声明式 figure，用产品自带的图表运行时呈现已校验的数据，普通 HTML 使用禁用脚本的隔离文档。筛选和所选行属于当前阅读设备的视图偏好，按来源设备、会话、回复和写入记录保存。追问由阅读者加入输入框，阅读者可以修改和发送。旧的 GenerativeUI 工具已退出注册表、智能体默认工具、能力搜索及组件库设置。历史记录保留原有 schema 和组件库版本，直接调用和 CallDeferredTool 的旧消息均按只读方式回放。当前运行时使用通用工具参数事件；旧主机发送或日志中保存的 GenUIStream 仍可解码。打开历史消息不会向模型提交修复请求。
+
+## 组件验收
+
+对照 Codex visualize 1.0.103 的 charts 1.6.5 与 widgets 1.0.59 文档，OpenBitFun 使用独立的声明式输入和本地渲染器。可信代码随产品提供。macOS WKWebView 也验证了图表筛选、参数滑块、请求自身耗时、非连续 CPU 调用与刷新恢复。以下用例通过实际组件数据验算以及 Chromium 中的 FlowChat 回复回放检查。可运行的验收位于 [图表断言](../../src/web-ui/src/tools/visualize/components.test.ts) 和 [浏览器用例](../../scripts/test-visualize-browser.mjs)。
+
+| 组件 | 核对内容 |
+| --- | --- |
+| 折线 | 数值横轴排序、零值和缺口、参考线、点标注与置信带 |
+| 面积 | 绝对堆叠与零观测 |
+| 柱状 | 横向布局，隐藏系列后百分比重新归一化 |
+| 饼图 | 环形比例、中心值与份额 |
+| 直方图 | 原始观测重复计数、最大值归箱、非等宽密度面积 |
+| 收支瀑布 | 起止余额核对、负值跨零 |
+| 热力图 | 类别次序、颜色值域与空单元格 |
+| 散点 | 分组拟合、二次拟合、退化输入 |
+| 漏斗 | 保留给定阶段顺序，区分零值和缺失 |
+| 箱线 | 原始观测插值四分位、离群点、给定五数概括 |
+| 迷你趋势图 | 隐藏轴和点、键盘读数 |
+| 排名 | 三种排序与展开剩余行 |
+| 桑基 | 多阶段同名节点与共享流量汇总 |
+| 日历 | 日周月切换、事件详情和恢复 |
+| 请求瀑布 | 嵌套重叠耗时、父行折叠、关键路径、缩放与恢复 |
+| CPU 火焰图 | 空闲区间、非连续调用、递归、函数汇总与恢复 |
+| 错误堆栈 | 异步边界、运行时分组、源代码行和原始异常链 |
+| 基础交互 | 卡片、表格、按钮、表单、键盘标签页、进度条、参数滑块与追问草稿 |
+
+`layers` 是 OpenBitFun 给分层架构概览提供的组件。它按给定顺序显示各层，支持鼠标和方向键切换职责、路径和代表模块。窄屏把详情移到图下方，重新打开同一条回复可恢复阅读位置。
+
+图解型标签页复用 `tabs`。每页可组合流程节点、可切换的方案和有序层级；节点使用内置线稿，也可提供自定义 SVG 路径。产品对照用例保留了 Codex 示例的三个视角、四种工作模式与四种远程场景。图随消息排版，阅读位置由当前设备保存。
+
+## 旧版 GenUI 设计记录
+
+下文记录旧版生成链路和组件格式，供历史回放与跨版本排查使用。
+
 
 本文定义 GenUI 的目标产品和运行时边界。迁移未完成前，已接线代码仍是生产事实；本文中的目标能力不得据此描述为已交付。产品架构索引链接到本文件，本文件是 GenUI 架构的唯一专题设计文档。
 
-## 产品决定
+### 产品决定
 
 GenUI 提供两种源码表达，共用应用身份、版本、状态、宿主能力、持久化、候选验收和远程归属：
 
@@ -21,7 +79,7 @@ GenUI 提供两种源码表达，共用应用身份、版本、状态、宿主�
 
 MiniApp 保持自己的源码、打包、安装、权限及运行生命周期。GenUI 使用已有宿主和 Runtime 能力时通过其稳定接口，不把 MiniApp 改造成另一种 GenUI 源码格式。
 
-## 系统边界
+### 系统边界
 
 ```mermaid
 flowchart TD
@@ -48,9 +106,9 @@ flowchart TD
 | 平台与 Runtime adapter | 对文件、工具、Agent、网络和其他宿主能力做授权执行 | 使用控制端本地上下文代替目标 owner 的归属 |
 | 候选 checker | 在隔离实例中检查源码、实际渲染和声明交互 | 触碰正式用户状态或产生真实外部副作用 |
 
-## OpenUI 组件路径
+### OpenUI 组件路径
 
-### Library Registry 与组件库适配器
+#### Library Registry 与组件库适配器
 
 OpenUI 提供共同的 Lang/parser/state/Renderer 运行时，同时注册三套可独立选择的 profile：`openui` 使用上游 `openui.v1` native library，`openbitfun` 使用 `openbitfun.composable.v1`，`harmony` 使用 `openbitfun.harmony.v1`。每套 profile 都绑定自己的 adapter、prompt、CSS/style resources、design spec 和 revision；只读契约是同一 adapter 的明确权限变体，不能改变其来源身份。
 
@@ -60,7 +118,7 @@ OpenUI 提供共同的 Lang/parser/state/Renderer 运行时，同时注册三套
 
 HOS7 暂不属于受支持的 GenUI 目标，不进入当前 library registry、生成 schema 或交付路径。后续如重新支持，必须以独立 adapter、明确许可、目标端能力协商和单独验收契约重新接入。Harmony-genui 只提取 design-system、token 和 Plot 能力，不嵌入旧 graph/schema/action runtime。
 
-### 组件库与模板
+#### 组件库与模板
 
 以 OpenUI 的 `defineComponent`、`createLibrary` 和 `library.extend` 作为组件描述、schema、说明、renderer、函数、动作与组合规则的定义机制。产品注册可信实现；模型只能引用当前构建和产品配置实际提供的组件。添加、替换和移除组件必须同步影响生成提示及运行时校验，不能另外手写一份模型专用组件目录。
 
@@ -72,7 +130,7 @@ HOS7 暂不属于受支持的 GenUI 目标，不进入当前 library registry、
 
 组件作者提供实际 renderer、限于组件拥有 DOM 的 `inspect`，以及声明事件的隔离 `exercise`。探针只生成隔离状态，不得调用正式保存、权限接口或外部工具。任何外部副作用均通过 OpenBitFun 注册的宿主能力，遵守现有权限、取消、deadline、重试及远程 mailbox 语义。需要原子性的多步操作由一个 owner mutation 完成；OpenUI 顺序动作不自动等于事务。
 
-### UI 规范配置与目标身份
+#### UI 规范配置与目标身份
 
 产品配置以同一个版本化清单声明组件库 profile 与 `designSpec` 的绑定。规范至少包含 `componentLibraries`、`styleResources`、`rules`、`sourceKinds`、`viewport`、`shell` 和 `acceptance.checks`；构建校验确保 profile 的每个模板只使用规范允许的组件库。模型上下文收到选中规范的完整约束和资源 ID，模型不能自行选择或覆盖该身份。Rust owner 从受信任 profile/既有 owner 解析它，并在候选 app 中写入 `{ id, revision }`。
 
@@ -82,7 +140,7 @@ Owner 的读取和状态保存请求必须回显 `libraryId`、`libraryRevision`
 
 规范的 `shell` 区分宿主绘制与生成内容。Harmony 手机规范固定 360 x 764 CSS px 视口，36 px 状态栏和设备外壳由宿主绘制，内容左右 inset 为 16 px，目标内容宽度 328 px。模型只能生成屏幕内容。OpenUI 组件路径使用规范绑定的 Harmony OpenUI library；HTML/CSS/SVG 路径收到同一身份、资源与规则，在相同宿主 shell 和固定视口验收。实际 DOM/几何检查至少验证视口尺寸、宿主 shell 部件、内容边界和横向溢出，并将精确诊断返回候选修正。若自由文档仍违规，修正后必须重跑同一规范检查；提示词本身不是通过证据。
 
-### 流式和交互
+#### 流式和交互
 
 从 Agent 工具参数事件中增量提取 OpenUI Lang 文本，使用 OpenUI 流式 parser 投影逐步完成的语句。传输 adapter 只负责解包、解转义、识别重置和追加，不解析语言、不重新实现语句缓存。组件预览使用固定的库修订；首屏允许本地状态交互，但会产生外部副作用的 action 仍须经过 owner、权限和交付层。候选结束后，完整原文必须经同一 OpenUI library 终态解析，且不得有未完成语法、未解析引用或阻断性 schema 错误。
 
@@ -90,7 +148,7 @@ React 组件身份和列表 key 必须经过真实插入、删除、重排测试
 
 持久化的 OpenUI 用户状态使用版本化 JSON 数据，恢复后交给 `Renderer.initialState`，更新交给 `onStateUpdate` 与应用 owner。前端编辑态可以立即更新，只有 owner 确认写入后才能报告保存成功。外部查询和 mutation 必须进入宿主能力；状态更新不能绕过 owner CAS。
 
-## HTML / SVG 自由生成路径
+### HTML / SVG 自由生成路径
 
 自由文档将 HTML、CSS 和 SVG 作为文档源码保存；交互脚本是独立、可选的源码字段。页面源码可以组织自己的 DOM、图形和动画，不能内嵌 TSX 构建器、远程脚本包或隐式模块加载器。模型不能通过脚本直接调用文件系统、Shell、内部 API、用户凭据或正式持久化。
 
@@ -108,7 +166,7 @@ React 组件身份和列表 key 必须经过真实插入、删除、重排测试
 
 iframe 和 CSP 是纵深防护，不是通用恶意代码 VM。浏览器可能无法在同一 WebView 内强制终止同步死循环或限定内存；不能宣称已获得进程级 CPU/内存隔离。启用模型生成 JavaScript 前，必须在 Desktop 的 WebView2、WKWebView、Linux WebKitGTK 及实际受支持 host 上验证 host API 不可见、网络/导航受限、消息可取消且 renderer 可恢复。某个 host 无法证明这些约束时，必须明确禁用该 host 的脚本执行并仍允许静态 HTML/CSS/SVG，不得静默用宿主权限执行。
 
-## 共同应用与持久化契约
+### 共同应用与持久化契约
 
 应用身份绑定目标设备/runtime、workspace、session 和应用 ID。每个接受版本保存源码及状态的独立修订；解析树、DOM 和截图是可丢弃的派生数据，不是权威存储。逻辑记录至少包含：
 
@@ -129,7 +187,7 @@ iframe 和 CSP 是纵深防护，不是通用恶意代码 VM。浏览器可能�
 
 候选检查使用已接受状态的隔离副本，绝不覆写正式用户数据。检查可测试候选如何处理用户操作，但只有接受后用户界面才切换到它。保存失败时保留本地输入并显示失败状态；关闭重开从目标 owner 读取已接受源码和状态。格式或库切换是新修订；状态转换必须显式迁移并检查，失败时保留此前应用与数据。
 
-## 统一实现约束与完成门槛
+### 统一实现约束与完成门槛
 
 按可验证的纵向能力迁移，避免两条新路径各自建立一套应用 owner：
 
@@ -141,7 +199,7 @@ iframe 和 CSP 是纵深防护，不是通用恶意代码 VM。浏览器可能�
 
 完成以行为证据为准，不以模块已创建或代码已编译为准。旧 graph 存储不进入新 owner，只有带 source 的候选才可接受；未验证的 host 或远程场景必须保持显式禁用或 unsupported。
 
-## 候选验收与证据
+### 候选验收与证据
 
 组件和自由文档共用一条 owner 级交付门：
 
@@ -160,7 +218,7 @@ OpenUI 文档还必须带回相同的 `sourceKind`。owner 会逐字段比较这
 
 组件作者提供的检查探针覆盖组件事件和 mounted inspect；应用级检查场景验证用户需求。自由文档检查器观察真实隔离实例并驱动受控测试事件，不能只采信页面向父级发送的“测试通过”消息。两种路径都保存精确源版本、状态版本、renderer/checker 版本和结果引用；HTML 路径还要记录 runtime、sanitizer、inspector 和 bridge revision。
 
-## 远程与多入口
+### 远程与多入口
 
 保存、检查、脚本宿主桥接和候选接受始终属于应用 owner 所在 runtime。控制端只呈现状态和发送命令，不代理文件系统、渲染权限或用户状态。运行和检查依赖的能力必须在目标端通告并协商；缺失时在准入或交付阶段明确返回 unsupported，不能静默在控制端本地执行。
 
@@ -174,7 +232,7 @@ OpenUI 文档还必须带回相同的 `sourceKind`。owner 会逐字段比较这
 
 组件检查和自由文档检查使用同一远程生命周期，不要求每个客户端都安装或运行 renderer。Desktop 当前事件驱动的前端 checker 是一种 adapter，不是架构 owner；目标执行端需要能力，而不是持续连接的 controller window。
 
-## 升级、历史数据与退役边界
+### 升级、历史数据与退役边界
 
 存储新增字段必须可选并容忍旧记录。未知字段、未知 source format、损坏源码和未知组件库都原样保留；旧 graph 记录直接显示为不可运行，不进入 renderer、checker 或 acceptance，也不自动迁移。旧 HTML Widget 可以作为显式导入的 HTML 文档候选，导入后先应用新隔离策略和检查；TSX/Canvas 编译产物不得被自动执行或冒充 OpenUI。
 

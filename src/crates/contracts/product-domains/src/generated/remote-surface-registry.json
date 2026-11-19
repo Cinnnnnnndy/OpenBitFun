@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "digest": "fnv1a64:c33c5af9950946e1",
+  "digest": "fnv1a64:21391be4b394fbaa",
   "retiredCommandPrefixes": [
     {
       "prefix": "lsp_",
@@ -67,7 +67,6 @@
       "peer_attachment_status_v1"
     ],
     "desktop": [
-      "gen_ui_libraries_v1",
       "model_routing_v1",
       "model_pool_selection_v1",
       "subagent_model_override_policy_v1",

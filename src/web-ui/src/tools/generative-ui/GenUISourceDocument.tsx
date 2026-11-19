@@ -72,6 +72,7 @@ export default function GenUISourceDocument({
     initialState={initialState}
     isStreaming={isStreaming}
     readOnly={readOnly}
+    executeActions={!readOnly}
     onStateUpdate={onStateUpdate}
     onError={onError}
     onAction={onAction}

@@ -122,11 +122,6 @@ export interface GenUILibraryContract {
 }
 export interface GenUICatalogContract {
   generation?: JsonSchema;
-  /** Generated from the same product declarations as the OpenUI adapter. */
-  openuiLangReference?: string;
-  openuiPrompts?: Record<string, string>;
-  /** Official lang-core prompts selected by the active GenUI profile. */
-  genuiSystemPrompts?: Record<string, string>;
   libraries: Record<string, GenUILibraryContract>;
   libraryAdapters?: Record<string, {
     id: string;

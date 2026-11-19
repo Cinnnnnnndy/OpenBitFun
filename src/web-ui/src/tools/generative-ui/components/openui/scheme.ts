@@ -2,19 +2,34 @@
 
 import { useEffect, useState, type RefObject } from "react";
 
-/** Read the active host color-scheme and refresh when its Appearance mode changes. */
-export function useColorScheme(ref: RefObject<HTMLElement | null>): "light" | "dark" {
-  const [scheme, setScheme] = useState<"light" | "dark">("light");
+const appearanceAttributes = [
+  "data-openbitfun-appearance-revision",
+  "data-openbitfun-appearance-mode",
+  "data-openbitfun-skin-id",
+  "data-color-scheme",
+  "data-contrast",
+  "data-theme",
+];
+
+/** A new skin or Appearance revision can change scoped tokens within the same color scheme. */
+export function useHostAppearance(ref: RefObject<HTMLElement | null>) {
+  const [appearance, setAppearance] = useState({ scheme: "light" as "light" | "dark", revision: 0 });
   useEffect(() => {
     const read = () => {
-      const value = ref.current ? getComputedStyle(ref.current).colorScheme : "";
-      setScheme(value.trim() === "dark" ? "dark" : "light");
+      const value = getComputedStyle(ref.current ?? document.documentElement).colorScheme;
+      setAppearance(previous => ({
+        scheme: value.trim() === "dark" ? "dark" : "light",
+        revision: previous.revision + 1,
+      }));
     };
     read();
-    // Appearance switches the mode on the document root.
     const observer = new MutationObserver(read);
-    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["data-openbitfun-appearance-mode", "data-theme"] });
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: appearanceAttributes });
     return () => observer.disconnect();
   }, [ref]);
-  return scheme;
+  return appearance;
+}
+
+export function useColorScheme(ref: RefObject<HTMLElement | null>) {
+  return useHostAppearance(ref).scheme;
 }

@@ -22,6 +22,7 @@ use super::PeerHostKind;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PeerHostCapability {
+    /// Recognize older peers that can select a library for the retired GenUI tool.
     GenUiLibrariesV1,
     ModelRoutingV1,
     ModelPoolSelectionV1,
@@ -273,7 +274,6 @@ impl PeerHostCapability {
 /// Desktop publishes everything except `TerminalCursorReplayV1`: it fans out
 /// `terminal_event`, and that key selects the other delivery path.
 const DESKTOP_CAPABILITIES: &[PeerHostCapability] = &[
-    PeerHostCapability::GenUiLibrariesV1,
     PeerHostCapability::ModelRoutingV1,
     PeerHostCapability::ModelPoolSelectionV1,
     PeerHostCapability::SubagentModelOverridePolicyV1,
@@ -423,17 +423,21 @@ mod tests {
                 capability.key()
             );
         }
+        let desktop_exclusions = [
+            PeerHostCapability::TerminalCursorReplayV1,
+            PeerHostCapability::GenUiLibrariesV1,
+        ];
         for capability in PeerHostCapability::ALL {
             assert_eq!(
                 advertises(PeerHostKind::Desktop, *capability),
-                *capability != PeerHostCapability::TerminalCursorReplayV1,
-                "Desktop advertises everything but the cursor replay path: {}",
+                !desktop_exclusions.contains(capability),
+                "unexpected desktop advertisement for {}",
                 capability.key()
             );
         }
         assert_eq!(
             advertised_by(PeerHostKind::Desktop).len(),
-            PeerHostCapability::ALL.len() - 1
+            PeerHostCapability::ALL.len() - desktop_exclusions.len()
         );
         assert!(!advertises(
             PeerHostKind::Desktop,

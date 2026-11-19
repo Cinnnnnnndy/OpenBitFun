@@ -8848,6 +8848,9 @@ impl SessionManager {
                 });
             }
         }
+        self.persistence_manager
+            .seal_completed_figures(&workspace_path, &mut turn)
+            .await;
         turn.status = TurnStatus::Completed;
         turn.recovery = None;
         turn.finish_reason = finish_reason;

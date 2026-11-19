@@ -7,6 +7,8 @@
     "node": ">=22.12.0"
   },
   "scripts": {
+    "visualize:prepare": "node scripts/import-visualize.mjs && node scripts/cache-visualize-runtime.mjs && node scripts/prepare-visualize-atlas.mjs",
+    "visualize:verify": "node scripts/import-visualize.mjs --check && node scripts/cache-visualize-runtime.mjs --check && node scripts/prepare-visualize-atlas.mjs --check",
     "agent-harness:generate": "node scripts/generate-agent-harness.mjs",
     "agent-harness:check": "node scripts/generate-agent-harness.mjs --check",
     "copy-monaco": "copyfiles -u 5 \"src/web-ui/node_modules/monaco-editor/min/vs/**/*\" src/web-ui/public/monaco-editor && node scripts/prune-monaco-nls.cjs",

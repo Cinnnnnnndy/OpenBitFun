@@ -858,44 +858,6 @@ impl StreamProcessor {
                 )
                 .await;
         }
-
-        if let Some(genui_stream) = outcome.genui_stream {
-            // A decoded OpenUI source delta is the first renderable output of
-            // a GenUI call. Mark it exactly like ParamsPartial so latency,
-            // cancellation and turn completion observe the same visibility
-            // contract even though the outer tool JSON is still incomplete.
-            ctx.has_effective_output = true;
-            ctx.mark_first_visible_output();
-            let _ = self
-                .event_sink
-                .enqueue(
-                    AgenticEvent::ToolEvent {
-                        session_id: ctx.session_id.clone(),
-                        turn_id: ctx.dialog_turn_id.clone(),
-                        round_id: ctx.round_id.clone(),
-                        attempt_id: Some(ctx.attempt_id.clone()),
-                        attempt_index: Some(ctx.attempt_index),
-                        tool_event: ToolEventData::GenUIStream {
-                            identity: openbitfun_events::ToolEventIdentity::direct(
-                                genui_stream.tool_id,
-                                genui_stream.tool_name,
-                            ),
-                            message_id: genui_stream.message_id,
-                            seq: genui_stream.seq,
-                            format: genui_stream.format,
-                            text: genui_stream.text,
-                            reset: genui_stream.reset,
-                            app_id: genui_stream.app_id,
-                            title: genui_stream.title,
-                            template: genui_stream.template,
-                            library_id: genui_stream.library_id,
-                            library_revision: genui_stream.library_revision,
-                        },
-                    },
-                    None,
-                )
-                .await;
-        }
     }
 
     /// Handle text chunk
@@ -1970,7 +1932,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn native_genui_source_is_visible_before_tool_arguments_finish() {
+    async fn an_unavailable_legacy_tool_name_only_emits_generic_argument_events() {
         let sink = Arc::new(RecordingEventSink::default());
         let processor = StreamProcessor::new(sink.clone());
         let stream = iter(vec![
@@ -1991,7 +1953,7 @@ mod tests {
                     tool_call_index: None,
                     id: None,
                     name: None,
-                    arguments: Some(r#"Hello")}}]}"#.to_string()),
+                    arguments: Some(r#"hello)"}}}]}"#.to_string()),
                     arguments_is_snapshot: false,
                 }),
                 ..Default::default()
@@ -2017,12 +1979,23 @@ mod tests {
         assert!(result.has_effective_output);
         assert!(result.first_visible_output_ms.is_some());
         let events = sink.events.lock().await;
+        assert_eq!(
+            result.tool_calls[0].arguments["messages"][0]["createSurface"]["source"]["content"],
+            "root = Text(hello)"
+        );
         assert!(events.iter().any(|event| matches!(
             event,
             AgenticEvent::ToolEvent {
-                tool_event: ToolEventData::GenUIStream { text, .. },
+                tool_event: ToolEventData::ParamsPartial { .. },
                 ..
-            } if text == "root = Text("
+            }
+        )));
+        assert!(!events.iter().any(|event| matches!(
+            event,
+            AgenticEvent::ToolEvent {
+                tool_event: ToolEventData::GenUIStream { .. },
+                ..
+            }
         )));
     }
 
