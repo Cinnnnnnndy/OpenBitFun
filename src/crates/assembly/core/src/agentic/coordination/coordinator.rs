@@ -9736,6 +9736,35 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         turn_id: Option<&str>,
         history: Option<Option<usize>>,
     ) -> OpenBitFunResult<(Vec<DialogTurnData>, Option<usize>)> {
+        // A temporary child owns canonical turn data in memory throughout its
+        // lifetime. Live updates and history replay must select from that same source.
+        if let Some((mut turns, next)) =
+            self.session_manager
+                .with_transient_session_turns(session_id, |turns| {
+                    if let Some(before) = history {
+                        let ceiling = before.unwrap_or(usize::MAX);
+                        let end = turns.partition_point(|turn| turn.turn_index < ceiling);
+                        let Some((turn, older)) = turns[..end].split_last() else {
+                            return (Vec::new(), None);
+                        };
+                        (
+                            vec![turn.clone()],
+                            (!older.is_empty()).then_some(turn.turn_index),
+                        )
+                    } else if let Some(id) = turn_id {
+                        let found = turns.iter().rev().find(|turn| turn.turn_id == id);
+                        (found.cloned().into_iter().collect(), None)
+                    } else {
+                        (turns.to_vec(), None)
+                    }
+                })
+        {
+            self.session_manager
+                .validate_session_storage_path_binding(session_id, storage)?;
+            self.project_relay_turns(session_id, turn_id, &mut turns)
+                .await?;
+            return Ok((turns, next));
+        }
         #[cfg(feature = "external-sources")]
         self.session_manager
             .persistence_manager()
@@ -9862,12 +9891,6 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             read_mode,
             turns.len()
         );
-        if turn_id.is_some() && turns.is_empty() {
-            return Err(OpenBitFunError::NotFound(format!(
-                "Session turn unavailable: {}",
-                turn_id.unwrap_or_default()
-            )));
-        }
         if execution_absent {
             for turn in &mut turns {
                 if turn.status != TurnStatus::InProgress {
@@ -9911,6 +9934,22 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                 }
             }
         }
+        self.project_relay_turns(session_id, turn_id, &mut turns)
+            .await?;
+        Ok((turns, next))
+    }
+
+    async fn project_relay_turns(
+        &self,
+        session_id: &str,
+        turn_id: Option<&str>,
+        turns: &mut [DialogTurnData],
+    ) -> OpenBitFunResult<()> {
+        if let Some(id) = turn_id.filter(|_| turns.is_empty()) {
+            return Err(OpenBitFunError::NotFound(format!(
+                "Session turn unavailable: {id}"
+            )));
+        }
         let context = if turns
             .iter()
             .any(|turn| turn.status == TurnStatus::InProgress)
@@ -9921,7 +9960,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         } else {
             Vec::new()
         };
-        for turn in &mut turns {
+        for turn in turns {
             if turn.status == TurnStatus::InProgress {
                 let messages: Vec<_> = context
                     .iter()
@@ -9935,7 +9974,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                 SessionManager::append_generation_rounds(turn, &id, &messages, timestamp);
             }
         }
-        Ok((turns, next))
+        Ok(())
     }
 
     /// Export a transcript while retaining the same Session history boundary
