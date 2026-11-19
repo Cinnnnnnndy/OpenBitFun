@@ -83,7 +83,7 @@ async function testHost() {
     await reader.dispose();
   }
   const photo = 'https://images.example.test/diagram.png';
-  const dependency = 'https://cdn.jsdelivr.net/npm/bitfun-figure-fixture@1/index.js';
+  const dependency = 'https://cdn.jsdelivr.net/npm/figure-replay-fixture@1/index.js';
   let scriptLoads = 0;
   await page.setRequestInterception(true);
   page.on('request', request => {
