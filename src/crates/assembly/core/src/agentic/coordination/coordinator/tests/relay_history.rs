@@ -10,6 +10,36 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+async fn complete_observed_turn(
+    coordinator: &ConversationCoordinator,
+    manager: &SessionManager,
+    session_id: &str,
+    turn_id: &str,
+    message: Message,
+) {
+    ConversationCoordinator::persist_completed_dialog_turn(
+        coordinator.event_queue.as_ref(),
+        manager,
+        None,
+        session_id,
+        turn_id,
+        &ExecutionResult {
+            final_message: message.clone(),
+            total_rounds: 1,
+            success: true,
+            new_messages: vec![message],
+            finish_reason: FinishReason::Complete,
+            total_tools: 0,
+            duration_ms: 1,
+            partial_recovery_reason: None,
+            effective_finish_reason: "complete".to_string(),
+            has_final_response: true,
+        },
+        None,
+    )
+    .await;
+}
+
 #[tokio::test]
 async fn load_relay_session_turns_reads_history_after_the_session_is_unloaded() {
     let workspace = tempfile::tempdir().expect("workspace");
@@ -45,25 +75,12 @@ async fn load_relay_session_turns_reads_history_after_the_session_is_unloaded() 
     let message = Message::assistant("observer history".to_string())
         .with_turn_id(turn_id.clone())
         .with_round_id("round-observer".to_string());
-    ConversationCoordinator::persist_completed_dialog_turn(
-        coordinator.event_queue.as_ref(),
-        session_manager.as_ref(),
-        None,
+    complete_observed_turn(
+        &coordinator,
+        &session_manager,
         &session.session_id,
         &turn_id,
-        &ExecutionResult {
-            final_message: message.clone(),
-            total_rounds: 1,
-            success: true,
-            new_messages: vec![message],
-            finish_reason: FinishReason::Complete,
-            total_tools: 0,
-            duration_ms: 1,
-            partial_recovery_reason: None,
-            effective_finish_reason: "complete".to_string(),
-            has_final_response: true,
-        },
-        None,
+        message,
     )
     .await;
 
@@ -154,25 +171,12 @@ async fn relay_observer_fixture(
     let message = Message::assistant("observer history".to_string())
         .with_turn_id(turn_id.clone())
         .with_round_id("round-observer".to_string());
-    ConversationCoordinator::persist_completed_dialog_turn(
-        coordinator.event_queue.as_ref(),
-        session_manager.as_ref(),
-        None,
+    complete_observed_turn(
+        &coordinator,
+        &session_manager,
         &session.session_id,
         &turn_id,
-        &ExecutionResult {
-            final_message: message.clone(),
-            total_rounds: 1,
-            success: true,
-            new_messages: vec![message],
-            finish_reason: FinishReason::Complete,
-            total_tools: 0,
-            duration_ms: 1,
-            partial_recovery_reason: None,
-            effective_finish_reason: "complete".to_string(),
-            has_final_response: true,
-        },
-        None,
+        message,
     )
     .await;
     (
@@ -240,18 +244,7 @@ async fn load_relay_session_turns_streams_and_replays_a_temporary_btw_child() {
             assert_eq!(live[0].status, TurnStatus::InProgress);
             assert_eq!(live[0].model_rounds[0].text_items[0].content, reply);
         }
-        manager
-            .complete_dialog_turn(
-                &child_id,
-                id,
-                reply.into(),
-                &[message],
-                Default::default(),
-                Some("complete".into()),
-                Some(true),
-            )
-            .await
-            .unwrap();
+        complete_observed_turn(&coordinator, &manager, &child_id, id, message).await;
     }
 
     let (latest, before) = history(None).await.unwrap();
