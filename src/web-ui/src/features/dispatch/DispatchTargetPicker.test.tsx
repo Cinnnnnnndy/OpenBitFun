@@ -21,6 +21,11 @@ vi.mock('@/infrastructure/i18n', () => ({
 const pickerState = vi.hoisted(() => ({
   loggedIn: false,
   targets: [] as Array<Record<string, unknown>>,
+  executionDevice: null as string | null,
+}));
+
+vi.mock('@/infrastructure/peer-device/useExecutionDeviceName', () => ({
+  useExecutionDeviceName: () => pickerState.executionDevice,
 }));
 
 vi.mock('@/infrastructure/account/useAccountLoginState', () => ({
@@ -68,6 +73,7 @@ describe('DispatchTargetPicker overlay', () => {
   beforeEach(() => {
     pickerState.loggedIn = false;
     pickerState.targets = [];
+    pickerState.executionDevice = null;
     Object.defineProperty(window, 'innerWidth', { configurable: true, value: 800 });
     Object.defineProperty(window, 'innerHeight', { configurable: true, value: 800 });
     vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function () {
@@ -113,6 +119,22 @@ describe('DispatchTargetPicker overlay', () => {
     expect(menu?.style.visibility).toBe('visible');
     expect(menu?.style.left).toBe('240px');
     expect(menu?.style.top).toBe('293px');
+  });
+
+  it('names the device that runs a local-target task instead of "this computer"', async () => {
+    pickerState.executionDevice = 'Ubuntu';
+    await act(async () => {
+      root.render(
+        <DispatchTargetPicker target={{ kind: 'local' }} locked={false} onSelectTarget={vi.fn()} />,
+      );
+    });
+    const trigger = container.querySelector<HTMLButtonElement>(
+      '[data-testid="chat-input-dispatch-trigger"]',
+    );
+    expect(trigger?.textContent).toBe('Ubuntu');
+    await act(async () => trigger?.click());
+    expect(document.querySelector('[data-testid="dispatch-target-local-option"]')?.textContent)
+      .toContain('Ubuntu');
   });
 
   it('offers New Worktree inside the local target and reflects the selected local mode', async () => {
