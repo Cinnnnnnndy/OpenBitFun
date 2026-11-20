@@ -36,6 +36,13 @@ fi
   "$appimage" --appimage-extract >/dev/null
 
   test -f squashfs-root/usr/bin/openbitfun-desktop
+  # The host Mesa EGL driver can require symbols absent from the build host's Wayland library.
+  bundled_wayland="$(find squashfs-root -name 'libwayland-client.so*' -print -quit)"
+  if [[ -n "$bundled_wayland" ]]; then
+    echo "AppImage must use the host Wayland client library: found $bundled_wayland" >&2
+    exit 1
+  fi
+
   tray_sonames="$(jq -er '.[]' "$script_dir/linux-appimage-tray-libraries.json")"
   bundle_lib="$PWD/squashfs-root/usr/lib"
   while IFS= read -r soname; do
