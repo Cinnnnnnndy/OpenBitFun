@@ -1,5 +1,5 @@
 import type { FlowToolItem, ModelRound } from '../types/flow-chat';
-import { projectEffectiveToolItem } from '../utils/toolInvocationIdentity';
+import { projectEffectiveToolItem, skillInvocationName } from '../utils/toolInvocationIdentity';
 import { awaitsApproval, isShellActivity } from './activityClassification';
 import { fileEditTarget } from './fileEdits';
 import { classifyFlowGroupItem } from './policies';
@@ -26,16 +26,13 @@ export function figurePreparation(workspace?: string) {
       if (item.type !== 'tool' || item.subagentSessionId) continue;
       const tool = projectEffectiveToolItem(item as FlowToolItem);
       if (tool.importedSource) continue;
-      if (tool.toolName === 'Skill') {
-        active = (tool.toolResult?.result?.skill_name ?? tool.toolCall.input?.command) === 'visualize';
-      }
-      if (!active) continue;
-      if (
-        awaitsApproval(tool) ||
-        ['rejected', 'cancelled', 'error'].includes(tool.status) ||
-        tool.toolResult?.success === false
-      )
+      if (awaitsApproval(tool) || ['rejected', 'cancelled', 'error'].includes(tool.status)
+          || tool.toolResult?.success === false) {
+        if (tool.toolName === 'Skill') active = false;
         continue;
+      }
+      if (tool.toolName === 'Skill') active = skillInvocationName(tool) === 'visualize';
+      if (!active) continue;
       if (
         tool.toolName === 'Skill' ||
         isShellActivity(tool) ||

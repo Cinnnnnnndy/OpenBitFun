@@ -39,6 +39,12 @@ describe('execution activity grouping', () => {
     expect(folded.map(item => item.id)).toEqual(['scratch']);
     expect(prepare(model('later', [tool('terminal', 'ExecCommand')]).data)).toBeUndefined();
   });
+  it('does not fold exploration after an unsuccessful skill alias call', () => {
+    const prepare = figurePreparation('/work/project');
+    const failed = tool('failed', 'Skill', { skill: 'visualize' }, 'error');
+    expect(prepare(model('failed-round', [failed, tool('shell', 'ExecCommand')]).data)).toBeUndefined();
+  });
+
   it('keeps inline group identities independent of their position in a projected list', () => {
     const first = tool('read', 'Read');
     const second = tool('run', 'ExecCommand');

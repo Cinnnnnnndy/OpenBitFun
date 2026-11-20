@@ -23,6 +23,17 @@ impl SkillTool {
         Self
     }
 
+    // Keep command as the advertised field. Some providers emit skill instead.
+    // Permission checks, status text and execution must use the same identity.
+    fn requested_skill(input: &Value) -> Option<&str> {
+        input
+            .get("command")
+            .or_else(|| input.get("skill"))?
+            .as_str()
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+    }
+
     fn render_description(&self) -> String {
         r#"Execute a skill within the main conversation
 
@@ -185,11 +196,7 @@ impl Tool for SkillTool {
         input: &Value,
         _context: &ToolUseContext,
     ) -> OpenBitFunResult<Vec<PermissionIntent>> {
-        let skill_name = input
-            .get("command")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|skill_name| !skill_name.is_empty())
+        let skill_name = Self::requested_skill(input)
             .ok_or_else(|| OpenBitFunError::validation("command is required".to_string()))?;
         Ok(vec![PermissionIntent::new(
             "skill",
@@ -202,11 +209,7 @@ impl Tool for SkillTool {
         input: &Value,
         _context: Option<&ToolUseContext>,
     ) -> ValidationResult {
-        if input
-            .get("command")
-            .and_then(|v| v.as_str())
-            .is_none_or(|s| s.is_empty())
-        {
+        if Self::requested_skill(input).is_none() {
             return ValidationResult {
                 result: false,
                 message: Some("command is required and cannot be empty".to_string()),
@@ -235,7 +238,7 @@ impl Tool for SkillTool {
     }
 
     fn render_tool_use_message(&self, input: &Value, _options: &ToolRenderOptions) -> String {
-        if let Some(command) = input.get("command").and_then(|v| v.as_str()) {
+        if let Some(command) = Self::requested_skill(input) {
             format!("The \"{}\" skill is loaded.", command)
         } else {
             "Loading skill...".to_string()
@@ -247,9 +250,7 @@ impl Tool for SkillTool {
         input: &Value,
         context: &ToolUseContext,
     ) -> OpenBitFunResult<Vec<ToolResult>> {
-        let skill_name = input
-            .get("command")
-            .and_then(|v| v.as_str())
+        let skill_name = Self::requested_skill(input)
             .ok_or_else(|| OpenBitFunError::tool("command is required".to_string()))?;
 
         debug!("Skill tool executing skill: {}", skill_name);
@@ -625,6 +626,42 @@ Use the remote project skill.
 
         assert_eq!(schema["properties"]["arguments"]["type"], "string");
         assert_eq!(schema["required"], json!(["command"]));
+    }
+
+    #[tokio::test]
+    async fn skill_alias_loads_the_same_skill_it_validates_and_authorizes() {
+        let temp = tempfile::tempdir().unwrap();
+        let dir = temp.path().join(".openbitfun/skills/alias-test");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("SKILL.md"),
+            "---\nname: alias-test\ndescription: Alias fixture.\n---\nAlias body.",
+        )
+        .unwrap();
+        let context = local_context(temp.path().to_path_buf());
+        let tool = SkillTool::new();
+        for input in [
+            json!({"skill":"alias-test"}),
+            json!({"command":"alias-test","skill":"other"}),
+        ] {
+            assert!(tool.validate_input(&input, Some(&context)).await.result);
+            assert_eq!(
+                tool.permission_intents(&input, &context).unwrap()[0].resources,
+                ["alias-test"]
+            );
+            let result = tool.call_impl(&input, &context).await.unwrap();
+            assert!(
+                matches!(&result[0], ToolResult::Result { data, .. } if data["skill_name"] == "alias-test")
+            );
+        }
+        for input in [
+            json!({"skill":" "}),
+            json!({"skill":42}),
+            json!({"command":"","skill":"alias-test"}),
+        ] {
+            assert!(!tool.validate_input(&input, Some(&context)).await.result);
+            assert!(tool.permission_intents(&input, &context).is_err());
+        }
     }
 
     #[tokio::test]

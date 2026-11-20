@@ -2,7 +2,7 @@ import type { FlowItem, FlowTextItem, FlowToolItem } from '../types/flow-chat';
 import { READ_TOOL_NAMES, SEARCH_TOOL_NAMES } from '../tool-cards/toolCardMetadata';
 import { splitFilePathAndContent } from '@/shared/utils/partialJsonParser';
 import { isCodexVisualUri, visualArtifactUri, visualSidecarUri, visualReceiptPath, visualArtifactRoot } from '@/tools/visualize/reference';
-import { DEFERRED_TOOL_GATEWAY_NAME, projectEffectiveToolItem } from './toolInvocationIdentity';
+import { DEFERRED_TOOL_GATEWAY_NAME, projectEffectiveToolItem, skillInvocationName } from './toolInvocationIdentity';
 
 /** Shared by leaf cards and transcript composition so hidden cards leave no row. */
 export function isToolCardVisible(toolItem: FlowToolItem): boolean {
@@ -23,7 +23,7 @@ export function isToolCardVisible(toolItem: FlowToolItem): boolean {
     return false;
   }
   if (item.toolName === 'Skill') {
-    const skill = item.toolResult?.result?.skill_name ?? input?.command;
+    const skill = skillInvocationName(item);
     if (item.isParamsStreaming && (!skill || 'visualize'.startsWith(skill))) return false;
     return skill !== 'visualize';
   }
