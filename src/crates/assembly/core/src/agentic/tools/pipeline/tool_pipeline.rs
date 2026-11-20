@@ -316,9 +316,12 @@ fn resolve_pipeline_invocation(
     // Hooks and permission rules operate on canonical fields, while history
     // retains the model's wire input for replay and diagnostics.
     if invocation.effective_tool_name == "Skill" {
+        use crate::agentic::tools::implementations::SkillTool;
+        let name = SkillTool::requested_skill(&invocation.effective_arguments).map(str::to_owned);
         if let Some(args) = invocation.effective_arguments.as_object_mut() {
-            if let Some(skill) = args.remove("skill") {
-                args.entry("command").or_insert(skill);
+            args.remove("skill");
+            if let Some(name) = name {
+                args.insert("command".into(), serde_json::Value::String(name));
             }
         }
     }
@@ -6488,7 +6491,7 @@ mod tests {
     fn skill_alias_reaches_hooks_as_command_without_changing_wire_history() {
         let mut context = test_tool_execution_context();
         context.deferred_tools.push("Skill".into());
-        let args = json!({"skill": "visualize", "arguments": "monthly sales"});
+        let args = json!({"command":null, "skill": "visualize", "arguments": "monthly sales"});
         for (name, wire) in [
             ("Skill", args.clone()),
             (

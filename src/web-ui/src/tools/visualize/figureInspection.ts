@@ -1,5 +1,6 @@
 export interface MapPublicationCheck {
   mapExpected: boolean;
+  replay?: boolean;
   mapRequested?: boolean;
   itineraryExpected?: boolean;
 }

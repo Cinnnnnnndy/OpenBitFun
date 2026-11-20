@@ -50,11 +50,13 @@
         'If street data is unavailable, show a labeled stop list without a scale.');
     let found = false;
     let cityOnly = false;
+    let hasScale = false;
     for (const el of document.querySelectorAll('svg,canvas,img,[data-visual-map]')) {
       if (!bound(el) || el.parentElement?.closest('svg,[data-visual-map]')) continue;
       const title = el.getAttribute('aria-label') || el.getAttribute('alt') || el.querySelector('title')?.textContent || '';
       const scale = el.querySelector('[data-map-scale]') || [...el.querySelectorAll('text')].some(
         text => /^\s*\d+(?:[.,]\d+)?\s*(?:km|mi|千米|公里|英里)\s*$/iu.test(text.textContent));
+      if (scale) hasScale = true;
       const route = /\b(?:route|itinerary|street|walking|geographic)\s+map\b|地[图圖]|[路航][线線](?:示意)?[图圖]/iu.test(title);
       const declared = el.hasAttribute('data-visual-map');
       if (!declared && !route && !mapExpected) continue;
@@ -76,7 +78,7 @@
     if (cityOnly && !found) return 'This itinerary map shows only a city center. Plot the public stops in visit order using detail:"street", city and places.';
     if (mapExpected && !found) {
       const stops = document.querySelector('ol[data-visual-itinerary]');
-      if (mapRequested || !stops || !bound(stops) || !stops.querySelector('li') || document.querySelector('svg,canvas,[data-map-scale]')) return mapRepair;
+      if (mapRequested || !stops || !bound(stops) || !stops.querySelector('li') || hasScale || [...document.querySelectorAll('[data-map-scale]')].some(bound)) return mapRepair;
     }
     return '';
   }
@@ -153,7 +155,7 @@
           issue = 'The marked simulation is stationary. Check its animation target and startup state.';
       }
     }
-    if (!issue && !issues.length && publication && typeof publication === 'object') {
+    if (!issue && !issues.length && publication && typeof publication === 'object' && !publication.replay) {
       const selectionError = await checkSelects();
       if (selectionError) return selectionError;
     }

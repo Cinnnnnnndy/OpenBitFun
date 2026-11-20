@@ -112,3 +112,26 @@ it('requires an identified city before going online and never substitutes its ce
   await expect(resolveStreetStops([{ name: '龙翔桥' }], spec, [city])).rejects.toThrow('Photon network request failed (Offline)');
   expect(fetch).toHaveBeenCalledTimes(2);
 });
+
+it('returns confirmed coordinates and ambiguous candidates when another lookup exhausts the shared deadline', async () => {
+  vi.useFakeTimers();
+  try {
+    const fetch = vi.fn(async (url, options) => {
+      const q = url.searchParams.get('q');
+      if (q === 'Slow') return new Promise((_, reject) => {
+        options.signal.addEventListener('abort', () => reject(Error('aborted')), { once: true });
+      });
+      return Response.json({ features: q === '龙翔桥' ? [feature(17, 'railway:station')] :
+        [feature(81, 'tourism:attraction'), feature(82, 'tourism:museum')] });
+    });
+    vi.stubGlobal('fetch', fetch);
+    const result = resolveStreetStops([{ name: '龙翔桥' }, { name: 'Ambiguous' }, { name: 'Slow' }], spec, [city], Date.now() + 11000)
+      .catch(error => error.message);
+    await vi.advanceTimersByTimeAsync(11000);
+    const message = await result;
+    expect(message).toContain('Confirmed: 龙翔桥 [120.159,30.257]');
+    expect(message).toContain('N81');
+    expect(message).toContain('Slow');
+    expect(fetch).toHaveBeenCalledTimes(4);
+  } finally { vi.useRealTimers(); }
+});

@@ -28,15 +28,17 @@ function candidates(features, city, bounds) {
   return [...rows.values()];
 }
 
-async function search(city, bounds, query, tag) {
+async function search(city, bounds, query, tag, deadline) {
   const url = new URL('https://photon.komoot.io/api/');
   const [lon, lat] = city[3];
   url.search = new URLSearchParams({ q: query, lon, lat, bbox: bounds.join(','), limit });
   if (tag) url.searchParams.set('osm_tag', tag);
   for (let attempt = 0; ; attempt++) {
     const retry = attempt === 0;
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) throw Error('Photon place lookup deadline reached');
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), retry ? 10000 : 18000);
+    const timer = setTimeout(() => controller.abort(), Math.min(remaining, retry ? 10000 : 18000));
     let response;
     try {
       response = await fetch(url, { credentials: 'omit', redirect: 'error', referrerPolicy: 'no-referrer', signal: controller.signal });
@@ -58,7 +60,7 @@ async function search(city, bounds, query, tag) {
   }
 }
 
-export async function resolveStreetStops(places, spec, gazetteer) {
+export async function resolveStreetStops(places, spec, gazetteer, deadline = Date.now() + 45000) {
   const cities = gazetteer.filter(([country, , names]) =>
     (!spec.country || normalized(country) === normalized(spec.country)) &&
     names.some(name => normalized(name) === normalized(spec.city)));
@@ -71,7 +73,7 @@ export async function resolveStreetStops(places, spec, gazetteer) {
   const pending = places.entries();
   function lookup(query, tag) {
     const key = JSON.stringify([normalized(query), tag]);
-    if (!cache.has(key)) cache.set(key, search(city, bounds, query, tag));
+    if (!cache.has(key)) cache.set(key, search(city, bounds, query, tag, deadline));
     return cache.get(key);
   }
   async function resolveNext() {

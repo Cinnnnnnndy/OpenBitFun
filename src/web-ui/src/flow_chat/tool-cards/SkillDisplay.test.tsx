@@ -144,10 +144,10 @@ describe('SkillDisplay', () => {
     expect(container.textContent).toBe(summary);
   });
 
-  it('replays the skill name from a failed alias invocation', () => {
+  it.each([undefined, null, ' ', 42])('replays a skill alias with command %s', (command) => {
     const toolItem: FlowToolItem = {
       id: 'failed-skill', type: 'tool', toolName: 'Skill', status: 'error', timestamp: 0,
-      toolCall: { id: 'call', input: { skill: 'visualize' } },
+      toolCall: { id: 'call', input: { command, skill: 'visualize' } },
       toolResult: { id: 'call', result: {}, success: false, error: 'command is required', timestamp: 0 },
     };
     act(() => { root.render(<SkillDisplay toolItem={toolItem} config={skillConfig} />); });

@@ -287,7 +287,7 @@ pub(crate) async fn call_tool_with_runtime_hooks<T: Tool + ?Sized>(
     call_with_tool_runtime_hooks(tool.name(), input, context, tool.call_impl(input, context)).await
 }
 
-pub(crate) const SKILL_USER_REQUEST: &str = "__openbitfun_skill_user_request";
+pub(crate) const TURN_USER_REQUEST: &str = "__openbitfun_skill_user_request";
 
 pub(crate) fn build_tool_use_context_for_task(
     task: &ToolTask,
@@ -301,11 +301,14 @@ pub(crate) fn build_tool_use_context_for_task(
         cancellation_token,
         task.round_injection_preemption_token.clone(),
     );
-    if task.invocation.effective_tool_name == "Skill" {
+    if matches!(
+        task.invocation.effective_tool_name.as_str(),
+        "Skill" | "Write" | "Edit"
+    ) {
         if let Some(request) = &task.options.current_user_message {
             context
                 .custom_data
-                .insert(SKILL_USER_REQUEST.into(), Value::String(request.clone()));
+                .insert(TURN_USER_REQUEST.into(), Value::String(request.clone()));
         }
     }
     context

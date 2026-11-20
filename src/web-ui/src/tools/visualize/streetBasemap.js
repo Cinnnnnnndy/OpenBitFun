@@ -6,16 +6,22 @@ import { PbfReader } from 'pbf';
 const tileOrigin = 'https://tiles.versatiles.org/tiles/osm-vector';
 const unavailable = 'Street basemap unavailable. Explain that street detail is unavailable and show the stops as a timeline without a map or scale.';
 
-async function tileBytes(url) {
+async function tileBytes(url, deadline) {
   // One interrupted tile used to discard every verified stop in the viewport.
   // Retry that tile alone, within the projection worker's publication deadline.
   for (let attempt = 0; attempt < 2; attempt++) {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) break;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), remaining);
     try {
-      const response = await fetch(url, { credentials: 'omit', referrerPolicy: 'no-referrer', redirect: 'error' });
+      const response = await fetch(url, { signal: controller.signal, credentials: 'omit', referrerPolicy: 'no-referrer', redirect: 'error' });
       if (response.ok) return new Uint8Array(await response.arrayBuffer());
       if (response.headers.has('retry-after') || (response.status !== 408 && response.status < 500)) break;
     } catch {
       // A dropped connection may also interrupt reading an otherwise valid response.
+    } finally {
+      clearTimeout(timer);
     }
   }
   throw Error(unavailable);
@@ -65,7 +71,7 @@ function tilePaths(tile, size, left, top, width, height, language, terrainLabels
     '<path data-street-layer="' + layer + '" d="' + parts.join('') + '"/>').join('');
 }
 
-export async function streetBasemap(projection, width, height, language, terrainLabels) {
+export async function streetBasemap(projection, width, height, language, terrainLabels, deadline = Date.now() + 15000) {
   const world = projection.scale() * 2 * Math.PI;
   // The public Shortbread tiles end at z14. Project their vector geometry at
   // the requested scale for close-up walking routes.
@@ -85,7 +91,7 @@ export async function streetBasemap(projection, width, height, language, terrain
   for (let i = 0; i < tiles.length; i += 4) {
     const batch = await Promise.all(tiles.slice(i, i + 4).map(async ({ x, y }) => {
       const url = tileOrigin + '/' + zoom + '/' + ((x + count) % count) + '/' + y;
-      const tile = new VectorTile(new PbfReader(await tileBytes(url)));
+      const tile = new VectorTile(new PbfReader(await tileBytes(url, deadline)));
       const left = (x - x0) * tileSize, top = (y - y0) * tileSize;
       const labels = [];
       const paths = tilePaths(tile, tileSize, left, top, width, height, language, labels);

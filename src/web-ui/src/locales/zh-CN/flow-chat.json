@@ -1,6 +1,8 @@
 {
   "visualize": {
     "mapCredit": "底图数据 Natural Earth",
+    "deferredStreetMap": "这条回复未保存街道底图。在这台设备加载时，地图服务商会收到公开站点名称和地图范围。",
+    "loadStreetMap": "加载街道地图",
     "mapNorth": "北",
     "mapKilometers": "公里",
     "mapMeters": "米",

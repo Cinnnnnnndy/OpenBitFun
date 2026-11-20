@@ -1,6 +1,6 @@
 import release from '../../../../../scripts/visualize-runtime.json';
 
-const loaders = import.meta.env.DEV ? import.meta.glob<string>('../../../../../.visualize-runtime/*.{js,json}', {
+const loaders = import.meta.env.OPENBITFUN_VISUALIZE_DEV_KIT ? import.meta.glob<string>('../../../../../.visualize-runtime/*.{js,json}', {
   query: '?raw',
   import: 'default',
 }) : {};

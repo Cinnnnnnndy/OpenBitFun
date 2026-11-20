@@ -13,7 +13,8 @@ import { z } from 'zod/v4';
 import { useI18n } from '@/infrastructure/i18n';
 import { useHostAppearance } from '@/infrastructure/appearance/hooks/useHostAppearance';
 import { buildCodexFrame } from './codexFrameDocument';
-import { watchFigureInspection } from './figureInspection';
+import { watchFigureInspection, type MapPublicationCheck } from './figureInspection';
+import { mapPublication } from './mapPublication';
 import { readFigureStyle } from './figureAppearance';
 import { readWidgetState } from './widgetStateStorage';
 
@@ -63,12 +64,14 @@ export default function CodexFigure({
   uri,
   write,
   checkedBindings,
+  deferredRequest,
   getSession,
   subscribe,
 }: {
   uri: string;
   write: FlowToolItem | FlowTextItem;
   checkedBindings?: BoundValues;
+  deferredRequest?: string;
   getSession: () => Session | undefined;
   subscribe: (notify: () => void) => () => void;
   html: string;
@@ -109,6 +112,8 @@ export default function CodexFigure({
     { name: string; title?: string; description?: string }[]
   >([]);
   const [loadError, setLoadError] = useState(false);
+  const [mapNeedsConsent, setMapNeedsConsent] = useState(false);
+  const [onlineRevision, setOnlineRevision] = useState<string>();
   const [action, setAction] = useState<{ href?: string; prompt?: string; title?: string } | null>(null);
   const [attempt, setAttempt] = useState(0);
   const [ready, setReady] = useState(0);
@@ -166,13 +171,13 @@ export default function CodexFigure({
   useEffect(() => {
     if (ready && Object.keys(liveValues).length) presentation.current?.postMessage({ values: liveValues });
   }, [ready, liveValues]);
-  const [built, setBuilt] = useState<{ html: string; document: string; version: number }>();
+  const [built, setBuilt] = useState<{ html: string; document: string; version: number; publication?: MapPublicationCheck; saveMap?: () => void }>();
   const source = built?.html === html ? built.document : '';
   const [passed, setPassed] = useState(0);
   const [issue, setIssue] = useState<string | null>(null);
   useEffect(() => {
     let mounted = true;
-    let state = null;
+    let state: ReturnType<typeof parseSnapshot> | null = null;
     try {
       state = parseSnapshot(readWidgetState(localStorage, storageKey, legacyKey, roundId) ?? 'null');
     } catch {
@@ -180,17 +185,43 @@ export default function CodexFigure({
     }
     modelContent.current = state?.modelContent ?? null;
     const initialStyle = readFigureStyle(wrapper.current ?? document.documentElement);
-    buildCodexFrame(html, state, currentLanguage, declarations ?? {}, bindings, initialStyle)
-      .then((document) => {
-        if (mounted) setBuilt(prev => ({ html, document, version: (prev?.version ?? 0) + 1 }));
-      })
-      .catch(() => {
-        if (mounted) setLoadError(true);
-      });
+    setMapNeedsConsent(false);
+    setLoadError(false);
+    setIssue(null);
+    async function build() {
+      let fragment = html;
+      let saveMap: (() => void) | undefined;
+      if (html.includes('data-visual-atlas')) {
+        const { recoverReaderStreetMap } = await import('./regionalAtlas');
+        if (!mounted) return;
+        const allowNames = !!declarations && Object.values(declarations).every(entry => entry.type === 'image');
+        let recovery;
+        try {
+          recovery = await recoverReaderStreetMap(html, storageKey, allowNames, onlineRevision === html);
+        } catch (error) {
+          if (mounted && error instanceof Error) setIssue(error.message);
+          throw error;
+        }
+        if (!mounted) return;
+        if (!recovery) {
+          setMapNeedsConsent(true);
+          return;
+        }
+        fragment = recovery.html;
+        saveMap = recovery.save;
+      }
+      const publication = deferredRequest === undefined ? undefined :
+        { ...await mapPublication(uri, deferredRequest, fragment), replay: true };
+      const document = await buildCodexFrame(fragment, state, currentLanguage, declarations ?? {}, bindings, initialStyle);
+      if (mounted) setBuilt(prev => ({ html, document, publication, saveMap, version: (prev?.version ?? 0) + 1 }));
+    }
+    void build().catch(() => {
+      if (mounted) setLoadError(true);
+    });
     return () => {
       mounted = false;
     };
-  }, [html, storageKey, legacyKey, roundId, currentLanguage, attempt, declarations, bindings]);
+  }, [html, storageKey, legacyKey, roundId, currentLanguage, attempt, declarations, bindings, onlineRevision, uri, deferredRequest]);
   const changes = useMemo(
     () =>
       groups.map((g) => ({
@@ -239,8 +270,11 @@ export default function CodexFigure({
     setIssue(null);
     const stopChecking = watchFigureInspection(frame, problem => {
       if (problem) setIssue(problem);
-      else setPassed(built!.version);
-    });
+      else {
+        built!.saveMap?.();
+        setPassed(built!.version);
+      }
+    }, built?.publication);
     setGroups([]);
     setEdits({});
     setLoadError(false);
@@ -646,7 +680,13 @@ export default function CodexFigure({
           })}
         </section>
       )}
-      {!verified && !loadError && !issue && <small role="status">{t('visualize.loading')}</small>}
+      {mapNeedsConsent && (
+        <div role="status">
+          {t('visualize.deferredStreetMap')}{' '}
+          <button type="button" onClick={() => setOnlineRevision(html)}>{t('visualize.loadStreetMap')}</button>
+        </div>
+      )}
+      {!mapNeedsConsent && !verified && !loadError && !issue && <small role="status">{t('visualize.loading')}</small>}
       {(loadError || issue) && (
         <div role="status">
           {t('visualize.resourceError')} {issue}{' '}

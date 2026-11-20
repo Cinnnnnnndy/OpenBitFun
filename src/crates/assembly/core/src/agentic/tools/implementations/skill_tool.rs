@@ -25,13 +25,14 @@ impl SkillTool {
 
     // Keep command as the advertised field. Some providers emit skill instead.
     // Permission checks, status text and execution must use the same identity.
-    fn requested_skill(input: &Value) -> Option<&str> {
-        input
-            .get("command")
-            .or_else(|| input.get("skill"))?
-            .as_str()
-            .map(str::trim)
-            .filter(|name| !name.is_empty())
+    pub(crate) fn requested_skill(input: &Value) -> Option<&str> {
+        ["command", "skill"].into_iter().find_map(|key| {
+            input
+                .get(key)?
+                .as_str()
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+        })
     }
 
     fn render_description(&self) -> String {
@@ -333,12 +334,21 @@ impl Tool for SkillTool {
             && skill_data.argument_names.is_empty();
         let user_request = context
             .custom_data
-            .get(crate::agentic::tools::tool_context_runtime::SKILL_USER_REQUEST)
+            .get(crate::agentic::tools::tool_context_runtime::TURN_USER_REQUEST)
             .and_then(Value::as_str)
             .filter(|s| !s.trim().is_empty());
         let file_delivery = context.custom_data
             .get(openbitfun_agent_runtime::remote_file_delivery::TOOL_CONTEXT_REMOTE_FILE_DELIVERY_KEY)
             .and_then(Value::as_bool) == Some(true);
+        #[cfg(debug_assertions)]
+        if !file_delivery
+            && !context.is_remote()
+            && skill_data.key == "user::openbitfun-system::visualize"
+        {
+            if let Ok(guide) = std::env::var("OPENBITFUN_VISUALIZE_DEV_GUIDE") {
+                skill_data.content.push_str(&format!("\n\nThe local development renderer supports the extended component API documented in {guide}."));
+            }
+        }
         if file_delivery && skill_data.key == "user::openbitfun-system::visualize" {
             skill_data.content =
                 openbitfun_agent_runtime::remote_file_delivery::remote_file_delivery_reminder()
@@ -643,6 +653,9 @@ Use the remote project skill.
         for input in [
             json!({"skill":"alias-test"}),
             json!({"command":"alias-test","skill":"other"}),
+            json!({"command":null,"skill":"alias-test"}),
+            json!({"command":" ","skill":"alias-test"}),
+            json!({"command":3,"skill":"alias-test"}),
         ] {
             assert!(tool.validate_input(&input, Some(&context)).await.result);
             assert_eq!(
@@ -657,7 +670,7 @@ Use the remote project skill.
         for input in [
             json!({"skill":" "}),
             json!({"skill":42}),
-            json!({"command":"","skill":"alias-test"}),
+            json!({"command":"","skill":" "}),
         ] {
             assert!(!tool.validate_input(&input, Some(&context)).await.result);
             assert!(tool.permission_intents(&input, &context).is_err());

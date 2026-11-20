@@ -9,6 +9,7 @@ const root = fileURLToPath(new URL('../', import.meta.url));
 const manifest = JSON.parse(await readFile(new URL('./visualize-upstream.json', import.meta.url), 'utf8'));
 const owner = path.join(root, 'src/crates/assembly/core/builtin_skills/visualize');
 const target = path.join(owner, 'upstream');
+const cache = path.join(root, '.visualize-runtime');
 const args = process.argv.slice(2);
 const check = args.includes('--check');
 const paths = args.filter((arg) => arg !== '--check');
@@ -51,10 +52,10 @@ const installed = await readFile(path.join(target, '.codex-plugin/plugin.json'),
 if (!check && (paths.length || installed?.version !== manifest.version)) await verify(source);
 if (!check && installed?.version !== manifest.version) {
   // Keep the previous local install outside the embedded skill tree during upgrades.
-  const cache = path.join(root, '.visualize-runtime');
   await mkdir(cache, { recursive: true });
   const stage = await mkdtemp(path.join(cache, 'import-'));
   const backup = path.join(stage, 'previous');
+  let preserveBackup = false;
   try {
     await cp(source, path.join(stage, 'package'), { recursive: true, preserveTimestamps: true });
     await verify(path.join(stage, 'package'));
@@ -62,14 +63,36 @@ if (!check && installed?.version !== manifest.version) {
     try {
       await rename(path.join(stage, 'package'), target);
     } catch (error) {
-      if (installed) await rename(backup, target);
+      if (installed) {
+        preserveBackup = true;
+        await rename(backup, target);
+        preserveBackup = false;
+      }
       throw error;
     }
   } finally {
-    await rm(installed ? path.join(stage, 'package') : stage, { recursive: true, force: true });
+    if (!preserveBackup) await rm(stage, { recursive: true, force: true });
   }
 }
 await verify(target);
+
+// Before this importer cleaned its staging directory, a successful upgrade
+// left exactly one "previous" install. Leave interrupted swaps and unrelated
+// cache entries alone. Only prune after verifying the current install.
+if (!check) {
+  const stages = await readdir(cache, { withFileTypes: true }).catch(error => {
+    if (error.code === 'ENOENT') return [];
+    throw error;
+  });
+  for (const stage of stages.filter(entry => entry.isDirectory() && /^import-[A-Za-z0-9]{6}$/.test(entry.name))) {
+    const dir = path.join(cache, stage.name);
+    const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
+    if (entries.length !== 1 || entries[0].name !== 'previous' || !entries[0].isDirectory()) continue;
+    const plugin = await readFile(path.join(dir, 'previous/.codex-plugin/plugin.json'), 'utf8').then(JSON.parse).catch(() => null);
+    if (plugin?.name === 'visualize' && typeof plugin.version === 'string' && plugin.version !== manifest.version)
+      await rm(dir, { recursive: true, force: true });
+  }
+}
 
 // Keep the packaged guides and validation workflow intact. Only the resource
 // location and the final reference differ between Codex and FlowChat.

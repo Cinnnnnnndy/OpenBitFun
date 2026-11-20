@@ -7,8 +7,7 @@ export const DEFERRED_TOOL_GATEWAY_NAME = 'CallDeferredTool';
 export function skillInvocationName(item: FlowToolItem): string | undefined {
   const input = item.toolCall?.input;
   const result = item.toolResult?.result;
-  const requested = input?.command ?? input?.skill ?? input?.skill_name;
-  return [result?.skill_name, result?.name, requested]
+  return [result?.skill_name, result?.name, input?.command, input?.skill, input?.skill_name]
     .find((name): name is string => typeof name === 'string' && name.trim().length > 0)?.trim();
 }
 

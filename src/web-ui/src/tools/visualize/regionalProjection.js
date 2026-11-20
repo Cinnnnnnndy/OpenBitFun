@@ -2,7 +2,7 @@ import * as d3 from 'd3-geo';
 import * as topojson from 'topojson-client';
 import { streetBasemap } from './streetBasemap.js';
 import { resolveStreetStops } from './streetPlaces.js';
-self.onmessage = async ({ data: { spec, urls, language, labels: strings } }) => {
+self.onmessage = async ({ data: { spec, urls, language, labels: strings, lookupDeadline, deadline } }) => {
   const esc = (s) =>
     String(s).replace(
       /[&<>"']/g,
@@ -23,7 +23,7 @@ self.onmessage = async ({ data: { spec, urls, language, labels: strings } }) => 
       throw Error('Unknown map detail. Use street or regional.');
     const needsCoordinates = places.some(place => !place.coordinates);
     const gazetteer = needsCoordinates ? await load('places') : [];
-    if (street && needsCoordinates) places = await resolveStreetStops(places, spec, gazetteer);
+    if (street && needsCoordinates) places = await resolveStreetStops(places, spec, gazetteer, lookupDeadline);
     const points = places.map((place) => {
       let xy = place.coordinates;
       if (!xy) {
@@ -153,8 +153,16 @@ self.onmessage = async ({ data: { spec, urls, language, labels: strings } }) => 
       }
       return paths.join('');
     }
-    const streetSvg = street ? await streetBasemap(projection, width, height,
-      languageKey === 'name_zht' ? 'zh-Hant' : languageKey === 'name_zh' ? 'zh-Hans' : language, terrainLabels) : '';
+    let streetSvg = '';
+    if (street) {
+      try {
+        streetSvg = await streetBasemap(projection, width, height,
+          languageKey === 'name_zht' ? 'zh-Hant' : languageKey === 'name_zh' ? 'zh-Hans' : language, terrainLabels, deadline);
+      } catch (error) {
+        const confirmed = points.filter(point => point.osmId).map(point => point.name + ' ' + JSON.stringify(point.xy));
+        throw Error(error.message + (confirmed.length ? ' Confirmed: ' + confirmed.join('; ') : ''));
+      }
+    }
     const [land, lakes, rivers, borders] = street ? [] : await Promise.all(
       ['land', 'lakes', 'rivers', 'borders', 'provinces', 'seas'].map(layer),
     );

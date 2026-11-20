@@ -13,7 +13,7 @@ import release from '../../../../../scripts/visualize-runtime.json';
 
 // The kit is loaded only for v2 figures. One local import supplies both the
 // runtime and the exact same authoring resources to the installed skill.
-const raw = import.meta.env.DEV ? import.meta.glob<string>(
+const raw = import.meta.env.OPENBITFUN_VISUALIZE_DEV_KIT ? import.meta.glob<string>(
   '../../../../crates/assembly/core/builtin_skills/visualize/upstream/{assets/*.js,skills/visualize/assets/*}',
   { eager: true, import: 'default', query: '?raw' },
 ) : {};

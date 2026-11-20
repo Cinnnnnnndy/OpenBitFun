@@ -426,6 +426,8 @@ export default function VisualAnswer({
           {summary} <small role="status">{t('visualize.unavailable')}</small>
         </p>
       );
+    const deferred = turn.publishedFigures?.[uri]?.inspectionDeferred ||
+      (revision?.type === 'tool' && revision.toolResult?.result?.visualization_check_deferred === true);
     const stableKey = surface.key('visualize.v2', owner, turn.id, round.id, (item.type === 'tool' ? item.toolCall.id : item.id), uri);
     return (
       <Suspense fallback={<p>{summary}</p>}>
@@ -440,6 +442,7 @@ export default function VisualAnswer({
           follow={follow}
           uri={uri}
           checkedBindings={checkedBindings}
+          deferredRequest={deferred ? turn.userMessage.content : undefined}
           write={revision ?? item}
           getSession={getSession}
           subscribe={subscribe}
