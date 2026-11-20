@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { cp, lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -43,20 +43,30 @@ async function verify(directory) {
   assert.deepEqual(found.sort(), Object.keys(manifest.files).sort(), 'Missing upstream files');
 }
 
-if (!check && paths.length) await verify(source);
-try {
-  await lstat(target);
-} catch (e) {
-  if (check || e.code !== 'ENOENT') throw e;
-  if (!paths.length) await verify(source);
-  // Stage alongside the containing skill, outside the embedded skill tree.
-  const stage = await mkdtemp(path.join(root, '.visualize-import-'));
+const installed = await readFile(path.join(target, '.codex-plugin/plugin.json'), 'utf8')
+  .then(JSON.parse)
+  .catch(error => {
+    if (error.code !== 'ENOENT') throw error;
+  });
+if (!check && (paths.length || installed?.version !== manifest.version)) await verify(source);
+if (!check && installed?.version !== manifest.version) {
+  // Keep the previous local install outside the embedded skill tree during upgrades.
+  const cache = path.join(root, '.visualize-runtime');
+  await mkdir(cache, { recursive: true });
+  const stage = await mkdtemp(path.join(cache, 'import-'));
+  const backup = path.join(stage, 'previous');
   try {
     await cp(source, path.join(stage, 'package'), { recursive: true, preserveTimestamps: true });
     await verify(path.join(stage, 'package'));
-    await rename(path.join(stage, 'package'), target);
+    if (installed) await rename(target, backup);
+    try {
+      await rename(path.join(stage, 'package'), target);
+    } catch (error) {
+      if (installed) await rename(backup, target);
+      throw error;
+    }
   } finally {
-    await rm(stage, { recursive: true, force: true });
+    await rm(installed ? path.join(stage, 'package') : stage, { recursive: true, force: true });
   }
 }
 await verify(target);
@@ -65,7 +75,7 @@ await verify(target);
 // location and the final reference differ between Codex and FlowChat.
 const guidePrefix = 'skills/visualize/';
 const uri = 'openbitfun://current-session/artifacts/visualizations/v2/<title>.html';
-const streetMaps = 'For a geographic map write to map-<slug>.html. For sightseeing, walking, transit stops, or an itinerary within one city, use detail:"street", city, optional ISO country and the ordered public stop names in places. Submit the names directly. The host resolves stops, fetches the visible tiles, and saves the verified map for offline replay. Use a short local query and a matching osmTag (railway:station or highway:pedestrian for those stop types), or a reported osmId to identify the intended place. Ask about unresolved ambiguity. Sourced WGS84 coordinates are also accepted. Do not invent roads, shorelines, route geometry or scales. For a missing-map follow-up write the atlas declaration again in the current turn using the earlier stops. Repair it with the verified candidate coordinates in the current receipt. If name lookup fails for a public stop, get sourced WGS84 coordinates with WebSearch or WebFetch and resubmit the same map with a source credit. If coordinates or tiles remain unavailable, report the current error in text. An itinerary request may still show its schedule as an <ol data-visual-itinerary>. For explicitly offline or private locations use sourced local geometry. For figures with bound data supply stop coordinates or local geometry.';
+const streetMaps = 'For a geographic map write to map-<slug>.html. For a map of sightseeing, walking or transit stops within one city, use detail:"street", city, optional ISO country and the ordered public stop names in places. Submit the names directly. The host resolves stops, fetches the visible tiles, and saves the verified map for offline replay. Use a short local query and a matching osmTag (railway:station or highway:pedestrian for those stop types), or a reported osmId to identify the intended place. Ask about unresolved ambiguity. Sourced WGS84 coordinates are also accepted. Do not invent roads, shorelines, route geometry or scales. For a missing-map follow-up write the atlas declaration again in the current turn using the earlier stops. Repair it with the verified candidate coordinates in the current receipt. If name lookup fails for a public stop, get sourced WGS84 coordinates with WebSearch or WebFetch and resubmit the same map with a source credit. If coordinates or tiles remain unavailable, report the current error in text. An itinerary request may still show its schedule as an <ol data-visual-itinerary>. For explicitly offline or private locations use sourced local geometry. For figures with bound data supply stop coordinates or local geometry.';
 
 function flowChatEntry(upstream, resourceDirectory) {
   const adaptedMap = resourceDirectory.startsWith('..') ? './maps.md' : './authoring/maps.md';
@@ -82,7 +92,7 @@ function flowChatEntry(upstream, resourceDirectory) {
       '- An explicitly requested webpage (网页), website, or project page is a normal project file. Deliver a working independently openable page and link its entry file.\n' +
       '- For a conversational figure, write the literal fragment directly with Write. The first line is `+++ ' + uri + '` (replace <title> with an ASCII lowercase slug). The next line starts the markup. This is your only HTML destination. Use Edit on that URI for corrections.\n' +
       '- FlowChat opens this exact source privately with the conversation renderer during publication. Write/Edit returns the render result. Repair reported issues on the same URI, then use the returned reference. All preview instructions in the guides, including “open it before replying” for maps, are fulfilled by this host check. Do not create scratch HTML, launch a server, open a browser, request screenshots, or produce tool-by-tool progress messages for verification.\n' +
-      '- For a city or regional marker map, publish the bundled offline atlas inline first. Write a heading and `<script type="application/json" data-visual-atlas="1">{"places":[{"name":"京都","country":"JP"},{"name":"大阪","country":"JP"}]}</script>` using the requested city names. Support for worldwide land, coasts, lakes, rivers, province boundaries, city coordinates, labels and projection is built in. It produces a complete standalone SVG in the saved reply. No downloads, npm, scratch scripts or local previews are necessary. ' + streetMaps + ' Follow the adapted maps guide for other map types. For a moving simulation put data-visual-motion on the moving element or canvas.\n\n')
+      '- Choose a day calendar or timeline for a time-based itinerary. For today or tonight, verify the destination time and offer start times still available. An adjustable arrival time can shift its events and return time together. Choose a map for spatial questions. When both matter, combine them. For a city or regional marker map, publish the bundled offline atlas inline first. Write a heading and `<script type="application/json" data-visual-atlas="1">{"places":[{"name":"京都","country":"JP"},{"name":"大阪","country":"JP"}]}</script>` using the requested city names. Support for worldwide land, coasts, lakes, rivers, province boundaries, city coordinates, labels and projection is built in. It produces a complete standalone SVG in the saved reply. No downloads, npm, scratch scripts or local previews are necessary. ' + streetMaps + ' Follow the adapted maps guide for other map types. For a moving simulation put data-visual-motion on the moving element or canvas.\n\n')
     .replace(/- Check that JavaScript has no undefined identifiers[^\n]+/,
       '- Check selectors, JavaScript identifiers and the primary interaction. Use the FlowChat publication result for the render check.')
     .replace(

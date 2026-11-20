@@ -81,6 +81,13 @@ it('rejects nearby homonyms from another city, distant suburbs and a truncated r
   await expect(resolveStreetStops([{ name: '龙翔桥' }], spec, [city])).rejects.toThrow('ambiguous');
 });
 
+it('only reports confirmed coordinates when an authored OSM id is missing', async () => {
+  serve([feature(17, 'railway:station')]);
+  const places = [{ name: 'Verified', query: '龙翔桥', osmId: 'N17' }, { name: 'Unresolved', osmId: 'N99' }];
+  await expect(resolveStreetStops(places, spec, [city]))
+    .rejects.toThrow(/Confirmed: Verified \[120\.159,30\.257\]\. Unresolved \(no exact match\)/);
+});
+
 it('suggests a station by its display name when the expanded query misses, without guessing the stop', async () => {
   const fetch = vi.fn(async url => Response.json({
     features: url.searchParams.get('q') === '龙翔桥' ? [feature(17, 'railway:station')] : [],

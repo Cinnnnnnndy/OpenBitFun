@@ -115,6 +115,21 @@
     }
     return 'The fragment produced no visible content.';
   }
+  // Exercise the change handler in the disposable publishing frame. Reading a
+  // saved figure must never change the reader's selection or persisted state.
+  async function checkSelects() {
+    for (const select of document.querySelectorAll('select:enabled:not([multiple])')) {
+      if (!bound(select)) continue;
+      const option = Array.from(select.options).find(o =>
+        o.value !== select.value && !o.hidden && !o.matches(':disabled'));
+      if (!option) continue;
+      select.selectedIndex = option.index;
+      select.dispatchEvent(new Event('input', { bubbles: true }));
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+      await delay(0);
+      if (issues.length) return 'Selecting "' + option.label.slice(0, 60) + '" failed: ' + issues[0];
+    }
+  }
   async function run(publication) {
     let issue;
     const start = Date.now();
@@ -137,6 +152,10 @@
         if (!moving)
           issue = 'The marked simulation is stationary. Check its animation target and startup state.';
       }
+    }
+    if (!issue && !issues.length && publication && typeof publication === 'object') {
+      const selectionError = await checkSelects();
+      if (selectionError) return selectionError;
     }
     return issues[0] || issue || null;
   }

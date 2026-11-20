@@ -130,7 +130,7 @@ export async function resolveStreetStops(places, spec, gazetteer) {
       });
       return name + ' (' + reason + ')' + (hints.length ? ': ' + hints.join(' / ') : '');
     });
-    const confirmed = resolved.filter((place, index) => !places[index].coordinates && place.osmId)
+    const confirmed = resolved.filter((place, index) => !places[index].coordinates && place.coordinates)
       .map(place => place.name + ' ' + JSON.stringify(place.coordinates));
     const hint = missing.some(issue => issue.unavailable)
       ? 'Find missing public stops in a map source with WebSearch or WebFetch. Resubmit with its WGS84 coordinates [lon,lat]. '

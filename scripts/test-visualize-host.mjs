@@ -171,6 +171,18 @@ async function testHost() {
   assert.match(background.checks[2], /stationary/);
   assert.match(background.checks[3], /fixture-missing-input|Script error/);
   assert.equal(background.extraFrames, 0);
+  const selection = await page.evaluate(async () => {
+    const { inspectInBackground } = await import('/src/tools/visualize/backgroundInspection.ts');
+    const fragment = '<select><option value="0">19:30</option><option value="30">20:00</option></select><output>19:30</output>' +
+      '<script>const picker = document.querySelector("select"); picker.onchange = () => document.querySelector("output").textContent = ["19:30","20:00"][+picker.value].trim()</script>';
+    return Promise.all([
+      inspectInBackground(fragment, {}, { mapExpected: false }),
+      inspectInBackground(fragment.replace('+picker.value', 'picker.selectedIndex'), {}, { mapExpected: false }),
+      inspectInBackground(fragment),
+    ]);
+  });
+  assert.match(selection[0], /Selecting "20:00" failed/);
+  assert.deepEqual(selection.slice(1), [null, null]);
   console.log('Passed background checks, actionable errors and frame cleanup.');
   const mapPublication = await page.evaluate(async () => {
     const { inspectWrittenFigure } = await import('/src/tools/visualize/backgroundInspection.ts');
@@ -675,7 +687,7 @@ async function testHost() {
   const chart = await open(`
     <button id="sample">Change dataset</button><main></main>
     <script type="module">
-      import { mountChart } from "https://persistent.oaistatic.com/plugins/visualize/charts/1.6.5/element.js";
+      import { mountChart } from "https://persistent.oaistatic.com/plugins/visualize/charts/1.8.1/element.js";
       const rows = [["A","C",1,5],["B","C",2,3],["E","D",3,2]];
       const alternateRows = [["Z","Q",13,39],["Y","Q",19,22],["W","P",25,8],["V","P",61,1]];
       const charts = ${JSON.stringify(specs)}.map(spec => {

@@ -1,9 +1,8 @@
 fn main() {
     if std::env::var_os("CARGO_FEATURE_AGENT_RUNTIME").is_some() {
         emit_rerun_if_changed(std::path::Path::new("builtin_skills"));
-        if let Err(e) = build_embedded_builtin_skills_metadata() {
-            eprintln!("Warning: Failed to embed built-in skills metadata: {}", e);
-        }
+        build_embedded_builtin_skills_metadata()
+            .expect("could not prepare embedded built-in skills");
     }
 }
 
@@ -39,6 +38,30 @@ fn build_embedded_builtin_skills_metadata() -> Result<(), Box<dyn std::error::Er
     }
     files.sort();
 
+    let out_dir = PathBuf::from(std::env::var("OUT_DIR")?);
+    // The optional reference kit is installed locally for development. A release
+    // built from that same checkout must embed only the distributable skills.
+    let embed_root = if std::env::var("PROFILE")? == "release" {
+        files.retain(|path| {
+            !path.starts_with("visualize/upstream") && !path.starts_with("visualize/authoring")
+        });
+        let staged = out_dir.join("release_builtin_skills");
+        if staged.exists() {
+            fs::remove_dir_all(&staged)?;
+        }
+        for relative in &files {
+            let dest = staged.join(relative);
+            fs::create_dir_all(dest.parent().expect("skill file has a parent"))?;
+            fs::copy(builtin_root.join(relative), dest)?;
+        }
+        staged
+    } else {
+        builtin_root.clone()
+    };
+    println!(
+        "cargo:rustc-env=OPENBITFUN_EMBEDDED_SKILLS_DIR={}",
+        embed_root.display()
+    );
     let mut hasher = Sha256::new();
     for relative_path in files {
         let normalized = relative_path.to_string_lossy().replace('\\', "/");
@@ -49,8 +72,7 @@ fn build_embedded_builtin_skills_metadata() -> Result<(), Box<dyn std::error::Er
     }
     let bundle_hash = format!("{:x}", hasher.finalize());
 
-    let out_dir = std::env::var("OUT_DIR")?;
-    let dest_path = Path::new(&out_dir).join("embedded_builtin_skills.rs");
+    let dest_path = out_dir.join("embedded_builtin_skills.rs");
     let mut file = fs::File::create(&dest_path)?;
 
     writeln!(

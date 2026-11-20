@@ -33,6 +33,16 @@ it('projects only fixed public tile requests and emits offline street geometry',
   }
 });
 
+it('uses the highest available source level for a close-up walking route', async () => {
+  const closeUp = geoMercator().center([120.15, 30.26]).scale(2100000).translate([360, 240]);
+  const fetch = vi.fn(async url => new Response(url.includes('/14/') ? streetTile() : null,
+    { status: url.includes('/14/') ? 200 : 404 }));
+  vi.stubGlobal('fetch', fetch);
+
+  await expect(streetBasemap(closeUp, 720, 480, 'zh', [])).resolves.toContain('data-street-layer="streets"');
+  expect(fetch.mock.calls.every(([url]) => url.includes('/14/'))).toBe(true);
+});
+
 it('rejects an incomplete viewport when one street tile is offline', async () => {
   let unavailableTile;
   const fetch = vi.fn(async url => {

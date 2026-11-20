@@ -67,7 +67,9 @@ function tilePaths(tile, size, left, top, width, height, language, terrainLabels
 
 export async function streetBasemap(projection, width, height, language, terrainLabels) {
   const world = projection.scale() * 2 * Math.PI;
-  const zoom = Math.min(15, Math.floor(Math.log2(world / 256)));
+  // The public Shortbread tiles end at z14. Project their vector geometry at
+  // the requested scale for close-up walking routes.
+  const zoom = Math.min(14, Math.floor(Math.log2(world / 256)));
   if (zoom < 9) throw Error('Street maps need a city-scale extent. Use the regional atlas for distant places.');
   const count = 2 ** zoom;
   const tileSize = world / count;

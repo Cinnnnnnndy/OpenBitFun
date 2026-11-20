@@ -1,4 +1,16 @@
 {
+  "chart-v1.8.1.js": {
+    "url": "https://persistent.oaistatic.com/plugins/visualize/charts/1.8.1/element.js",
+    "sha256": "d187ad9ddf2eb7e459ae9b25281378382241716a352f9ce74a20ebc022d56062"
+  },
+  "chart-element-v1.8.1.js": {
+    "url": "https://persistent.oaistatic.com/plugins/visualize/charts/4f0917bb6b04d2a66330a984e928d18fa5e5fc65d8312efc14b5f50d99cce179/element.js",
+    "sha256": "5c2f1b79b4302ca7b0fd9675a0ab9db5dcc5c8297b0a81579aebb83c6dc2a3c4"
+  },
+  "chart-runtime-v1.8.1.js": {
+    "url": "https://persistent.oaistatic.com/plugins/visualize/charts/4f0917bb6b04d2a66330a984e928d18fa5e5fc65d8312efc14b5f50d99cce179/runtime.js",
+    "sha256": "41e2dcff10997e8f9fbde499ba6dbef634765a690f7723a5b3f8251228efafd5"
+  },
   "chart.js": {
     "url": "https://persistent.oaistatic.com/plugins/visualize/charts/1.6.5/element.js",
     "sha256": "362ce1cc20f78f2658b405dbd95b2d99d0fd1995970c8b7a16833206357e8d99"
