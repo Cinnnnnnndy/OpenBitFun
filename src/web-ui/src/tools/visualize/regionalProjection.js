@@ -1,6 +1,8 @@
 import * as d3 from 'd3-geo';
 import * as topojson from 'topojson-client';
-self.onmessage = async ({ data: { spec, urls, language, labels: strings } }) => {
+import { streetBasemap } from './streetBasemap.js';
+import { resolveStreetStops } from './streetPlaces.js';
+self.onmessage = async ({ data: { spec, urls, language, labels: strings, lookupDeadline, deadline } }) => {
   const esc = (s) =>
     String(s).replace(
       /[&<>"']/g,
@@ -12,13 +14,17 @@ self.onmessage = async ({ data: { spec, urls, language, labels: strings } }) => 
     return r.json();
   };
   try {
-    const { places, title, bounds } = spec;
-    if (!Array.isArray(places) || !places.length || places.length > 64) throw Error('Provide 1–64 places.');
-    const gazetteer = await load('places');
+    const { title, bounds } = spec;
+    if (!Array.isArray(spec.places) || !spec.places.length || spec.places.length > 64) throw Error('Provide 1–64 places.');
+    let places = spec.places.map(p => typeof p === 'string' ? { name: p } : p);
+    if (places.some(p => !p || typeof p.name !== 'string' || !p.name.trim())) throw Error('A map marker needs a name.');
+    const street = spec.detail === 'street';
+    if (spec.detail !== undefined && !street && spec.detail !== 'regional')
+      throw Error('Unknown map detail. Use street or regional.');
+    const needsCoordinates = places.some(place => !place.coordinates);
+    const gazetteer = needsCoordinates ? await load('places') : [];
+    if (street && needsCoordinates) places = await resolveStreetStops(places, spec, gazetteer, lookupDeadline);
     const points = places.map((place) => {
-      if (typeof place === 'string') place = { name: place };
-      if (!place || typeof place.name !== 'string' || !place.name.trim())
-        throw Error('A map marker needs a name.');
       let xy = place.coordinates;
       if (!xy) {
         const match = (s) => s.toLowerCase() === (place.city || place.name).toLowerCase();
@@ -38,7 +44,7 @@ self.onmessage = async ({ data: { spec, urls, language, labels: strings } }) => 
               place.name +
               '" matched ' +
               rows.length +
-              ' records. Specify country, region or sourced coordinates.',
+              ' records. Specify country or region for cities. For sights and streets use detail:"street", city and the public stop names.',
           );
         xy = rows[0][3];
       }
@@ -50,7 +56,7 @@ self.onmessage = async ({ data: { spec, urls, language, labels: strings } }) => 
         Math.abs(xy[1]) > 85
       )
         throw Error('Invalid longitude/latitude for ' + place.name);
-      return { name: place.name, xy };
+      return { name: place.name, xy, osmId: street ? place.osmId : undefined, osmName: place.osmName, osmTag: place.osmTag };
     });
     const width = 720,
       height = 480,
@@ -78,8 +84,8 @@ self.onmessage = async ({ data: { spec, urls, language, labels: strings } }) => 
     const y0 = projection([midLon, north])[1],
       y1 = projection([midLon, south])[1];
     const scale = Math.min(
-      (width * (bounds ? 1 : 0.46)) / Math.max(0.013, (dx * Math.PI) / 180),
-      (height * (bounds ? 1 : 0.41)) / Math.max(0.009, y1 - y0),
+      (width * (bounds ? 1 : street ? 0.77 : 0.46)) / Math.max(street ? 0.00012 : 0.013, (dx * Math.PI) / 180),
+      (height * (bounds ? 1 : street ? 0.72 : 0.41)) / Math.max(street ? 0.00008 : 0.009, y1 - y0),
     );
     projection
       .scale(scale)
@@ -147,13 +153,23 @@ self.onmessage = async ({ data: { spec, urls, language, labels: strings } }) => 
       }
       return paths.join('');
     }
-    const [land, lakes, rivers, borders] = await Promise.all(
+    let streetSvg = '';
+    if (street) {
+      try {
+        streetSvg = await streetBasemap(projection, width, height,
+          languageKey === 'name_zht' ? 'zh-Hant' : languageKey === 'name_zh' ? 'zh-Hans' : language, terrainLabels, deadline);
+      } catch (error) {
+        const confirmed = points.filter(point => point.osmId).map(point => point.name + ' ' + JSON.stringify(point.xy));
+        throw Error(error.message + (confirmed.length ? ' Confirmed: ' + confirmed.join('; ') : ''));
+      }
+    }
+    const [land, lakes, rivers, borders] = street ? [] : await Promise.all(
       ['land', 'lakes', 'rivers', 'borders', 'provinces', 'seas'].map(layer),
     );
-    if (!land) throw Error('No land intersects this regional map. Check the extent or use ocean geometry.');
+    if (!street && !land) throw Error('No land intersects this regional map. Check the extent or use ocean geometry.');
     const labels = [];
     const markers = points
-      .map(({ name, xy }) => {
+      .map(({ name, xy, osmId, osmName, osmTag }, index) => {
         const [x, y] = projection(xy);
         if (x < 0 || x > width || y < 0 || y > height) throw Error('The requested bounds exclude ' + name);
         const w = Math.min(width / 2, Array.from(name).length * 11 + 8);
@@ -176,9 +192,9 @@ self.onmessage = async ({ data: { spec, urls, language, labels: strings } }) => 
           ) || candidates[0];
         labels.push(label);
         return (
-          '<g data-visual-marker=""><title>' +
-          esc(name) +
-          '</title><circle cx="' +
+          '<g data-visual-marker="" data-map-stop="' + index + '" data-longitude="' + xy[0] +
+          '" data-latitude="' + xy[1] + '"' + (osmId ? ' data-osm-id="' + esc(osmId) + '"' : '') + '><title>' +
+          esc(name) + '</title>' + (osmId && osmName ? '<desc>' + esc(osmName) + ' · ' + esc(osmTag) + '</desc>' : '') + '<circle cx="' +
           x.toFixed(1) +
           '" cy="' +
           y.toFixed(1) +
@@ -204,6 +220,7 @@ self.onmessage = async ({ data: { spec, urls, language, labels: strings } }) => 
         label.x + w > width - 8 ||
         cy < 24 ||
         cy > height - 34 ||
+        (label.x + w > width - 60 && cy < 65) ||
         labels.some((q) => Math.abs(cy - q.y) < 21 && label.x < q.x + q.w + 6 && q.x < label.x + w + 6)
       )
         continue;
@@ -237,7 +254,7 @@ self.onmessage = async ({ data: { spec, urls, language, labels: strings } }) => 
       ' ' +
       height +
       '">' +
-      '<rect width="100%" height="100%"/>' +
+      (street ? '<rect data-street-ground="" width="100%" height="100%"/>' + streetSvg : '<rect width="100%" height="100%"/>' +
       '<path data-visual-region="" data-map-layer="land" d="' +
       land +
       '" stroke-width=".9"/>' +
@@ -249,7 +266,7 @@ self.onmessage = async ({ data: { spec, urls, language, labels: strings } }) => 
       '"/>' +
       '<path data-map-layer="rivers" d="' +
       rivers +
-      '" fill="none" stroke-width=".85" opacity=".45"/>' +
+      '" fill="none" stroke-width=".85" opacity=".45"/>') +
       context.join('') +
       markers +
       '<g data-map-north="" text-anchor="middle" font-size="12"><text x="' +

@@ -268,7 +268,8 @@ impl PersistenceManager {
                         let bindings = receipt.result["visualization_bindings"]
                             .as_object()
                             .cloned();
-                        checked.insert(uri.clone(), (exact.filter(|_| passed), bindings));
+                        let deferred = receipt.result["visualization_check_deferred"] == true;
+                        checked.insert(uri.clone(), (exact.filter(|_| passed), bindings, deferred));
                     }
                     registered.insert(uri);
                 }
@@ -308,7 +309,7 @@ impl PersistenceManager {
             let since = (!attested).then_some(turn.start_time);
             let filename = uri.rsplit('/').next().unwrap().to_owned();
             let session = root.clone();
-            let (source, bindings) = if let Some(exact) = checked.remove(uri) {
+            let (source, bindings, inspection_deferred) = if let Some(exact) = checked.remove(uri) {
                 exact
             } else {
                 let source = tokio::task::spawn_blocking(move || {
@@ -317,11 +318,12 @@ impl PersistenceManager {
                 .await
                 .ok()
                 .flatten();
-                (source, None)
+                (source, None, false)
             };
             turn.published_figures.insert(
                 uri.clone(),
                 source.map(|source| PublishedFigure {
+                    inspection_deferred,
                     bindings,
                     content_bytes: source.len(),
                     source,

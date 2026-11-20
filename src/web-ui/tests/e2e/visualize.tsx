@@ -288,7 +288,12 @@ const session = {
     {
       id: 'turn',
       sessionId: 'visual-test',
-      userMessage: { id: 'user', content: 'Compare latency and load', timestamp: 0 },
+      userMessage: { id: 'user', content: params.get('deferred-request') ?? 'Compare latency and load', timestamp: 0 },
+      ...(params.has('deferred-request') && { publishedFigures: Object.fromEntries(items.map(item => {
+        const uri = item.toolResult!.result.file_path;
+        const source = sessionStorage.getItem('visualize-test-fragment')!;
+        return [uri, { source, contentBytes: new TextEncoder().encode(source).length, inspectionDeferred: true }];
+      })) }),
       status: 'completed',
       startTime: 0,
       modelRounds: [

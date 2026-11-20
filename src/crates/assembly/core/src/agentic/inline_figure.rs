@@ -57,6 +57,7 @@ pub(super) fn reference_hint(uri: &str) -> String {
 #[serde(rename_all = "camelCase")]
 pub struct FigureCheckRequest {
     pub source: String,
+    pub user_request: Option<String>,
     pub uri: String,
     pub session_id: Option<String>,
     pub turn_id: Option<String>,
@@ -116,6 +117,11 @@ pub(super) async fn verify_written_figure(
     };
     let request = FigureCheckRequest {
         source: source.to_owned(),
+        user_request: context
+            .custom_data
+            .get(super::tools::tool_context_runtime::TURN_USER_REQUEST)
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned),
         uri: uri.into(),
         session_id: context.session_id.clone(),
         turn_id: context.dialog_turn_id.clone(),

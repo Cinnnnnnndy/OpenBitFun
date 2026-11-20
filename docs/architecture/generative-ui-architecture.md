@@ -4,7 +4,7 @@
 
 新回复可以保存为 `openbitfun://current-session/artifacts/visualizations/v2/<slug>.html`。FlowChat 按原始内容引用中的 URI 找到同一轮、同一子 Agent 的成功 Write，使用调用中保存的字节创建隔离的 iframe。同轮 Edit 在回复发出前生效。执行端在成功的 Write 和 Edit 结果中记录会话 URI；通过该会话本地存储目录的绝对路径修改图时，也会带上同一 URI。新的 Edit 还保存该次修改的完整源码。执行端完成对话轮次时，将最后一次通过检查的 Write 或 Edit 中的原始源码和 UTF-8 字节数保存在该轮记录中。旧版写入记录沿用完成时的文件快照。通过脚本生成的图也能发布，前提是该轮使用了可视化技能，且被引用的文件在该轮内生成或修改。FlowChat 收到已完成的回复和重开历史消息时都使用这份源码。读取旧回复时，执行端从已记录的 Write 或完整 Edit 开始，按顺序精确回放截至该条回复的修改。后续对话可以只修改已有图，新的回复使用当轮 Edit 返回的完整源码，上一条回复保持修改前的样子。生成成功后，图直接出现在回复里。若模型在最终文本里漏写内容引用，FlowChat 会在已完成的该轮回复中补上有成功记录的图，已引用的图只显示一次。原版图表的 `mountChart`、四个专用组件、地图、插图、变体轮播和设计控件都能使用同一入口。参考图仅用于测试。模型按用户的题目自行编排内容。 FlowChat 将当前聊天区域的颜色和字体通过展示通道传给已打开的图。切换主题或皮肤时，图内使用原版 CSS 变量的标记和控件会随之更新，交互状态留在原来的文档中。
 
-常规构建随源码提供 OpenBitFun 的技能入口、隔离渲染外壳、Apache ECharts 和离线地图。Vite 打包地图投影 worker 及其数据，Rust 嵌入技能。构建入口会通过 SHA-256 检查随仓库分发的依赖和地理数据，开发者也可以运行 `pnpm run visualize:verify` 单独检查。Write 和 Edit 在桌面后台实际渲染并返回本次产物的引用；无图形宿主时检查延至阅读端。Codex Visualize 1.0.103 的本地兼容套件是可选项。已有原包的开发者可以运行 `pnpm run visualize:import-reference` 导入扩展指南及兼容资源。
+常规构建随源码提供 OpenBitFun 的技能入口、隔离渲染外壳、Apache ECharts 和离线地图。Vite 打包地图投影 worker 及其数据，Rust 嵌入技能。构建入口会通过 SHA-256 检查随仓库分发的依赖和地理数据，开发者也可以运行 `pnpm run visualize:verify` 单独检查。Write 和 Edit 在桌面后台实际渲染并返回本次产物的引用；无图形宿主时检查延至阅读端，使用产生图表的那条用户请求。若街道图只保存了声明，读者可以选择联网加载底图；成功后，同一修订可在本机离线回放。Codex Visualize 1.0.109 的本地兼容套件是可选项。原包标注为专有许可，Git 仓库记录文件校验值。Rust 的 debug 和 release 构建均排除本机原包和扩展指南。只有桌面开发服务器在本地确认套件可用时才向模型提供扩展指南。按时间规划出行时可使用日历；询问位置、地图或空间关系时可使用地理底图。已有原包的开发者可以运行 `pnpm run visualize:import-reference` 导入扩展指南及兼容资源。
 
 普通城市标注图可以在技能交付的 HTML 中声明地点及可选范围。FlowChat 使用随产品分发的 Natural Earth 底图与地名，将声明投影成 SVG，检查城市标注和底图并保存该次检查的 SVG。断网重开历史图时，地理图层已经包含在回复中。皮肤控制画布和字体，水域、陆地、标记各自使用独立的语义颜色。
 
@@ -32,7 +32,7 @@ FlowChat 按会话、轮次和子 Agent 身份查找该段文字之前最后一�
 
 ## 组件验收
 
-对照 Codex visualize 1.0.103 的 charts 1.6.5 与 widgets 1.0.59 文档，OpenBitFun 使用独立的声明式输入和本地渲染器。可信代码随产品提供。macOS WKWebView 也验证了图表筛选、参数滑块、请求自身耗时、非连续 CPU 调用与刷新恢复。以下用例通过实际组件数据验算以及 Chromium 中的 FlowChat 回复回放检查。可运行的验收位于 [图表断言](../../src/web-ui/src/tools/visualize/components.test.ts) 和 [浏览器用例](../../scripts/test-visualize-browser.mjs)。
+当前兼容测试覆盖 Visualize 1.0.109 的 charts 1.8.1、历史图使用的 charts 1.6.5，以及 widgets 1.0.59。OpenBitFun 使用独立的声明式输入和本地渲染器。可信代码随产品提供。macOS WKWebView 也验证了图表筛选、参数滑块、请求自身耗时、非连续 CPU 调用与刷新恢复。以下用例通过实际组件数据验算以及 Chromium 中的 FlowChat 回复回放检查。可运行的验收位于 [图表断言](../../src/web-ui/src/tools/visualize/components.test.ts) 和 [浏览器用例](../../scripts/test-visualize-browser.mjs)。
 
 | 组件 | 核对内容 |
 | --- | --- |

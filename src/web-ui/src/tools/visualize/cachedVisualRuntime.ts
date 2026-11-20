@@ -1,9 +1,9 @@
 import release from '../../../../../scripts/visualize-runtime.json';
 
-const loaders = import.meta.glob<string>('../../../../../.visualize-runtime/*.{js,json}', {
+const loaders = import.meta.env.OPENBITFUN_VISUALIZE_DEV_KIT ? import.meta.glob<string>('../../../../../.visualize-runtime/*.{js,json}', {
   query: '?raw',
   import: 'default',
-});
+}) : {};
 const bundled = import.meta.glob<string>('../../../../../third_party/visualize/runtime/*.{js,json}', {
   query: '?raw', import: 'default',
 });
@@ -16,10 +16,16 @@ const inline = (body: string) => '<script>' + body.replace(/<\/script/gi, '<\\/s
 // release URL as its logical identity even when its bytes are served offline.
 export async function cachedVisualRuntime(fragment: string) {
   const selected = new Set<Asset>(['lucide.js', 'floating-core.js', 'floating-dom.js']);
-  if (fragment.includes('/charts/1.6.5/')) {
-    selected.add('chart.js');
-    selected.add('chart-element.js');
-    selected.add('chart-runtime.js');
+  const chartReleases = [
+    ['chart-v1.8.1.js', 'chart-element-v1.8.1.js', 'chart-runtime-v1.8.1.js'],
+    ['chart.js', 'chart-element.js', 'chart-runtime.js'],
+  ] as const;
+  for (const [entry, element, runtime] of chartReleases) {
+    if (fragment.includes(release[entry].url) || fragment.includes(release[element].url)) {
+      selected.add(entry);
+      selected.add(element);
+      selected.add(runtime);
+    }
   }
   for (const name of names) if (fragment.includes(release[name].url)) selected.add(name);
   const urls = fragment.match(/https:\/\/[^\s"'<>\x60]+/g) ?? [];
@@ -103,7 +109,7 @@ export async function cachedVisualRuntime(fragment: string) {
         esm.push([aliases[key] ?? [], '@exports:' + lib]);
       }
     } else {
-      if (key === 'chart.js')
+      if (chartReleases.some(([entry]) => entry === key))
         code = code.replace(/"\.\.\/[^"]+"/g, (path) => JSON.stringify(new URL(JSON.parse(path), url).href));
       if (key.endsWith('.json')) code = 'export default ' + code;
       else code = code.replace(/import\.meta\.url/g, () => JSON.stringify(url));

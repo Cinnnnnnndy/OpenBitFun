@@ -282,7 +282,7 @@ fn resolve_pipeline_invocation(
     tool_call: &ToolCall,
     context: &ToolExecutionContext,
 ) -> (ResolvedToolInvocation, Option<String>) {
-    let invocation = match ResolvedToolInvocation::from_wire_call(
+    let mut invocation = match ResolvedToolInvocation::from_wire_call(
         tool_call.tool_name.clone(),
         tool_call.arguments.clone(),
     ) {
@@ -311,6 +311,19 @@ fn resolve_pipeline_invocation(
                 "Tool '{effective_tool_name}' is not an available deferred tool in the current context"
             )),
         );
+    }
+
+    // Hooks and permission rules operate on canonical fields, while history
+    // retains the model's wire input for replay and diagnostics.
+    if invocation.effective_tool_name == "Skill" {
+        use crate::agentic::tools::implementations::SkillTool;
+        let name = SkillTool::requested_skill(&invocation.effective_arguments).map(str::to_owned);
+        if let Some(args) = invocation.effective_arguments.as_object_mut() {
+            args.remove("skill");
+            if let Some(name) = name {
+                args.insert("command".into(), serde_json::Value::String(name));
+            }
+        }
     }
 
     (invocation, None)
@@ -6472,6 +6485,30 @@ mod tests {
             .expect("permission audit lock")
             .iter()
             .any(|record| matches!(record.event, PermissionAuditEvent::Cancelled { .. })));
+    }
+
+    #[test]
+    fn skill_alias_reaches_hooks_as_command_without_changing_wire_history() {
+        let mut context = test_tool_execution_context();
+        context.deferred_tools.push("Skill".into());
+        let args = json!({"command":null, "skill": "visualize", "arguments": "monthly sales"});
+        for (name, wire) in [
+            ("Skill", args.clone()),
+            (
+                CALL_DEFERRED_TOOL_NAME,
+                json!({"tool_name": "Skill", "args": args}),
+            ),
+        ] {
+            let mut call = test_tool_call("skill-alias", name);
+            call.arguments = wire.clone();
+            let (invocation, error) = resolve_pipeline_invocation(&call, &context);
+            assert!(error.is_none());
+            assert_eq!(invocation.wire_arguments, wire);
+            assert_eq!(
+                invocation.effective_arguments,
+                json!({"command": "visualize", "arguments": "monthly sales"})
+            );
+        }
     }
 
     #[tokio::test]

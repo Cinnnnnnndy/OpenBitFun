@@ -124,8 +124,8 @@ async function testHost() {
     const csv = 'city,count\nShanghai,3';
     const request = { sessionId: 'owner', turnId: 'turn', toolCallId: 'plot', uri: root + 'map.html',
       source: '<!-- vis-bindings\n{"rows":{"type":"file","path":"./cities.csv"}}\n-->\n' +
-        '<main data-visual-map><svg viewBox="0 0 120 80"></svg></main><script>openai.visualization.onData("rows", async f => {' +
-        `if ((await f.blob.text()).includes("Shanghai,3")) document.querySelector("svg").innerHTML='<path d="M2 3L90 4L60 60Z"/>'; });</script>`,
+        '<main data-visual-map data-map-source="https://example.test/regions"><svg viewBox="0 0 120 80"></svg></main><script>openai.visualization.onData("rows", async f => {' +
+        `if ((await f.blob.text()).includes("Shanghai,3")) document.querySelector("svg").innerHTML='<path data-visual-region d="M2 3L90 4L60 60Z"/>'; });</script>`,
     };
     const file = { type:'tool', toolName:'Write', status:'completed', toolCall: { id:'csv', input:{payload:'+++ '+root+'cities.csv\n'+csv} },
       toolResult:{success:true,result:{file_path:root+'cities.csv',content_bytes:csv.length}} };
@@ -171,7 +171,122 @@ async function testHost() {
   assert.match(background.checks[2], /stationary/);
   assert.match(background.checks[3], /fixture-missing-input|Script error/);
   assert.equal(background.extraFrames, 0);
+  const selection = await page.evaluate(async () => {
+    const { inspectInBackground } = await import('/src/tools/visualize/backgroundInspection.ts');
+    const fragment = '<select><option value="0">19:30</option><option value="30">20:00</option></select><output>19:30</output>' +
+      '<script>const picker = document.querySelector("select"); picker.onchange = () => document.querySelector("output").textContent = ["19:30","20:00"][+picker.value].trim()</script>';
+    return Promise.all([
+      inspectInBackground(fragment, {}, { mapExpected: false }),
+      inspectInBackground(fragment.replace('+picker.value', 'picker.selectedIndex'), {}, { mapExpected: false }),
+      inspectInBackground(fragment),
+    ]);
+  });
+  assert.match(selection[0], /Selecting "20:00" failed/);
+  assert.deepEqual(selection.slice(1), [null, null]);
   console.log('Passed background checks, actionable errors and frame cleanup.');
+  const mapPublication = await page.evaluate(async () => {
+    const { inspectWrittenFigure } = await import('/src/tools/visualize/backgroundInspection.ts');
+    const { materializeRegionalMaps } = await import('/src/tools/visualize/regionalAtlas.ts');
+    const route = '<svg aria-label="Walking route map" viewBox="0 0 300 100"><path d="M5 10L220 45"/><text y="80">1 km</text></svg>';
+    const write = async (name, source, prompt = '') => {
+      try { await inspectWrittenFigure({ sessionId: 'session', turnId: 'turn', uri: 'openbitfun://current-session/artifacts/visualizations/v2/' + name + '.html', source, userRequest: prompt }, async () => { throw Error('Unexpected history lookup'); }); }
+      catch (error) { return error.message; }
+      return null;
+    };
+    return Promise.all([
+      write('outings', route),
+      write('map-trip', '<svg><path d="M5 10L220 45"/></svg>'),
+      write('map-trip', '<p>Street data is unavailable.</p><ol data-visual-itinerary><li>First stop</li></ol>'),
+      write('clock', '<svg aria-label="Pendulum"><path d="M5 10L50 45"/></svg>'),
+      materializeRegionalMaps('<script type="application/json" data-visual-atlas="1">{"detail":"street","places":[]}</script>')
+        .then(() => null, error => error.message),
+      write('outing', '<h2>Hangzhou</h2><p>West Lake</p>', '画一张杭州地图，标出西湖。'),
+      write('concept', '<h2>Architecture</h2>', 'Show me a map of the codebase.'),
+      write('hangzhou-route-map', '<ol><li>First stop</li></ol>', '地图给我看看'),
+      write('map-itinerary', '<h2>杭州一日出行规划</h2><script type="application/json" data-visual-atlas="1">{"places":["杭州"]}</script>'),
+      write('map-private', '<!-- vis-bindings\n{"rows":{"type":"json","value":[]}}\n-->\n<script type="application/json" data-visual-atlas="1">{"detail":"street","city":"Paris","places":["Private stop"]}</script>'),
+      ...['地图呢？', 'Where’s the map?'].map(prompt =>
+        write('evening', '<ol data-visual-itinerary><li>First stop</li></ol>', prompt)),
+      write('schedule', '<viz-calendar></viz-calendar><h2>行程表</h2>', '画一张杭州地图，并给出行程表。'),
+      write('map-hangzhou', '<h2>杭州</h2>', '画一张杭州地图，并给出行程表。'),
+      write('map-services', '<h2>Services</h2>', 'Show me a map of our microservices.'),
+      write('journey', '<h2>User journey</h2>', 'Show me a map of the user journey.'),
+      write('map-plan', '<ol data-visual-itinerary><li><svg aria-hidden="true" width="16" height="16"><path d="M0 0L9 9"/></svg>First stop</li></ol>'),
+      write('outing', '<h2>Paris</h2>', 'Show me a map of Paris.'),
+      write('country', '<h2>France</h2>', 'Show me a map of France.'),
+      write('pendulum', '<h2>Pendulum</h2>', 'Draw a map of Paris and animate a pendulum.'),
+      write('clock', '<h2>摆钟</h2>', '画一张杭州地图，再给我做一个摆钟。'),
+    ]);
+  });
+  assert.match(mapPublication[0], /Missing geographic basemap/);
+  assert.match(mapPublication[1], /Missing geographic basemap/);
+  assert.deepEqual(mapPublication.slice(2, 4), [null, null]);
+  assert.match(mapPublication[4], /no saved basemap/);
+  assert.match(mapPublication[5], /Missing geographic basemap/);
+  assert.equal(mapPublication[6], null);
+  assert.match(mapPublication[7], /Missing geographic basemap/);
+  assert.match(mapPublication[8], /shows only a city center/);
+  assert.match(mapPublication[9], /cannot send stop names/);
+  for (const issue of mapPublication.slice(10, 12)) assert.match(issue, /reader asked for a map/);
+  assert.equal(mapPublication[12], null);
+  assert.match(mapPublication[13], /Missing geographic basemap/);
+  assert.deepEqual(mapPublication.slice(14, 17), [null, null, null]);
+  assert.match(mapPublication[17], /Missing geographic basemap/);
+  assert.match(mapPublication[18], /Missing geographic basemap/);
+  assert.deepEqual(mapPublication.slice(19), [null, null]);
+  // Exercise a headless producer's record through the ordinary FlowChat reader.
+  const deferredUrl = new URL(url);
+  deferredUrl.searchParams.set('deferred-request', 'Show me a map of Paris.');
+  await page.evaluate(() => sessionStorage.setItem('visualize-test-fragment', '<h2>Paris</h2>'));
+  await page.goto(deferredUrl);
+  await page.waitForFunction(() => document.body.textContent.includes('Missing geographic basemap'));
+  assert.equal(await page.$('[data-figure-check=passed]'), null);
+  deferredUrl.searchParams.set('deferred-request', '画一张杭州地图，并给出行程表。');
+  await page.goto(deferredUrl);
+  const calendar = await open('<h2>行程表</h2><select><option>A</option><option>B</option></select>');
+  assert.equal(await calendar.$eval('select', el => el.value), 'A');
+  // Replace only the public tile service, leaving the projection worker and
+  // publication reader intact. One vector tile containing a diagonal street.
+  const hook = await page.evaluateOnNewDocument(() => {
+    const NativeWorker = window.Worker;
+    window.mapProjectionCount = 0;
+    window.Worker = class extends NativeWorker {
+      constructor(url, options) {
+        if (!String(url).includes('regionalProjection')) { super(url, options); return; }
+        window.mapProjectionCount++;
+        const bootstrap = `
+          const fetchAsset = self.fetch.bind(self);
+          self.fetch = (url, opts) => new URL(url).hostname === 'tiles.versatiles.org'
+            ? Promise.resolve(new Response(Uint8Array.from(atob('Ghl4AgoHc3RyZWV0cxIMGAIiCAkAAAqAQIBA'), c => c.charCodeAt(0))))
+            : fetchAsset(url, opts);
+          const pending = [];
+          self.onmessage = event => pending.push(event);
+          await import(${JSON.stringify(String(url))});
+          for (const event of pending) self.onmessage(event);
+        `;
+        super(URL.createObjectURL(new Blob([bootstrap], { type: 'text/javascript' })), options);
+      }
+    };
+  });
+  const street = '<script type="application/json" data-visual-atlas="1">{"detail":"street","places":[{"name":"A","coordinates":[120.15,30.26]},{"name":"B","coordinates":[120.16,30.27]}]}</script>';
+  await page.evaluate(source => sessionStorage.setItem('visualize-test-fragment', source), street);
+  await page.reload();
+  const consentButton = '[data-codex-figure] [role=status] button';
+  await page.waitForSelector(consentButton);
+  assert.equal(await page.evaluate(() => window.mapProjectionCount), 0);
+  await page.click(consentButton);
+  await page.waitForSelector('[data-figure-check=passed]');
+  assert.equal(await page.evaluate(() => window.mapProjectionCount), 1);
+  const restoredMap = await open(street);
+  assert.ok(await restoredMap.$('path[data-street-layer="streets"]'));
+  assert.equal(await page.evaluate(() => window.mapProjectionCount), 0);
+  await page.evaluate(source => sessionStorage.setItem('visualize-test-fragment', source.replace('120.15,', '120.14,')), street);
+  await page.reload();
+  await page.waitForSelector(consentButton);
+  assert.equal(await page.evaluate(() => window.mapProjectionCount), 0);
+  await page.removeScriptToEvaluateOnNewDocument(hook.identifier);
+  await page.goto(url);
+  console.log('Passed deferred map intent, reader consent, offline street replay and revision isolation.');
   // A collapsed lake ring once covered the entire viewport, even though the
   // figure had both valid SVG paths and the right city labels.
   const deltaMap = await open('<script type="application/json" data-visual-atlas="1">{"places":["上海","杭州","苏州"],"language":"zh-CN"}</script>');
@@ -639,7 +754,7 @@ async function testHost() {
   const chart = await open(`
     <button id="sample">Change dataset</button><main></main>
     <script type="module">
-      import { mountChart } from "https://persistent.oaistatic.com/plugins/visualize/charts/1.6.5/element.js";
+      import { mountChart } from "https://persistent.oaistatic.com/plugins/visualize/charts/1.8.1/element.js";
       const rows = [["A","C",1,5],["B","C",2,3],["E","D",3,2]];
       const alternateRows = [["Z","Q",13,39],["Y","Q",19,22],["W","P",25,8],["V","P",61,1]];
       const charts = ${JSON.stringify(specs)}.map(spec => {

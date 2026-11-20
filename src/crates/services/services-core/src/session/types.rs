@@ -631,6 +631,8 @@ pub struct DialogTurnData {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct PublishedFigure {
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub inspection_deferred: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bindings: Option<serde_json::Map<String, serde_json::Value>>,
     pub source: String,
@@ -1437,6 +1439,20 @@ mod tests {
         ToolItemData, UserMessageData,
     };
     use openbitfun_core_types::{SessionContinuationPolicy, SessionKind};
+
+    #[test]
+    fn published_figure_preserves_legacy_and_deferred_snapshots() {
+        let old = serde_json::json!({"source": "<p>map</p>", "contentBytes": 10});
+        let figure: super::PublishedFigure = serde_json::from_value(old.clone()).unwrap();
+        assert!(!figure.inspection_deferred);
+        assert_eq!(serde_json::to_value(figure).unwrap(), old);
+
+        let mut deferred = old;
+        deferred["inspectionDeferred"] = true.into();
+        let figure: super::PublishedFigure = serde_json::from_value(deferred.clone()).unwrap();
+        assert!(figure.inspection_deferred);
+        assert_eq!(serde_json::to_value(figure).unwrap(), deferred);
+    }
 
     #[test]
     fn dialog_turn_kind_defaults_to_user_dialog_for_legacy_payloads() {

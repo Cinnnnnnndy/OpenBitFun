@@ -9,13 +9,14 @@ import hostStyles from './figureHost.css?raw';
 import chartTheme from './figureChartTheme.js?raw';
 import extras from './codexFrameExtras.js?raw';
 import inspection from './inspectRenderedFigure.js?raw';
+import release from '../../../../../scripts/visualize-runtime.json';
 
 // The kit is loaded only for v2 figures. One local import supplies both the
 // runtime and the exact same authoring resources to the installed skill.
-const raw = import.meta.glob<string>(
+const raw = import.meta.env.OPENBITFUN_VISUALIZE_DEV_KIT ? import.meta.glob<string>(
   '../../../../crates/assembly/core/builtin_skills/visualize/upstream/{assets/*.js,skills/visualize/assets/*}',
   { eager: true, import: 'default', query: '?raw' },
-);
+) : {};
 const assets = Object.fromEntries(
   Object.entries(raw).map(([file, source]) => [file.split('/').pop()!, source]),
 );
@@ -59,8 +60,9 @@ export async function buildCodexFrame(
   // Use Tweak's existing hidden-attribute observer for tabs and conditional content as well as variants.
   const tweak = assets['tweak.js']?.split('.viz-carousel > [data-variant][hidden]').join('[hidden]') ?? builtInControls;
   let extensions = script(assets['standalone-host-bridge.js'] ?? builtInGuest) + script(extras) + script(inspection) + script(tweak);
-  if (hasReferenceKit && /<viz-calendar\b/i.test(fragment) && !/\/widgets\/[^/]+\/(?:calendar|element)\.js/.test(fragment)) {
-    extensions += script(assets['calendar.js']);
+  if (/<viz-calendar\b/i.test(fragment) && !/\/widgets\/[^/]+\/(?:calendar|element)\.js/.test(fragment)) {
+    if (hasReferenceKit) extensions += script(assets['calendar.js']);
+    else fragment = '<script type="module">import "' + release['calendar.js'].url + '"</script>' + fragment;
   }
   if (
     hasReferenceKit && /<(?:experimental-)?dash-[a-z-]+\b|<dash-sources\b|data-dashboard-|class=["'][^"']*dashboard-/.test(

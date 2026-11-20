@@ -1,6 +1,8 @@
 {
   "visualize": {
     "mapCredit": "Map data · Natural Earth",
+    "deferredStreetMap": "This reply has no saved street basemap. Loading it here sends public stop names and the map area to the map providers.",
+    "loadStreetMap": "Load street map",
     "mapNorth": "N",
     "mapKilometers": "km",
     "mapMeters": "m",

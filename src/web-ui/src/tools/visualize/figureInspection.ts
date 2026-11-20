@@ -1,5 +1,13 @@
+export interface MapPublicationCheck {
+  mapExpected: boolean;
+  replay?: boolean;
+  mapRequested?: boolean;
+  itineraryExpected?: boolean;
+}
+
 // The listener is scoped to one frame/document, including cancellation on retry or unmount.
-export function watchFigureInspection(frame: HTMLIFrameElement, done: (issue: string | null) => void) {
+export function watchFigureInspection(frame: HTMLIFrameElement, done: (issue: string | null) => void,
+  publication?: MapPublicationCheck) {
   let port: MessagePort | undefined;
   const timer = window.setTimeout(onTimeout, 12000);
   const stop = () => {
@@ -27,7 +35,7 @@ export function watchFigureInspection(frame: HTMLIFrameElement, done: (issue: st
     port.onmessage = ({ data }) => {
       if (data === null || typeof data === 'string') finish(data);
     };
-    port.postMessage('inspect');
+    port.postMessage(publication ?? 'inspect');
   }
   window.addEventListener('message', receive);
   return stop;
