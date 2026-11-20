@@ -5,7 +5,16 @@ description: "Show a visual or an interactive tool in the conversation. Use for 
 
 # Visual answers in FlowChat
 
-For a visual explanation, publish the figure in this turn. For an independently openable webpage, implement it in the workspace and link the entry file. A request for a working object, such as a pendulum, is enough to publish an inline simulation. Use a simple Markdown table or Mermaid diagram when the requested information fits those formats.
+Choose the format from what the reader needs to see or do.
+
+- Use a Markdown table for a comparison the reader can understand by scanning rows and columns.
+- When named nodes and labeled links tell the whole story, put a fenced `mermaid` diagram directly in the reply. This works for dependencies, message sequences, processes and state transitions. Explain what the arrows mean. Split distinct views when combining them would make the diagram hard to read. The Markdown reply is the complete deliverable for these diagrams.
+- Use an inline HTML figure when spatial placement matters, something moves, or the reader needs to change an input and see the result. For example, a diagram that lets the reader switch between execution paths can use a selector to update the highlighted path. A request for a working object such as a pendulum calls for an inline simulation.
+- For an explicitly requested standalone webpage, implement it in the workspace and link the entry file.
+
+For a layered overview, draw the endpoints of the actual edges. If the dependencies are between layers, use one node per layer, for example `Clients["Clients<br/>Desktop · Web"] --> API["Application API"]`. List member packages in the accompanying text. Expand a layer into a subgraph when showing how its members connect. Use the host Mermaid theme so labels and arrows follow the reader's skin.
+
+## Inline HTML figures
 
 Choose the view around the reader's decision. For today or tonight, verify the current local time at the destination before choosing events. Offer start times the reader can still use today. For a dated day trip or a question about today's plans, show a day schedule with times and durations when that helps. If the arrival or departure time is flexible, let the reader change it and update the affected stops and return time together. Use a map for questions about locations, relative positions or a route on a map. Combine a schedule and map when the reader needs both. On a follow-up, preserve the places and choices already made.
 
@@ -21,7 +30,7 @@ FlowChat looks up named public stops in the city and saves their resolved coordi
 
 When the reader asks for a missing map, use the stops from the earlier itinerary and submit a fresh atlas declaration with Write in this turn, even if an earlier attempt failed or showed only a list. Read the new receipt. Use the returned WGS84 coordinates of confirmed places and the intended candidates to repair the map. If name lookup fails for a public stop, look up its WGS84 coordinates with WebSearch or WebFetch from a reliable public map or place record. Resubmit the same figure with those coordinates and credit the source. If coordinates or the basemap remain unavailable, report the current failure in ordinary text. A list or navigation links alone do not fulfill a map request.
 
-For architectural diagrams and mockups, use readable HTML and SVG. Label responsibilities, relationships and direction. Provide a working selection or input when it explains something. Use native buttons and inputs, explicit axis labels and units, responsive dimensions and theme variables such as --foreground, --background, --muted-foreground and --viz-series-1. Tabs with role="tab" select panels by aria-controls. For charts the frame supplies Apache ECharts when the fragment uses echarts.init(). Give the chart a nonzero height and resize it with its container. For a simulation implement the moving object and mark it with data-visual-motion so the host can check it. Respect reduced motion and keep essential labels visible.
+For an interactive diagram or mockup, use readable HTML and SVG. Keep labels close to the elements they describe and make each control visibly update the relevant view. Use native buttons and inputs, explicit axis labels and units, responsive dimensions and theme variables such as --foreground, --background, --muted-foreground and --viz-series-1. Tabs with role="tab" select panels by aria-controls. For charts the frame supplies Apache ECharts when the fragment uses echarts.init(). Give the chart a nonzero height and resize it with its container. For a simulation implement the moving object and mark it with data-visual-motion so the host can check it. Respect reduced motion and keep essential labels visible.
 
 Write and Edit check the fragment in the background. For a map the host resolves the atlas declaration and checks the resulting geometry. Read the tool result and repair reported errors with Edit on the same URI. Skip temporary scripts, local servers and browser previews. Finish with a short reader-facing reply. FlowChat attaches the checked figure automatically. To position multiple figures in a particular order, copy each exact reference onto its own line.
 
