@@ -31,6 +31,7 @@
     "test:run": "node scripts/run-vitest.mjs run --maxWorkers=50%"
   },
   "dependencies": {
+    "@mapbox/vector-tile": "3.0.0",
     "@monaco-editor/react": "^4.6.0",
     "@openbitfun/design-tokens": "workspace:^",
     "@openbitfun/flow-chat-presentation": "workspace:*",
@@ -81,6 +82,7 @@
     "parse-entities": "^4.0.2",
     "partial-json": "^0.1.7",
     "path-browserify": "^1.0.1",
+    "pbf": "5.1.2",
     "pdf-lib": "1.17.1",
     "pdfjs-dist": "5.4.624",
     "prismjs": "^1.30.0",

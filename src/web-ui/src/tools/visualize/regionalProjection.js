@@ -1,5 +1,6 @@
 import * as d3 from 'd3-geo';
 import * as topojson from 'topojson-client';
+import { streetBasemap } from './streetBasemap.js';
 self.onmessage = async ({ data: { spec, urls, language, labels: strings } }) => {
   const esc = (s) =>
     String(s).replace(
@@ -14,7 +15,12 @@ self.onmessage = async ({ data: { spec, urls, language, labels: strings } }) => 
   try {
     const { places, title, bounds } = spec;
     if (!Array.isArray(places) || !places.length || places.length > 64) throw Error('Provide 1–64 places.');
-    const gazetteer = await load('places');
+    const street = spec.detail === 'street';
+    if (spec.detail !== undefined && !street && spec.detail !== 'regional')
+      throw Error('Unknown map detail. Use street or regional.');
+    if (street && places.some(place => !place?.coordinates))
+      throw Error('Provide sourced WGS84 coordinates for every street-map stop. City centers do not locate landmarks.');
+    const gazetteer = places.every(p => p?.coordinates) ? [] : await load('places');
     const points = places.map((place) => {
       if (typeof place === 'string') place = { name: place };
       if (!place || typeof place.name !== 'string' || !place.name.trim())
@@ -78,8 +84,8 @@ self.onmessage = async ({ data: { spec, urls, language, labels: strings } }) => 
     const y0 = projection([midLon, north])[1],
       y1 = projection([midLon, south])[1];
     const scale = Math.min(
-      (width * (bounds ? 1 : 0.46)) / Math.max(0.013, (dx * Math.PI) / 180),
-      (height * (bounds ? 1 : 0.41)) / Math.max(0.009, y1 - y0),
+      (width * (bounds ? 1 : street ? 0.77 : 0.46)) / Math.max(street ? 0.00012 : 0.013, (dx * Math.PI) / 180),
+      (height * (bounds ? 1 : street ? 0.72 : 0.41)) / Math.max(street ? 0.00008 : 0.009, y1 - y0),
     );
     projection
       .scale(scale)
@@ -147,13 +153,15 @@ self.onmessage = async ({ data: { spec, urls, language, labels: strings } }) => 
       }
       return paths.join('');
     }
-    const [land, lakes, rivers, borders] = await Promise.all(
+    const streetSvg = street ? await streetBasemap(projection, width, height,
+      languageKey === 'name_zht' ? 'zh-Hant' : languageKey === 'name_zh' ? 'zh-Hans' : language, terrainLabels) : '';
+    const [land, lakes, rivers, borders] = street ? [] : await Promise.all(
       ['land', 'lakes', 'rivers', 'borders', 'provinces', 'seas'].map(layer),
     );
-    if (!land) throw Error('No land intersects this regional map. Check the extent or use ocean geometry.');
+    if (!street && !land) throw Error('No land intersects this regional map. Check the extent or use ocean geometry.');
     const labels = [];
     const markers = points
-      .map(({ name, xy }) => {
+      .map(({ name, xy }, index) => {
         const [x, y] = projection(xy);
         if (x < 0 || x > width || y < 0 || y > height) throw Error('The requested bounds exclude ' + name);
         const w = Math.min(width / 2, Array.from(name).length * 11 + 8);
@@ -176,7 +184,7 @@ self.onmessage = async ({ data: { spec, urls, language, labels: strings } }) => 
           ) || candidates[0];
         labels.push(label);
         return (
-          '<g data-visual-marker=""><title>' +
+          '<g data-visual-marker="" data-map-stop="' + index + '"><title>' +
           esc(name) +
           '</title><circle cx="' +
           x.toFixed(1) +
@@ -204,6 +212,7 @@ self.onmessage = async ({ data: { spec, urls, language, labels: strings } }) => 
         label.x + w > width - 8 ||
         cy < 24 ||
         cy > height - 34 ||
+        (label.x + w > width - 60 && cy < 65) ||
         labels.some((q) => Math.abs(cy - q.y) < 21 && label.x < q.x + q.w + 6 && q.x < label.x + w + 6)
       )
         continue;
@@ -237,7 +246,7 @@ self.onmessage = async ({ data: { spec, urls, language, labels: strings } }) => 
       ' ' +
       height +
       '">' +
-      '<rect width="100%" height="100%"/>' +
+      (street ? '<rect data-street-ground="" width="100%" height="100%"/>' + streetSvg : '<rect width="100%" height="100%"/>' +
       '<path data-visual-region="" data-map-layer="land" d="' +
       land +
       '" stroke-width=".9"/>' +
@@ -249,7 +258,7 @@ self.onmessage = async ({ data: { spec, urls, language, labels: strings } }) => 
       '"/>' +
       '<path data-map-layer="rivers" d="' +
       rivers +
-      '" fill="none" stroke-width=".85" opacity=".45"/>' +
+      '" fill="none" stroke-width=".85" opacity=".45"/>') +
       context.join('') +
       markers +
       '<g data-map-north="" text-anchor="middle" font-size="12"><text x="' +

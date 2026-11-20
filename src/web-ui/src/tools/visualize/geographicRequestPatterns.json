@@ -1,0 +1,10 @@
+{
+  "en": {
+    "schematic": "\\b(?:schematic|diagram|concepts?|mind map|roadmap|heat\\s?map|codebase|architecture|dependenc(?:ies|y)|repository)\\b",
+    "map": "^(?:please\\s+)?(?:draw|show|make|create)\\s+(?:me\\s+)?(?:an?\\s+|the\\s+)?(?:(?:geographic|street|walking|route|city|regional|travel)\\s+)?map\\b"
+  },
+  "zh": {
+    "schematic": "示意|概念|思[维維]|[热熱]力|架[构構]|依[赖賴]|[项項]目[结結][构構]",
+    "map": "^(?:请|請|帮我|幫我|给我|給我|麻烦|麻煩|\\s)*(?:[画畫绘繪]|展示|显示|顯示)[^，,；;]{0,64}地[图圖]"
+  }
+}

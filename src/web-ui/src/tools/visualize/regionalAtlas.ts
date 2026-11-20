@@ -16,7 +16,7 @@ async function project(spec: unknown, language: string): Promise<string> {
   const worker = new Worker(new URL('./regionalProjection.js', import.meta.url), { type: 'module' });
   try {
     return await new Promise<string>((resolve, reject) => {
-      const timeout = window.setTimeout(() => reject(Error('The regional map projection timed out.')), 10000);
+      const timeout = window.setTimeout(() => reject(Error('Map data did not load in time. For an unavailable street map, show a clearly labeled stop list without a scale.')), 15000);
       worker.onmessage = ({ data }) => {
         clearTimeout(timeout);
         if (typeof data.svg === 'string') resolve(data.svg);
@@ -39,7 +39,7 @@ async function project(spec: unknown, language: string): Promise<string> {
   }
 }
 
-export async function materializeRegionalMaps(source: string) {
+export async function materializeRegionalMaps(source: string, publishing = false) {
   if (!source.includes('data-visual-atlas')) return source;
   const fragment = document.createElement('template');
   fragment.innerHTML = source;
@@ -47,6 +47,8 @@ export async function materializeRegionalMaps(source: string) {
   if (!maps.length) return source;
   for (const declaration of maps) {
     const spec = JSON.parse(declaration.textContent || 'null');
+    if (spec?.detail === 'street' && !publishing)
+      throw Error('This street map has no saved basemap. Publish it on the producing host before replay.');
     const language = spec?.language || document.documentElement.lang || i18nService.getCurrentLocale();
     const svg = await project(spec, language);
     const result = document.createElement('template');
@@ -55,7 +57,14 @@ export async function materializeRegionalMaps(source: string) {
     style.textContent = atlasStyle;
     result.content.querySelector('svg')!.prepend(style);
     const credit = document.createElement('small');
-    credit.textContent = i18nService.t('flow-chat:visualize.mapCredit', { lng: language });
+    if (spec.detail === 'street') {
+      const attribution = document.createElement('a');
+      attribution.href = 'https://www.openstreetmap.org/copyright';
+      attribution.textContent = '© OpenStreetMap contributors';
+      credit.append(attribution, ' · VersaTiles');
+    } else {
+      credit.textContent = i18nService.t('flow-chat:visualize.mapCredit', { lng: language });
+    }
     credit.className = 'text-muted';
     declaration.replaceWith(result.content, credit);
   }

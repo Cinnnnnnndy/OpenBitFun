@@ -124,8 +124,8 @@ async function testHost() {
     const csv = 'city,count\nShanghai,3';
     const request = { sessionId: 'owner', turnId: 'turn', toolCallId: 'plot', uri: root + 'map.html',
       source: '<!-- vis-bindings\n{"rows":{"type":"file","path":"./cities.csv"}}\n-->\n' +
-        '<main data-visual-map><svg viewBox="0 0 120 80"></svg></main><script>openai.visualization.onData("rows", async f => {' +
-        `if ((await f.blob.text()).includes("Shanghai,3")) document.querySelector("svg").innerHTML='<path d="M2 3L90 4L60 60Z"/>'; });</script>`,
+        '<main data-visual-map data-map-source="https://example.test/regions"><svg viewBox="0 0 120 80"></svg></main><script>openai.visualization.onData("rows", async f => {' +
+        `if ((await f.blob.text()).includes("Shanghai,3")) document.querySelector("svg").innerHTML='<path data-visual-region d="M2 3L90 4L60 60Z"/>'; });</script>`,
     };
     const file = { type:'tool', toolName:'Write', status:'completed', toolCall: { id:'csv', input:{payload:'+++ '+root+'cities.csv\n'+csv} },
       toolResult:{success:true,result:{file_path:root+'cities.csv',content_bytes:csv.length}} };
@@ -172,6 +172,33 @@ async function testHost() {
   assert.match(background.checks[3], /fixture-missing-input|Script error/);
   assert.equal(background.extraFrames, 0);
   console.log('Passed background checks, actionable errors and frame cleanup.');
+  const mapPublication = await page.evaluate(async () => {
+    const { inspectWrittenFigure } = await import('/src/tools/visualize/backgroundInspection.ts');
+    const { materializeRegionalMaps } = await import('/src/tools/visualize/regionalAtlas.ts');
+    const route = '<svg aria-label="Walking route map" viewBox="0 0 300 100"><path d="M5 10L220 45"/><text y="80">1 km</text></svg>';
+    const write = async (name, source, prompt = '') => {
+      const producer = { dialogTurns: [{id: 'turn', userMessage: {content: prompt}}] };
+      try { await inspectWrittenFigure({ sessionId: 'session', turnId: 'turn', uri: 'openbitfun://current-session/artifacts/visualizations/v2/' + name + '.html', source }, async () => producer); }
+      catch (error) { return error.message; }
+      return null;
+    };
+    return Promise.all([
+      write('outings', route),
+      write('map-trip', '<svg><path d="M5 10L220 45"/></svg>'),
+      write('map-trip', '<p>Street data is unavailable.</p><ol data-visual-itinerary><li>First stop</li></ol>'),
+      write('clock', '<svg aria-label="Pendulum"><path d="M5 10L50 45"/></svg>'),
+      materializeRegionalMaps('<script type="application/json" data-visual-atlas="1">{"detail":"street","places":[]}</script>')
+        .then(() => null, error => error.message),
+      write('outing', '<h2>Hangzhou</h2><p>West Lake</p>', '画一张杭州地图，标出西湖。'),
+      write('concept', '<h2>Architecture</h2>', 'Show me a map of the codebase.'),
+    ]);
+  });
+  assert.match(mapPublication[0], /Missing geographic basemap/);
+  assert.match(mapPublication[1], /Missing geographic basemap/);
+  assert.deepEqual(mapPublication.slice(2, 4), [null, null]);
+  assert.match(mapPublication[4], /no saved basemap/);
+  assert.match(mapPublication[5], /Missing geographic basemap/);
+  assert.equal(mapPublication[6], null);
   // A collapsed lake ring once covered the entire viewport, even though the
   // figure had both valid SVG paths and the right city labels.
   const deltaMap = await open('<script type="application/json" data-visual-atlas="1">{"places":["上海","杭州","苏州"],"language":"zh-CN"}</script>');

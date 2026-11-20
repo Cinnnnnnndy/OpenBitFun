@@ -1,3 +1,4 @@
+import patterns from './geographicRequestPatterns.json';
 import { buildCodexFrame } from './codexFrameDocument';
 import { watchFigureInspection } from './figureInspection';
 import { readBindings, inspectionBindings, usesRecordedData, type BoundValues, type FigureOwner } from './visualBindings';
@@ -6,7 +7,7 @@ import { snapshotFigureScripts } from './figureResources';
 import { localizeFigureImages } from './figureImages';
 import { readFigureStyle } from './figureAppearance';
 
-export async function inspectInBackground(source: string, snapshot?: BoundValues): Promise<string | null> {
+export async function inspectInBackground(source: string, snapshot?: BoundValues, publication?: { mapExpected: boolean }): Promise<string | null> {
   const declarations = readBindings(source);
   if (!declarations) return 'The visualization binding declaration is invalid.';
   const values = snapshot ?? inspectionBindings(declarations, undefined);
@@ -51,7 +52,7 @@ export async function inspectInBackground(source: string, snapshot?: BoundValues
   window.addEventListener('message', ready);
   try {
     return await new Promise((resolve) => {
-      watchFigureInspection(frame, resolve);
+      watchFigureInspection(frame, resolve, publication);
       frame.srcdoc = doc;
       document.body.append(frame);
     });
@@ -68,6 +69,19 @@ interface CheckedFigure {
   deferred?: boolean;
 }
 
+const geographicRequests = Object.values(patterns).map(({ map, schematic }) => ({
+  map: new RegExp(map, 'iu'), schematic: new RegExp(schematic, 'iu'),
+}));
+
+// A direct request from the producing turn also covers a generic filename
+// and a fragment that omitted all map metadata. Other visualizations in a
+// discussion about maps should continue to use the normal render check.
+function requestsGeographicMap(message: unknown) {
+  if (typeof message !== 'string') return false;
+  const first = message.trim().split(/[。！？.!?\n]/u, 1)[0];
+  return geographicRequests.some(({ map, schematic }) => map.test(first) && !schematic.test(first));
+}
+
 export async function inspectWrittenFigure(
   request: FigureOwner & { source: string },
   getProducer: (id: string) => Promise<Session | undefined>,
@@ -76,14 +90,16 @@ export async function inspectWrittenFigure(
   if (!declarations) throw Error('Invalid visualization bindings.');
   const entries = Object.values(declarations);
   const needsHistory = entries.some(usesRecordedData);
-  const producer = needsHistory && request.sessionId ? await getProducer(request.sessionId) : undefined;
+  const producer = request.sessionId ? await getProducer(request.sessionId) : undefined;
   let bindings = inspectionBindings(declarations, producer, request);
   if (!bindings) return { deferred: true };
   const hasImages = entries.some(entry => entry.type === 'image');
   if (hasImages) bindings = await localizeFigureImages(declarations, bindings);
   const { materializeRegionalMaps } = await import('./regionalAtlas');
-  const html = await snapshotFigureScripts(await materializeRegionalMaps(request.source), declarations);
-  const issue = await inspectInBackground(html, bindings);
+  const html = await snapshotFigureScripts(await materializeRegionalMaps(request.source, true), declarations);
+  const turn = producer?.dialogTurns.find(turn => turn.id === request.turnId);
+  const mapExpected = /\/map-[^/]+\.html$/.test(request.uri) || requestsGeographicMap(turn?.userMessage?.content);
+  const issue = await inspectInBackground(html, bindings, { mapExpected });
   if (issue) throw Error(issue);
   return {
     renderedSource: html === request.source ? undefined : html,
