@@ -6,6 +6,21 @@ import { PbfReader } from 'pbf';
 const tileOrigin = 'https://tiles.versatiles.org/tiles/osm-vector';
 const unavailable = 'Street basemap unavailable. Explain that street detail is unavailable and show the stops as a timeline without a map or scale.';
 
+async function tileBytes(url) {
+  // One interrupted tile used to discard every verified stop in the viewport.
+  // Retry that tile alone, within the projection worker's publication deadline.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const response = await fetch(url, { credentials: 'omit', referrerPolicy: 'no-referrer', redirect: 'error' });
+      if (response.ok) return new Uint8Array(await response.arrayBuffer());
+      if (response.headers.has('retry-after') || (response.status !== 408 && response.status < 500)) break;
+    } catch {
+      // A dropped connection may also interrupt reading an otherwise valid response.
+    }
+  }
+  throw Error(unavailable);
+}
+
 function tilePaths(tile, size, left, top, width, height, language, terrainLabels) {
   const paths = new Map();
   for (const layerName of ['land', 'ocean', 'water_polygons', 'water_lines', 'streets', 'water_polygons_labels', 'place_labels', 'street_labels_points']) {
@@ -68,10 +83,7 @@ export async function streetBasemap(projection, width, height, language, terrain
   for (let i = 0; i < tiles.length; i += 4) {
     const batch = await Promise.all(tiles.slice(i, i + 4).map(async ({ x, y }) => {
       const url = tileOrigin + '/' + zoom + '/' + ((x + count) % count) + '/' + y;
-      const response = await fetch(url, { credentials: 'omit', referrerPolicy: 'no-referrer', redirect: 'error' })
-        .catch(() => { throw Error(unavailable); });
-      if (!response.ok) throw Error(unavailable);
-      const tile = new VectorTile(new PbfReader(new Uint8Array(await response.arrayBuffer())));
+      const tile = new VectorTile(new PbfReader(await tileBytes(url)));
       const left = (x - x0) * tileSize, top = (y - y0) * tileSize;
       const labels = [];
       const paths = tilePaths(tile, tileSize, left, top, width, height, language, labels);

@@ -28,13 +28,20 @@ pub(crate) fn install(app: AppHandle) {
                 }
             }
             let _subscription = Subscription(app.clone(), handle);
+            // A named atlas can spend up to 60s resolving places and tiles
+            // before the 12s frame check. Other figures use the usual deadline.
+            let timeout_secs = if request.source.contains("data-visual-atlas") {
+                75
+            } else {
+                30
+            };
             app.emit_to(
                 EventTarget::webview("main"),
                 "figure-check",
                 serde_json::json!({"id": id, "request": request}),
             )
             .map_err(|e| e.to_string())?;
-            tokio::time::timeout(Duration::from_secs(30), receive)
+            tokio::time::timeout(Duration::from_secs(timeout_secs), receive)
                 .await
                 .map_err(|_| {
                     "FlowChat renderer did not respond on the producing device".to_owned()

@@ -1,13 +1,13 @@
 import patterns from './geographicRequestPatterns.json';
 import { buildCodexFrame } from './codexFrameDocument';
-import { watchFigureInspection } from './figureInspection';
+import { watchFigureInspection, type MapPublicationCheck } from './figureInspection';
 import { readBindings, inspectionBindings, usesRecordedData, type BoundValues, type FigureOwner } from './visualBindings';
 import type { Session } from '@/flow_chat/types/flow-chat';
 import { snapshotFigureScripts } from './figureResources';
 import { localizeFigureImages } from './figureImages';
 import { readFigureStyle } from './figureAppearance';
 
-export async function inspectInBackground(source: string, snapshot?: BoundValues, publication?: { mapExpected: boolean }): Promise<string | null> {
+export async function inspectInBackground(source: string, snapshot?: BoundValues, publication?: MapPublicationCheck): Promise<string | null> {
   const declarations = readBindings(source);
   if (!declarations) return 'The visualization binding declaration is invalid.';
   const values = snapshot ?? inspectionBindings(declarations, undefined);
@@ -69,8 +69,8 @@ interface CheckedFigure {
   deferred?: boolean;
 }
 
-const geographicRequests = Object.values(patterns).map(({ map, schematic }) => ({
-  map: new RegExp(map, 'iu'), schematic: new RegExp(schematic, 'iu'),
+const geographicRequests = Object.values(patterns).map(({ map, schematic, itinerary }) => ({
+  map: new RegExp(map, 'iu'), schematic: new RegExp(schematic, 'iu'), itinerary: new RegExp(itinerary, 'iu'),
 }));
 
 // A direct request from the producing turn also covers a generic filename
@@ -96,10 +96,19 @@ export async function inspectWrittenFigure(
   const hasImages = entries.some(entry => entry.type === 'image');
   if (hasImages) bindings = await localizeFigureImages(declarations, bindings);
   const { materializeRegionalMaps } = await import('./regionalAtlas');
-  const html = await snapshotFigureScripts(await materializeRegionalMaps(request.source, true), declarations);
+  const allowPublicLookup = entries.every(entry => entry.type === 'image');
+  const html = await snapshotFigureScripts(await materializeRegionalMaps(request.source, true, allowPublicLookup), declarations);
   const turn = producer?.dialogTurns.find(turn => turn.id === request.turnId);
   const mapExpected = /\/map-[^/]+\.html$/.test(request.uri) || requestsGeographicMap(turn?.userMessage?.content);
-  const issue = await inspectInBackground(html, bindings, { mapExpected });
+  let itineraryExpected = false;
+  if (html.includes('data-visual-atlas-map')) {
+    const fragment = document.createElement('template');
+    fragment.innerHTML = html;
+    const headings = Array.from(fragment.content.querySelectorAll('h1,h2,h3'), el => el.textContent).join(' ');
+    const intent = [turn?.userMessage?.content, headings].join(' ');
+    itineraryExpected = geographicRequests.some(({ itinerary }) => itinerary.test(intent));
+  }
+  const issue = await inspectInBackground(html, bindings, { mapExpected, itineraryExpected });
   if (issue) throw Error(issue);
   return {
     renderedSource: html === request.source ? undefined : html,

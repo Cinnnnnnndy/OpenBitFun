@@ -11,12 +11,20 @@ import seas from '../../../../../third_party/visualize/atlas/seas.json?url&no-in
 
 const layers = { land, rivers, lakes, places, borders, provinces, seas };
 
-async function project(spec: unknown, language: string): Promise<string> {
+type AtlasRequest = { detail?: string; places?: (string | { coordinates?: unknown } | null)[] };
+
+function needsPlaceLookup(spec: AtlasRequest) {
+  return spec?.detail === 'street' && Array.isArray(spec.places) &&
+    spec.places.some(place => typeof place === 'string' || !place?.coordinates);
+}
+
+async function project(spec: AtlasRequest, language: string): Promise<string> {
   const urls = Object.fromEntries(Object.entries(layers).map(([key, url]) => [key, new URL(url, location.href).href]));
   const worker = new Worker(new URL('./regionalProjection.js', import.meta.url), { type: 'module' });
   try {
     return await new Promise<string>((resolve, reject) => {
-      const timeout = window.setTimeout(() => reject(Error('Map data did not load in time. For an unavailable street map, show a clearly labeled stop list without a scale.')), 15000);
+      // Named stops may require a cold geocoding connection before the tile requests.
+      const timeout = window.setTimeout(() => reject(Error('Map data did not load in time. For an unavailable street map, show a clearly labeled stop list without a scale.')), needsPlaceLookup(spec) ? 60000 : 15000);
       worker.onmessage = ({ data }) => {
         clearTimeout(timeout);
         if (typeof data.svg === 'string') resolve(data.svg);
@@ -39,7 +47,7 @@ async function project(spec: unknown, language: string): Promise<string> {
   }
 }
 
-export async function materializeRegionalMaps(source: string, publishing = false) {
+export async function materializeRegionalMaps(source: string, publishing = false, allowPublicLookup = true) {
   if (!source.includes('data-visual-atlas')) return source;
   const fragment = document.createElement('template');
   fragment.innerHTML = source;
@@ -49,6 +57,8 @@ export async function materializeRegionalMaps(source: string, publishing = false
     const spec = JSON.parse(declaration.textContent || 'null');
     if (spec?.detail === 'street' && !publishing)
       throw Error('This street map has no saved basemap. Publish it on the producing host before replay.');
+    if (!allowPublicLookup && needsPlaceLookup(spec))
+      throw Error('A figure with bound data cannot send stop names to a public geocoder. Supply sourced coordinates or local projected geometry.');
     const language = spec?.language || document.documentElement.lang || i18nService.getCurrentLocale();
     const svg = await project(spec, language);
     const result = document.createElement('template');

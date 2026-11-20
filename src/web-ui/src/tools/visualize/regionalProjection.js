@@ -1,6 +1,7 @@
 import * as d3 from 'd3-geo';
 import * as topojson from 'topojson-client';
 import { streetBasemap } from './streetBasemap.js';
+import { resolveStreetStops } from './streetPlaces.js';
 self.onmessage = async ({ data: { spec, urls, language, labels: strings } }) => {
   const esc = (s) =>
     String(s).replace(
@@ -13,18 +14,17 @@ self.onmessage = async ({ data: { spec, urls, language, labels: strings } }) => 
     return r.json();
   };
   try {
-    const { places, title, bounds } = spec;
-    if (!Array.isArray(places) || !places.length || places.length > 64) throw Error('Provide 1–64 places.');
+    const { title, bounds } = spec;
+    if (!Array.isArray(spec.places) || !spec.places.length || spec.places.length > 64) throw Error('Provide 1–64 places.');
+    let places = spec.places.map(p => typeof p === 'string' ? { name: p } : p);
+    if (places.some(p => !p || typeof p.name !== 'string' || !p.name.trim())) throw Error('A map marker needs a name.');
     const street = spec.detail === 'street';
     if (spec.detail !== undefined && !street && spec.detail !== 'regional')
       throw Error('Unknown map detail. Use street or regional.');
-    if (street && places.some(place => !place?.coordinates))
-      throw Error('Provide sourced WGS84 coordinates for every street-map stop. City centers do not locate landmarks.');
-    const gazetteer = places.every(p => p?.coordinates) ? [] : await load('places');
+    const needsCoordinates = places.some(place => !place.coordinates);
+    const gazetteer = needsCoordinates ? await load('places') : [];
+    if (street && needsCoordinates) places = await resolveStreetStops(places, spec, gazetteer);
     const points = places.map((place) => {
-      if (typeof place === 'string') place = { name: place };
-      if (!place || typeof place.name !== 'string' || !place.name.trim())
-        throw Error('A map marker needs a name.');
       let xy = place.coordinates;
       if (!xy) {
         const match = (s) => s.toLowerCase() === (place.city || place.name).toLowerCase();
@@ -44,7 +44,7 @@ self.onmessage = async ({ data: { spec, urls, language, labels: strings } }) => 
               place.name +
               '" matched ' +
               rows.length +
-              ' records. Specify country, region or sourced coordinates.',
+              ' records. Specify country or region for cities. For sights and streets use detail:"street", city and the public stop names.',
           );
         xy = rows[0][3];
       }
@@ -56,7 +56,7 @@ self.onmessage = async ({ data: { spec, urls, language, labels: strings } }) => 
         Math.abs(xy[1]) > 85
       )
         throw Error('Invalid longitude/latitude for ' + place.name);
-      return { name: place.name, xy };
+      return { name: place.name, xy, osmId: street ? place.osmId : undefined, osmName: place.osmName, osmTag: place.osmTag };
     });
     const width = 720,
       height = 480,
@@ -161,7 +161,7 @@ self.onmessage = async ({ data: { spec, urls, language, labels: strings } }) => 
     if (!street && !land) throw Error('No land intersects this regional map. Check the extent or use ocean geometry.');
     const labels = [];
     const markers = points
-      .map(({ name, xy }, index) => {
+      .map(({ name, xy, osmId, osmName, osmTag }, index) => {
         const [x, y] = projection(xy);
         if (x < 0 || x > width || y < 0 || y > height) throw Error('The requested bounds exclude ' + name);
         const w = Math.min(width / 2, Array.from(name).length * 11 + 8);
@@ -184,9 +184,9 @@ self.onmessage = async ({ data: { spec, urls, language, labels: strings } }) => 
           ) || candidates[0];
         labels.push(label);
         return (
-          '<g data-visual-marker="" data-map-stop="' + index + '"><title>' +
-          esc(name) +
-          '</title><circle cx="' +
+          '<g data-visual-marker="" data-map-stop="' + index + '" data-longitude="' + xy[0] +
+          '" data-latitude="' + xy[1] + '"' + (osmId ? ' data-osm-id="' + esc(osmId) + '"' : '') + '><title>' +
+          esc(name) + '</title>' + (osmId && osmName ? '<desc>' + esc(osmName) + ' · ' + esc(osmTag) + '</desc>' : '') + '<circle cx="' +
           x.toFixed(1) +
           '" cy="' +
           y.toFixed(1) +

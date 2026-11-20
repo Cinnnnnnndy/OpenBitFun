@@ -191,6 +191,9 @@ async function testHost() {
         .then(() => null, error => error.message),
       write('outing', '<h2>Hangzhou</h2><p>West Lake</p>', '画一张杭州地图，标出西湖。'),
       write('concept', '<h2>Architecture</h2>', 'Show me a map of the codebase.'),
+      write('hangzhou-route-map', '<ol><li>First stop</li></ol>', '地图给我看看'),
+      write('map-itinerary', '<h2>杭州一日出行规划</h2><script type="application/json" data-visual-atlas="1">{"places":["杭州"]}</script>'),
+      write('map-private', '<!-- vis-bindings\n{"rows":{"type":"json","value":[]}}\n-->\n<script type="application/json" data-visual-atlas="1">{"detail":"street","city":"Paris","places":["Private stop"]}</script>'),
     ]);
   });
   assert.match(mapPublication[0], /Missing geographic basemap/);
@@ -199,6 +202,9 @@ async function testHost() {
   assert.match(mapPublication[4], /no saved basemap/);
   assert.match(mapPublication[5], /Missing geographic basemap/);
   assert.equal(mapPublication[6], null);
+  assert.match(mapPublication[7], /Missing geographic basemap/);
+  assert.match(mapPublication[8], /shows only a city center/);
+  assert.match(mapPublication[9], /cannot send stop names/);
   // A collapsed lake ring once covered the entire viewport, even though the
   // figure had both valid SVG paths and the right city labels.
   const deltaMap = await open('<script type="application/json" data-visual-atlas="1">{"places":["上海","杭州","苏州"],"language":"zh-CN"}</script>');

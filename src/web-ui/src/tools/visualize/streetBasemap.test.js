@@ -34,8 +34,21 @@ it('projects only fixed public tile requests and emits offline street geometry',
 });
 
 it('rejects an incomplete viewport when one street tile is offline', async () => {
-  const fetch = vi.fn(async () => new Response(streetTile()));
-  fetch.mockRejectedValueOnce(new Error('Offline'));
+  let unavailableTile;
+  const fetch = vi.fn(async url => {
+    unavailableTile ??= url;
+    if (url === unavailableTile) throw new Error('Offline');
+    return new Response(streetTile());
+  });
   vi.stubGlobal('fetch', fetch);
   await expect(streetBasemap(projection, 720, 480, 'en', [])).rejects.toThrow('Street basemap unavailable');
+});
+
+it('recovers a map after a transient failure without refetching the whole viewport', async () => {
+  const fetch = vi.fn(async () => new Response(streetTile()));
+  fetch.mockResolvedValueOnce(new Response(null, { status: 503 }));
+  vi.stubGlobal('fetch', fetch);
+  await expect(streetBasemap(projection, 720, 480, 'en', [])).resolves.toContain('data-street-layer="streets"');
+  const urls = fetch.mock.calls.map(([url]) => url);
+  expect(urls.length).toBe(new Set(urls).size + 1);
 });
