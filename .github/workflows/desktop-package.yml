@@ -397,9 +397,19 @@ jobs:
 
       - name: Verify native macOS icon bundling
         if: runner.os == 'macOS'
+        shell: bash
         env:
           OPENBITFUN_TEST_MACOS_BUNDLE: '1'
-        run: node --test scripts/macos-icon-bundle.test.mjs
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          # Load the verification policy from this workflow. Its relative imports,
+          # fixtures and installed CLIs still resolve in the release checkout.
+          probe="scripts/.macos-icon-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.test.mjs"
+          trap 'rm -f "$probe"' EXIT
+          git fetch --no-tags --depth=1 origin "$WORKFLOW_SHA"
+          git show "${WORKFLOW_SHA}:scripts/macos-icon-bundle.test.mjs" > "$probe"
+          node --test "$probe"
 
       - name: Build desktop app
         run: ${{ matrix.platform.build_command }}
