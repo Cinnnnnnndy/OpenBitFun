@@ -4,6 +4,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   symlinkSync,
@@ -280,7 +281,6 @@ jobs:
   assert.match(result.stderr, /interactive capability gate must run exactly/u);
   assert.match(result.stderr, /interactive capability gate must remain blocking/u);
   assert.match(result.stderr, /ProductControl owner\/delivery-profile gate is missing/u);
-  assert.match(result.stderr, /CLI ProductControl self-control coverage requires/u);
 });
 
 test('rejects explicit setup-node node-version below the project baseline when node-version-file is valid', (t) => {
@@ -415,6 +415,19 @@ jobs:
   assert.match(result.stdout, /GitHub YAML config check passed/);
 });
 
+test('workflows leave CLI functional tests to local runs', () => {
+  const directory = path.join(repoRoot, '.github/workflows');
+  for (const file of readdirSync(directory).filter((name) => /\.ya?ml$/.test(name))) {
+    const workflow = yaml.parse(readFileSync(path.join(directory, file), 'utf8'));
+    for (const job of Object.values(workflow.jobs)) {
+      for (const step of job.steps ?? []) {
+        const command = (step.run ?? '').replaceAll('\\\n', ' ');
+        assert.doesNotMatch(command, /\bcargo (?:test|nextest run)\b[^\n]*\bopenbitfun-cli\b/, file);
+      }
+    }
+  }
+});
+
 test('keeps Rust CI independent, restore-only on PRs, and target-focused', () => {
   const workflow = yaml.parse(
     readFileSync(path.join(repoRoot, '.github/workflows/ci.yml'), 'utf8'),
@@ -454,7 +467,7 @@ test('keeps Rust CI independent, restore-only on PRs, and target-focused', () =>
     'The frontend build must not upload an artifact with no consumer',
   );
 
-  for (const jobName of ['cli-test', 'rust-build-check']) {
+  for (const jobName of ['runtime-test', 'rust-build-check']) {
     const job = workflow.jobs[jobName];
     const cache = job.steps.find((step) =>
       step.uses?.startsWith('swatinem/rust-cache@'),
@@ -480,30 +493,23 @@ test('keeps Rust CI independent, restore-only on PRs, and target-focused', () =>
     }
   }
 
-  const cliJob = workflow.jobs['cli-test'];
+  const runtimeJob = workflow.jobs['runtime-test'];
   assert.deepEqual(
-    cliJob.strategy.matrix.include.map((entry) => entry.os),
-    rustJob.strategy.matrix.os,
-    'CLI and Rust validation must exercise the same Linux, Apple Silicon macOS, and Windows hosts',
+    runtimeJob.strategy.matrix.include.map((entry) => entry.os),
+    ['ubuntu-latest', 'macos-15'],
   );
-  assert.equal(
-    cliJob.strategy.matrix.include.find((entry) => entry.os === 'macos-15').cache_key,
-    'macos-arm64',
-  );
-  assert.equal(cliJob['timeout-minutes'], '${{ matrix.timeout_minutes }}');
+  const runtimeSteps = runtimeJob.steps.filter((step) => step.run?.startsWith('cargo test'));
   assert.deepEqual(
-    cliJob.strategy.matrix.include.map((entry) => entry.timeout_minutes),
-    [30, 75, 30],
-    'Only the cold macOS CLI build needs a longer job budget',
+    runtimeSteps.filter((step) => step.if === "runner.os == 'macOS'").map((step) => step.run),
+    ['cargo test --locked -p openbitfun-acp'],
   );
-  assert.ok(
-    cliJob.strategy.matrix.include.some((entry) => entry.os === 'windows-latest'),
-    'Windows ConPTY contracts must run before Nightly',
-  );
-  assert.equal(
-    cliJob.steps.find((step) => step.name === 'Run Windows CLI terminal contracts')?.run,
-    'cargo test --locked -p openbitfun-cli --test terminal_process_contracts -- --test-threads=1',
-  );
+  assert.ok(runtimeSteps.every((step) => step['continue-on-error'] !== true));
+  const linuxCommands = runtimeSteps
+    .filter((step) => step.if === "runner.os == 'Linux'")
+    .map((step) => step.run);
+  assert.ok(linuxCommands.includes('cargo test --locked -p openbitfun-acp -p openbitfun-agent-runtime'));
+  assert.ok(linuxCommands.includes('cargo test --locked -p openbitfun-sdk-host -p openbitfun-sdk-host-app'));
+  assert.ok(linuxCommands.some((command) => command.startsWith('cargo test --locked -p terminal-core ')));
 
   const rustCache = rustJob.steps.find((step) =>
     step.uses?.startsWith('swatinem/rust-cache@'),
@@ -712,7 +718,7 @@ test('gates fast checks and PR packaging behind one fail-closed build decision',
     );
   }
   const impactJob = workflow.jobs['build-impact'];
-  const cliJob = workflow.jobs['cli-test'];
+  const runtimeJob = workflow.jobs['runtime-test'];
   const rustJob = workflow.jobs['rust-build-check'];
   const buildJob = workflow.jobs['package-impact-contract'];
   const resultJob = workflow.jobs['rust-validation-result'];
@@ -811,7 +817,7 @@ test('gates fast checks and PR packaging behind one fail-closed build decision',
   );
   assert.match(classify?.run ?? '', /--range-mode "\$RANGE_MODE"/);
 
-  for (const job of [cliJob, rustJob]) {
+  for (const job of [runtimeJob, rustJob]) {
     assert.equal(job.needs, 'build-impact');
     assert.match(job.if, /!cancelled\(\)/);
     assert.doesNotMatch(job.if, /always\(\)/);
@@ -839,9 +845,9 @@ test('gates fast checks and PR packaging behind one fail-closed build decision',
   assert.equal(resultJob.if, '${{ always() }}');
   assert.deepEqual(
     [...resultJob.needs].sort(),
-    ['build-impact', 'cli-test', 'package-impact-contract', 'rust-build-check'],
+    ['build-impact', 'package-impact-contract', 'runtime-test', 'rust-build-check'],
   );
-  const verify = resultJob.steps.find((step) => step.name === 'Verify Rust and CLI result');
+  const verify = resultJob.steps.find((step) => step.name === 'Verify Rust build and runtime test results');
   assert.equal(verify?.env?.RUST_REQUIRED, '${{ needs.build-impact.outputs.rust_required }}');
   assert.equal(
     verify?.env?.PR_PRODUCER_REQUIRED,
@@ -849,7 +855,7 @@ test('gates fast checks and PR packaging behind one fail-closed build decision',
   );
   assert.equal(verify?.env?.EVENT_NAME, '${{ github.event_name }}');
   assert.equal(verify?.env?.IMPACT_RESULT, '${{ needs.build-impact.result }}');
-  assert.equal(verify?.env?.CLI_RESULT, '${{ needs.cli-test.result }}');
+  assert.equal(verify?.env?.RUNTIME_RESULT, '${{ needs.runtime-test.result }}');
   assert.equal(verify?.env?.RUST_RESULT, '${{ needs.rust-build-check.result }}');
   assert.equal(
     verify?.env?.BUILD_RESULT,
@@ -857,7 +863,7 @@ test('gates fast checks and PR packaging behind one fail-closed build decision',
   );
   assert.equal(verify?.shell, 'pwsh');
   assert.match(verify?.run ?? '', /successful impact-selected producer jobs/i);
-  assert.match(verify?.run ?? '', /successful Rust and CLI jobs/i);
+  assert.match(verify?.run ?? '', /successful Rust build and runtime jobs/i);
 
   const dshJob = workflow.jobs['dsh-profile-windows'];
   assert.equal(dshJob.needs, 'build-impact');
@@ -871,7 +877,7 @@ test('gates fast checks and PR packaging behind one fail-closed build decision',
       producerRequired: 'true',
       eventName: 'pull_request',
       impactResult,
-      cliResult: 'success',
+      runtimeResult: 'success',
       rustResult: 'success',
       buildResult: 'success',
       expectedSuccess: false,
@@ -880,7 +886,7 @@ test('gates fast checks and PR packaging behind one fail-closed build decision',
   for (const rustRequired of ['false', 'true']) {
     for (const producerRequired of ['false', 'true']) {
       for (const eventName of ['pull_request', 'push']) {
-        for (const cliResult of statuses) {
+        for (const runtimeResult of statuses) {
           for (const rustResult of statuses) {
             for (const buildResult of statuses) {
               const packageExpected = eventName === 'pull_request'
@@ -890,14 +896,14 @@ test('gates fast checks and PR packaging behind one fail-closed build decision',
                 producerRequired,
                 eventName,
                 impactResult: 'success',
-                cliResult,
+                runtimeResult,
                 rustResult,
                 buildResult,
                 expectedSuccess: (packageExpected
                   ? buildResult === 'success'
                   : buildResult === 'skipped') && (rustRequired === 'false'
-                  ? cliResult === 'skipped' && rustResult === 'skipped'
-                  : cliResult === 'success' && rustResult === 'success'),
+                  ? runtimeResult === 'skipped' && rustResult === 'skipped'
+                  : runtimeResult === 'success' && rustResult === 'success'),
               });
             }
           }
@@ -910,7 +916,7 @@ test('gates fast checks and PR packaging behind one fail-closed build decision',
     producerRequired: 'false',
     eventName: 'push',
     impactResult: 'success',
-    cliResult: 'skipped',
+    runtimeResult: 'skipped',
     rustResult: 'skipped',
     buildResult: 'success',
     expectedSuccess: false,
@@ -930,7 +936,7 @@ foreach ($case in $cases) {
   $env:PR_PRODUCER_REQUIRED = [string]$case.producerRequired
   $env:EVENT_NAME = [string]$case.eventName
   $env:IMPACT_RESULT = [string]$case.impactResult
-  $env:CLI_RESULT = [string]$case.cliResult
+  $env:RUNTIME_RESULT = [string]$case.runtimeResult
   $env:RUST_RESULT = [string]$case.rustResult
   $env:BUILD_RESULT = [string]$case.buildResult
   $succeeded = $true
@@ -1068,10 +1074,6 @@ test('nightly validates generated inputs and projected lockfiles before packagin
     steps.some((step) => step.run?.includes('cargo generate-lockfile')),
     false,
     'nightly must not hide stale committed lockfiles by regenerating them ad hoc',
-  );
-  assert.equal(
-    steps.find((step) => step.name === 'Run Windows CLI terminal contracts')?.run,
-    'cargo test --locked -p openbitfun-cli --test terminal_process_contracts -- --test-threads=1',
   );
 });
 
