@@ -99,7 +99,8 @@ export async function inspectWrittenFigure(
   const allowPublicLookup = entries.every(entry => entry.type === 'image');
   const html = await snapshotFigureScripts(await materializeRegionalMaps(request.source, true, allowPublicLookup), declarations);
   const turn = producer?.dialogTurns.find(turn => turn.id === request.turnId);
-  const mapExpected = /\/map-[^/]+\.html$/.test(request.uri) || requestsGeographicMap(turn?.userMessage?.content);
+  const mapRequested = requestsGeographicMap(turn?.userMessage?.content);
+  const mapExpected = mapRequested || /\/map-[^/]+\.html$/.test(request.uri);
   let itineraryExpected = false;
   if (html.includes('data-visual-atlas-map')) {
     const fragment = document.createElement('template');
@@ -108,7 +109,7 @@ export async function inspectWrittenFigure(
     const intent = [turn?.userMessage?.content, headings].join(' ');
     itineraryExpected = geographicRequests.some(({ itinerary }) => itinerary.test(intent));
   }
-  const issue = await inspectInBackground(html, bindings, { mapExpected, itineraryExpected });
+  const issue = await inspectInBackground(html, bindings, { mapExpected, mapRequested, itineraryExpected });
   if (issue) throw Error(issue);
   return {
     renderedSource: html === request.source ? undefined : html,

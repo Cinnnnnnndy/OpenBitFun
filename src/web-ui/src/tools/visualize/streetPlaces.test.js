@@ -16,6 +16,40 @@ function serve(features) {
 }
 afterEach(() => vi.unstubAllGlobals());
 
+it('recovers a named stop after a dropped connection or a temporary upstream failure', async () => {
+  for (const transient of [new TypeError('Load failed'), new Response(null, { status: 503 })]) {
+    const fetch = serve([feature(17, 'railway:station')]);
+    if (transient instanceof Error) fetch.mockRejectedValueOnce(transient);
+    else fetch.mockResolvedValueOnce(transient);
+    const [stop] = await resolveStreetStops([{ name: '龙翔桥' }], spec, [city]);
+    expect(stop.osmId).toBe('N17');
+    expect(fetch).toHaveBeenCalledTimes(2);
+  }
+});
+
+it('preserves the failed query and HTTP or decoding reason without retrying permanent responses', async () => {
+  for (const [response, reason] of [
+    [new Response(null, { status: 429 }), 'Photon returned HTTP 429 (rate limited)'],
+    [new Response(null, { status: 403 }), 'Photon returned HTTP 403'],
+    [new Response(null, { status: 503, headers: { 'retry-after': '120' } }), 'Photon returned HTTP 503'],
+    [new Response('not JSON'), 'Photon returned an invalid place response'],
+  ]) {
+    const fetch = vi.fn().mockResolvedValue(response);
+    vi.stubGlobal('fetch', fetch);
+    await expect(resolveStreetStops([{ name: '西湖', query: '涌金公园' }], spec, [city]))
+      .rejects.toThrow('lookup unavailable for "涌金公园": ' + reason);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  }
+});
+
+it('keeps verified locations available for repair when another public place cannot be queried', async () => {
+  vi.stubGlobal('fetch', async url => url.searchParams.get('q') === '龙翔桥'
+    ? Response.json({ features: [feature(17, 'railway:station')] })
+    : new Response(null, { status: 503 }));
+  await expect(resolveStreetStops([{ name: '龙翔桥' }, { name: 'Museum' }], spec, [city]))
+    .rejects.toThrow(/Confirmed: 龙翔桥 \[120\.159,30\.257\].*Museum.*HTTP 503/);
+});
+
 it('resolves the requested object within its city and retains supplied points and stop order', async () => {
   const station = feature(17, 'railway:station');
   const fetch = serve([station, station, feature(18, 'highway:bus_stop')]);
@@ -68,5 +102,6 @@ it('requires an identified city before going online and never substitutes its ce
   vi.stubGlobal('fetch', fetch);
   await expect(resolveStreetStops([{ name: '龙翔桥' }], {}, [city])).rejects.toThrow('set city');
   expect(fetch).not.toHaveBeenCalled();
-  await expect(resolveStreetStops([{ name: '龙翔桥' }], spec, [city])).rejects.toThrow('lookup unavailable for "龙翔桥"');
+  await expect(resolveStreetStops([{ name: '龙翔桥' }], spec, [city])).rejects.toThrow('Photon network request failed (Offline)');
+  expect(fetch).toHaveBeenCalledTimes(2);
 });

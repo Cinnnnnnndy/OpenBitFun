@@ -44,8 +44,10 @@
   // On new writes the map destination carries the author's intent even if its
   // fragment lost the atlas declaration. Also inspect the accessible name of
   // an existing free-form route drawing. Historical replay uses its old check.
-  const mapRepair = 'Missing geographic basemap. Use data-visual-atlas="1" with detail:"street", city, country and the public stop names for a local itinerary. If street data is unavailable, show a labeled stop list without a scale.';
-  function inspectMapPublication({ mapExpected, itineraryExpected }) {
+  function inspectMapPublication({ mapExpected, mapRequested, itineraryExpected }) {
+    const mapRepair = 'Missing geographic basemap. Use data-visual-atlas="1" with detail:"street", city, country and the public stop names for a local itinerary. ' +
+      (mapRequested ? 'The reader asked for a map. If publication fails, report the specific error.' :
+        'If street data is unavailable, show a labeled stop list without a scale.');
     let found = false;
     let cityOnly = false;
     for (const el of document.querySelectorAll('svg,canvas,img,[data-visual-map]')) {
@@ -74,7 +76,7 @@
     if (cityOnly && !found) return 'This itinerary map shows only a city center. Plot the public stops in visit order using detail:"street", city and places.';
     if (mapExpected && !found) {
       const stops = document.querySelector('ol[data-visual-itinerary]');
-      if (!stops || !bound(stops) || !stops.querySelector('li') || document.querySelector('svg,canvas,[data-map-scale]')) return mapRepair;
+      if (mapRequested || !stops || !bound(stops) || !stops.querySelector('li') || document.querySelector('svg,canvas,[data-map-scale]')) return mapRepair;
     }
     return '';
   }

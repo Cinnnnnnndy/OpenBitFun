@@ -33,11 +33,29 @@ async function search(city, bounds, query, tag) {
   const [lon, lat] = city[3];
   url.search = new URLSearchParams({ q: query, lon, lat, bbox: bounds.join(','), limit });
   if (tag) url.searchParams.set('osm_tag', tag);
-  const response = await fetch(url, { credentials: 'omit', redirect: 'error', referrerPolicy: 'no-referrer' });
-  if (!response.ok) throw Error('Place service unavailable (HTTP ' + response.status + ').');
-  const { features } = await response.json();
-  if (!Array.isArray(features)) throw Error('Invalid place service response.');
-  return { rows: candidates(features, city, bounds), capped: features.length >= limit };
+  for (let attempt = 0; ; attempt++) {
+    const retry = attempt === 0;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), retry ? 10000 : 18000);
+    let response;
+    try {
+      response = await fetch(url, { credentials: 'omit', redirect: 'error', referrerPolicy: 'no-referrer', signal: controller.signal });
+      if (response.ok) {
+        const features = (await response.json())?.features;
+        if (!Array.isArray(features)) throw new SyntaxError('Expected a GeoJSON feature collection');
+        return { rows: candidates(features, city, bounds), capped: features.length >= limit };
+      }
+    } catch (error) {
+      if (response && error instanceof SyntaxError) throw Error('Photon returned an invalid place response');
+      if (retry) continue;
+      if (controller.signal.aborted) throw Error('Photon request timed out');
+      throw Error('Photon network request failed (' + error.message + ')');
+    } finally {
+      clearTimeout(timer);
+    }
+    if (retry && [408, 500, 502, 503, 504].includes(response.status) && !response.headers.has('retry-after')) continue;
+    throw Error('Photon returned HTTP ' + response.status + (response.status === 429 ? ' (rate limited)' : ''));
+  }
 }
 
 export async function resolveStreetStops(places, spec, gazetteer) {
@@ -74,7 +92,10 @@ export async function resolveStreetStops(places, spec, gazetteer) {
         // unfiltered suggestions for repair, while enforcing the tag below.
         if (!result.rows.length && place.osmTag) result = await lookup(query);
       }
-      catch { throw Error('Street place lookup unavailable for "' + place.name + '". Retry or use sourced coordinates.'); }
+      catch (error) {
+        issues[index] = { unavailable: 'Street place lookup unavailable for "' + query + '": ' + error.message };
+        continue;
+      }
       const matches = result.rows.filter(row =>
         (place.osmId ? normalized(row.id) === normalized(place.osmId) : normalized(row.name) === normalized(query)) &&
         (!place.osmTag || row.tag === place.osmTag));
@@ -91,7 +112,8 @@ export async function resolveStreetStops(places, spec, gazetteer) {
   if (issues.length) {
     const missing = issues.filter(Boolean);
     // Write returns at most 500 characters. Give each stop useful candidates.
-    const messages = missing.map(({ name, reason, candidates }) => {
+    const messages = missing.map(({ name, reason, candidates, unavailable }) => {
+      if (unavailable) return unavailable;
       // Several segments of a through-road may rank ahead of a same-named
       // pedestrian street. Show distinct feature types before duplicates.
       const tags = new Set();
@@ -103,11 +125,17 @@ export async function resolveStreetStops(places, spec, gazetteer) {
       const ranked = [...new Set([...distinct, ...candidates])];
       const hints = ranked.slice(0, 4).map(row => {
         const showArea = candidates.some(other => other.id !== row.id && other.name === row.name && other.tag === row.tag);
-        return [row.id, row.name !== name && row.name, row.tag, showArea && row.area].filter(Boolean).join(' ');
+        return [row.id, row.name !== name && row.name, row.tag, showArea && row.area,
+          JSON.stringify(row.xy)].filter(Boolean).join(' ');
       });
       return name + ' (' + reason + ')' + (hints.length ? ': ' + hints.join(' / ') : '');
     });
-    throw Error('Refine query/osmTag or select an intended osmId. ' + messages.join('; '));
+    const confirmed = resolved.filter((place, index) => !places[index].coordinates && place.osmId)
+      .map(place => place.name + ' ' + JSON.stringify(place.coordinates));
+    const hint = missing.some(issue => issue.unavailable)
+      ? 'Find missing public stops in a map source with WebSearch or WebFetch. Resubmit with its WGS84 coordinates [lon,lat]. '
+      : 'Use the matching candidate coordinates [lon,lat] or osmId. ';
+    throw Error(hint + (confirmed.length ? 'Confirmed: ' + confirmed.join('; ') + '. ' : '') + messages.join('; '));
   }
   return resolved;
 }
