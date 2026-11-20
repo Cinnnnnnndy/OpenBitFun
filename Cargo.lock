@@ -5691,7 +5691,7 @@ dependencies = [
 
 [[package]]
 name = "openbitfun-acp"
-version = "1.0.11"
+version = "1.0.12"
 dependencies = [
  "agent-client-protocol",
  "async-trait",
@@ -5717,11 +5717,11 @@ dependencies = [
 
 [[package]]
 name = "openbitfun-agent-content"
-version = "1.0.11"
+version = "1.0.12"
 
 [[package]]
 name = "openbitfun-agent-runtime"
-version = "1.0.11"
+version = "1.0.12"
 dependencies = [
  "async-trait",
  "dashmap",
@@ -5747,7 +5747,7 @@ dependencies = [
 
 [[package]]
 name = "openbitfun-agent-runtime-ipc"
-version = "1.0.11"
+version = "1.0.12"
 dependencies = [
  "async-trait",
  "dunce",
@@ -5768,7 +5768,7 @@ dependencies = [
 
 [[package]]
 name = "openbitfun-agent-stream"
-version = "1.0.11"
+version = "1.0.12"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5788,7 +5788,7 @@ dependencies = [
 
 [[package]]
 name = "openbitfun-agent-tools"
-version = "1.0.11"
+version = "1.0.12"
 dependencies = [
  "async-trait",
  "indexmap 2.14.0",
@@ -5802,14 +5802,14 @@ dependencies = [
 
 [[package]]
 name = "openbitfun-agent-workflows"
-version = "1.0.11"
+version = "1.0.12"
 dependencies = [
  "regex",
 ]
 
 [[package]]
 name = "openbitfun-ai-adapters"
-version = "1.0.11"
+version = "1.0.12"
 dependencies = [
  "anyhow",
  "apple-native-keyring-store",
@@ -5847,7 +5847,7 @@ dependencies = [
 
 [[package]]
 name = "openbitfun-app-server"
-version = "1.0.11"
+version = "1.0.12"
 dependencies = [
  "agent-client-protocol",
  "anyhow",
@@ -5869,7 +5869,7 @@ dependencies = [
 
 [[package]]
 name = "openbitfun-app-server-client"
-version = "1.0.11"
+version = "1.0.12"
 dependencies = [
  "agent-client-protocol",
  "anyhow",
@@ -5880,7 +5880,7 @@ dependencies = [
 
 [[package]]
 name = "openbitfun-app-server-protocol"
-version = "1.0.11"
+version = "1.0.12"
 dependencies = [
  "agent-client-protocol",
  "openbitfun-core-types",
@@ -5894,7 +5894,7 @@ dependencies = [
 
 [[package]]
 name = "openbitfun-claude-code-adapter"
-version = "1.0.11"
+version = "1.0.12"
 dependencies = [
  "chrono",
  "dirs 6.0.0",
@@ -5914,7 +5914,7 @@ dependencies = [
 
 [[package]]
 name = "openbitfun-cli"
-version = "1.0.11"
+version = "1.0.12"
 dependencies = [
  "anyhow",
  "arboard",
@@ -5974,7 +5974,7 @@ dependencies = [
 
 [[package]]
 name = "openbitfun-codex-adapter"
-version = "1.0.11"
+version = "1.0.12"
 dependencies = [
  "chrono",
  "dirs 6.0.0",
@@ -5993,7 +5993,7 @@ dependencies = [
 
 [[package]]
 name = "openbitfun-computer-use"
-version = "1.0.11"
+version = "1.0.12"
 dependencies = [
  "async-trait",
  "atspi",
@@ -6034,7 +6034,7 @@ dependencies = [
 
 [[package]]
 name = "openbitfun-config-contracts"
-version = "1.0.11"
+version = "1.0.12"
 dependencies = [
  "chrono",
  "hex",
@@ -6049,7 +6049,7 @@ dependencies = [
 
 [[package]]
 name = "openbitfun-core"
-version = "1.0.11"
+version = "1.0.12"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6125,7 +6125,7 @@ dependencies = [
 
 [[package]]
 name = "openbitfun-core-types"
-version = "1.0.11"
+version = "1.0.12"
 dependencies = [
  "serde",
  "serde_json",
@@ -6134,7 +6134,7 @@ dependencies = [
 
 [[package]]
 name = "openbitfun-cursor-adapter"
-version = "1.0.11"
+version = "1.0.12"
 dependencies = [
  "chrono",
  "dirs 6.0.0",
@@ -6167,7 +6167,7 @@ dependencies = [
 
 [[package]]
 name = "openbitfun-desktop"
-version = "1.0.11"
+version = "1.0.12"
 dependencies = [
  "alloc-no-stdlib",
  "alloc-stdlib",
@@ -6256,7 +6256,7 @@ dependencies = [
 
 [[package]]
 name = "openbitfun-dsh-adapter"
-version = "1.0.11"
+version = "1.0.12"
 dependencies = [
  "async-trait",
  "dirs 6.0.0",
@@ -6279,7 +6279,7 @@ dependencies = [
 
 [[package]]
 name = "openbitfun-events"
-version = "1.0.11"
+version = "1.0.12"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6293,7 +6293,7 @@ dependencies = [
 
 [[package]]
 name = "openbitfun-external-sources"
-version = "1.0.11"
+version = "1.0.12"
 dependencies = [
  "futures",
  "log",
@@ -6303,7 +6303,7 @@ dependencies = [
 
 [[package]]
 name = "openbitfun-legacy-migration"
-version = "1.0.11"
+version = "1.0.12"
 dependencies = [
  "chrono",
  "dirs 6.0.0",
@@ -6325,7 +6325,7 @@ dependencies = [
 
 [[package]]
 name = "openbitfun-legacy-migration-adapters"
-version = "1.0.11"
+version = "1.0.12"
 dependencies = [
  "anyhow",
  "chrono",
@@ -6349,7 +6349,7 @@ dependencies = [
 
 [[package]]
 name = "openbitfun-miniapp-ipc"
-version = "1.0.11"
+version = "1.0.12"
 dependencies = [
  "openbitfun-product-domains",
  "serde",
@@ -6361,7 +6361,7 @@ dependencies = [
 
 [[package]]
 name = "openbitfun-miniapp-market-server"
-version = "1.0.11"
+version = "1.0.12"
 dependencies = [
  "anyhow",
  "axum",
@@ -6373,7 +6373,7 @@ dependencies = [
 
 [[package]]
 name = "openbitfun-miniapp-market-service"
-version = "1.0.11"
+version = "1.0.12"
 dependencies = [
  "anyhow",
  "axum",
@@ -6406,7 +6406,7 @@ dependencies = [
 
 [[package]]
 name = "openbitfun-miniapp-shell"
-version = "1.0.11"
+version = "1.0.12"
 dependencies = [
  "image 0.25.10",
  "objc2 0.6.4",
@@ -6428,7 +6428,7 @@ dependencies = [
 
 [[package]]
 name = "openbitfun-office-documents"
-version = "1.0.11"
+version = "1.0.12"
 dependencies = [
  "base64 0.22.1",
  "math-core",
@@ -6442,7 +6442,7 @@ dependencies = [
 
 [[package]]
 name = "openbitfun-opencode-adapter"
-version = "1.0.11"
+version = "1.0.12"
 dependencies = [
  "async-trait",
  "dirs 6.0.0",
@@ -6472,7 +6472,7 @@ dependencies = [
 
 [[package]]
 name = "openbitfun-opencode-plugin-host"
-version = "1.0.11"
+version = "1.0.12"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -6491,7 +6491,7 @@ dependencies = [
 
 [[package]]
 name = "openbitfun-page-function-runtime"
-version = "1.0.11"
+version = "1.0.12"
 dependencies = [
  "rquickjs",
  "serde",
@@ -6501,7 +6501,7 @@ dependencies = [
 
 [[package]]
 name = "openbitfun-pi-adapter"
-version = "1.0.11"
+version = "1.0.12"
 dependencies = [
  "chrono",
  "dirs 6.0.0",
@@ -6517,7 +6517,7 @@ dependencies = [
 
 [[package]]
 name = "openbitfun-plugin-runtime-client"
-version = "1.0.11"
+version = "1.0.12"
 dependencies = [
  "async-trait",
  "openbitfun-runtime-ports",
@@ -6526,7 +6526,7 @@ dependencies = [
 
 [[package]]
 name = "openbitfun-product-capabilities"
-version = "1.0.11"
+version = "1.0.12"
 dependencies = [
  "async-trait",
  "openbitfun-agent-runtime",
@@ -6538,7 +6538,7 @@ dependencies = [
 
 [[package]]
 name = "openbitfun-product-domains"
-version = "1.0.11"
+version = "1.0.12"
 dependencies = [
  "dirs 6.0.0",
  "hex",
@@ -6556,7 +6556,7 @@ dependencies = [
 
 [[package]]
 name = "openbitfun-relay-server"
-version = "1.0.11"
+version = "1.0.12"
 dependencies = [
  "anyhow",
  "axum",
@@ -6573,7 +6573,7 @@ dependencies = [
 
 [[package]]
 name = "openbitfun-relay-service"
-version = "1.0.11"
+version = "1.0.12"
 dependencies = [
  "anyhow",
  "axum",
@@ -6604,7 +6604,7 @@ dependencies = [
 
 [[package]]
 name = "openbitfun-runtime-ports"
-version = "1.0.11"
+version = "1.0.12"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6619,7 +6619,7 @@ dependencies = [
 
 [[package]]
 name = "openbitfun-runtime-services"
-version = "1.0.11"
+version = "1.0.12"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6634,7 +6634,7 @@ dependencies = [
 
 [[package]]
 name = "openbitfun-sdk-host"
-version = "1.0.11"
+version = "1.0.12"
 dependencies = [
  "async-trait",
  "futures-util",
@@ -6653,7 +6653,7 @@ dependencies = [
 
 [[package]]
 name = "openbitfun-sdk-host-app"
-version = "1.0.11"
+version = "1.0.12"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6675,7 +6675,7 @@ dependencies = [
 
 [[package]]
 name = "openbitfun-server"
-version = "1.0.11"
+version = "1.0.12"
 dependencies = [
  "agent-client-protocol",
  "anyhow",
@@ -6701,7 +6701,7 @@ dependencies = [
 
 [[package]]
 name = "openbitfun-services-core"
-version = "1.0.11"
+version = "1.0.12"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -6743,7 +6743,7 @@ dependencies = [
 
 [[package]]
 name = "openbitfun-services-integrations"
-version = "1.0.11"
+version = "1.0.12"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -6820,7 +6820,7 @@ dependencies = [
 
 [[package]]
 name = "openbitfun-static-hook-support"
-version = "1.0.11"
+version = "1.0.12"
 dependencies = [
  "hex",
  "openbitfun-product-domains",
@@ -6833,11 +6833,11 @@ dependencies = [
 
 [[package]]
 name = "openbitfun-tool-packs"
-version = "1.0.11"
+version = "1.0.12"
 
 [[package]]
 name = "openbitfun-transport"
-version = "1.0.11"
+version = "1.0.12"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6851,7 +6851,7 @@ dependencies = [
 
 [[package]]
 name = "openbitfun-webdriver"
-version = "1.0.11"
+version = "1.0.12"
 dependencies = [
  "anyhow",
  "axum",
@@ -6879,7 +6879,7 @@ dependencies = [
 
 [[package]]
 name = "openbitfun-zcode-adapter"
-version = "1.0.11"
+version = "1.0.12"
 dependencies = [
  "dirs 6.0.0",
  "openbitfun-opencode-adapter",
@@ -10568,7 +10568,7 @@ dependencies = [
 
 [[package]]
 name = "terminal-core"
-version = "1.0.11"
+version = "1.0.12"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -11026,7 +11026,7 @@ checksum = "7d56353a2a665ad0f41a421187180aab746c8c325620617ad883a99a1cbe66d2"
 
 [[package]]
 name = "tool-runtime"
-version = "1.0.11"
+version = "1.0.12"
 dependencies = [
  "anydoc",
  "dashmap",
