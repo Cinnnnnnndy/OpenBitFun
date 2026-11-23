@@ -379,7 +379,10 @@ impl AIClient {
         extra_body: Option<serde_json::Value>,
         trace: Option<ModelExchangeTraceConfig>,
     ) -> Result<StreamResponse> {
-        self.send_message_stream_with_extra_body_and_max_attempts(
+        let messages = self
+            .prepare_message_inputs(messages, tools.as_deref(), None, extra_body.as_ref())
+            .await?;
+        self.send_prepared_message_stream(
             messages,
             tools,
             extra_body,
@@ -415,15 +418,16 @@ impl AIClient {
         trace: Option<ModelExchangeTraceConfig>,
     ) -> Result<StreamResponse> {
         let custom_body = self.config.custom_request_body.clone();
-        self.send_message_stream_with_extra_body_and_max_attempts(
-            messages,
-            tools,
-            custom_body,
-            1,
-            trace,
-            request_context,
-        )
-        .await
+        let messages = self
+            .prepare_message_inputs(
+                messages,
+                tools.as_deref(),
+                request_context.as_ref(),
+                custom_body.as_ref(),
+            )
+            .await?;
+        self.send_prepared_message_stream(messages, tools, custom_body, 1, trace, request_context)
+            .await
     }
 
     pub async fn send_message(
@@ -537,9 +541,17 @@ impl AIClient {
     ) -> Result<GeminiResponse> {
         let request_context =
             crate::providers::shared::prepare_request_context(self, request_context);
+        let messages = self
+            .prepare_message_inputs(
+                messages,
+                tools.as_deref(),
+                request_context.as_ref(),
+                extra_body.as_ref(),
+            )
+            .await?;
         for attempt in 0..max_attempts {
             let stream_response = match self
-                .send_message_stream_with_extra_body_and_max_attempts(
+                .send_prepared_message_stream(
                     messages.clone(),
                     tools.clone(),
                     extra_body.clone(),
@@ -608,7 +620,55 @@ impl AIClient {
         unreachable!("send_message retry loop always returns")
     }
 
-    async fn send_message_stream_with_extra_body_and_max_attempts(
+    async fn prepare_message_inputs(
+        &self,
+        messages: Vec<Message>,
+        tools: Option<&[ToolDefinition]>,
+        request_context: Option<&ModelRequestContext>,
+        extra_body: Option<&serde_json::Value>,
+    ) -> Result<Vec<Message>> {
+        #[cfg(not(feature = "vision-input"))]
+        let _ = (tools, request_context);
+        // Project only the outgoing copy, against the actual selected client.
+        responses_websocket::validate(self)?;
+        // Account/channel failover and direct analysis calls share this boundary.
+        let messages = image_budget::project(messages, self.config.max_images_per_request)?;
+        image_budget::validate_extra_body(self.config.max_images_per_request, extra_body)?;
+        #[cfg(feature = "vision-input")]
+        let replaced = image_budget::context::validate_override(
+            &self.config,
+            &messages,
+            tools,
+            request_context,
+            extra_body,
+        )?;
+        #[cfg(feature = "vision-input")]
+        let messages = if !replaced
+            && messages
+                .iter()
+                .any(image_budget::context::may_contain_images)
+        {
+            let budget = image_budget::context::Budget::for_request(
+                &self.config,
+                tools,
+                request_context,
+                extra_body,
+            );
+            // Decoding and resampling a large screenshot can occupy a CPU for
+            // a full scheduling slice. Keep it off the async transport worker.
+            tokio::task::spawn_blocking(move || -> Result<_> {
+                let mut messages = messages;
+                image_budget::context::apply(&mut messages, budget)?;
+                Ok(messages)
+            })
+            .await??
+        } else {
+            messages
+        };
+        Ok(messages)
+    }
+
+    async fn send_prepared_message_stream(
         &self,
         messages: Vec<Message>,
         tools: Option<Vec<ToolDefinition>>,
@@ -617,11 +677,6 @@ impl AIClient {
         trace: Option<ModelExchangeTraceConfig>,
         request_context: Option<ModelRequestContext>,
     ) -> Result<StreamResponse> {
-        // Project only the outgoing copy, against the actual selected client.
-        responses_websocket::validate(self)?;
-        // Account/channel failover and direct analysis calls share this boundary.
-        let messages = image_budget::project(messages, self.config.max_images_per_request)?;
-        image_budget::validate_extra_body(self.config.max_images_per_request, extra_body.as_ref())?;
         match ApiFormat::parse(&self.config.format)? {
             ApiFormat::OpenAIChat => {
                 openai::chat::send_stream(
@@ -953,6 +1008,7 @@ mod tests {
                 "type": "object",
                 "properties": { "summary": { "type": "string" } }
             })),
+            ..Default::default()
         }
     }
 
@@ -962,6 +1018,7 @@ mod tests {
             conversation_scope: None,
             prompt_cache_route_key: Some("lineage-1".to_string()),
             output_schema: None,
+            ..Default::default()
         };
         let official = openai::chat::build_request_body_with_context(
             &make_test_client("openai", None),

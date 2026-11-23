@@ -40,8 +40,10 @@ provider-neutral contracts owned by `openbitfun-agent-stream`.
   the shared AIClient send boundary, including single-attempt Responses calls.
   Count user image parts and tool attachments together; preserve durable history,
   tool-result identities, opaque tool text and non-image media. Newer messages
-  keep their pixels first, with explicit omission text for older pixels. Verify
-  with `cargo test --locked -p openbitfun-ai-adapters --lib client::image_budget::tests`.
+  keep their pixels first, with explicit omission text for older pixels.
+  With `vision-input`, the selected client's context window also determines
+  whether older pixels must be omitted or current screenshots resized.
+  Verify with `cargo test --locked -p openbitfun-ai-adapters --features vision-input --lib -- client::image_budget vision_tokens`.
 - Normalize explicitly reported response models into the typed stream
   `response_model` observation. Responses/Codex lifecycle metadata is emitted
   before an associated error, and Chat Completions model identifiers remain

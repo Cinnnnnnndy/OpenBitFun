@@ -789,6 +789,11 @@ impl RoundExecutor {
             .cancellation_tokens
             .get_or_insert_new(&context.dialog_turn_id);
 
+        // A calibrated text estimate belongs to the original model and prefix.
+        // Replay projection can strip signed reasoning before the send.
+        let calibrated_model = (context.model_request_context.minimum_non_image_input_tokens > 0
+            && !crate::infrastructure::ai::channel_client_source::ChannelClientSource::has_nonportable_history(&ai_messages))
+            .then(|| (context.model_config_id.clone(), ai_client.config.model.clone()));
         let channels = context.channel_client_source.clone();
         let lineage = context.model_request_context.prompt_cache_route_key.clone();
         let mut excluded_channels = Vec::new();
@@ -1121,10 +1126,16 @@ impl RoundExecutor {
             let request_trace_config = trace_config
                 .clone()
                 .map(|config| config.with_round_attempt(attempt_id.clone(), attempt_number));
+            let mut request_context = context.model_request_context.clone();
+            if !calibrated_model.as_ref().is_some_and(|(id, model)| {
+                id == &context.model_config_id && model == &ai_client.config.model
+            }) {
+                request_context.minimum_non_image_input_tokens = 0;
+            }
             let send_future = ai_client.send_message_stream_once_with_request_context(
                 ai_messages.clone(),
                 tool_definitions.clone(),
-                Some(context.model_request_context.clone()),
+                Some(request_context),
                 request_trace_config,
             );
             let send_result = tokio::select! {
@@ -3528,11 +3539,25 @@ pub(super) mod tests {
                     image_attachments: None,
                 })
                 .into();
+            let mut followup = super::AIMessage::user("Continue from that result".into());
+            if manual {
+                // The primary's text calibration must not reject pixels on
+                // the selected backup before its transport is reached.
+                context.model_request_context.minimum_non_image_input_tokens = 64_000;
+                let image = crate::agentic::image_analysis::attachments::test_image();
+                followup.content = Some(
+                    json!([
+                        {"type": "text", "text": "Inspect the result"},
+                        {"type": "image_url", "image_url": {"url": image.data_url.unwrap()}}
+                    ])
+                    .to_string(),
+                );
+            }
             let history = vec![
                 super::AIMessage::user("Save the file".into()),
                 previous,
                 tool,
-                super::AIMessage::user("Continue from that result".into()),
+                followup,
             ];
             let before = serde_json::to_value(&history).unwrap();
             let mut lifecycle = ModelRoundLifecycle::new();
@@ -3579,6 +3604,9 @@ pub(super) mod tests {
                 assert_eq!(primary.requests.lock().unwrap().len(), usize::from(!manual));
                 assert_eq!(backup.requests.lock().unwrap().len(), 1);
                 let body = backup.requests.lock().unwrap()[0].to_string();
+                if manual {
+                    assert!(body.contains("data:image/png;base64,"));
+                }
                 assert!(
                     body.contains("channel-fixture"),
                     "complete tool history must reach {format}: {body}"

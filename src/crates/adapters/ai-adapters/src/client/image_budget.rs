@@ -1,5 +1,10 @@
 //! Model-specific image input budgets for an outgoing request copy.
 
+#[cfg(feature = "vision-input")]
+pub(super) mod context;
+#[cfg(all(test, feature = "vision-input"))]
+mod context_tests;
+
 use crate::types::Message;
 use anyhow::Result;
 use openbitfun_core_types::errors::{AiProviderError, ErrorCategory};
@@ -480,6 +485,10 @@ mod tests {
         let mut selected = initial.clone();
         selected.config.max_images_per_request = Some(3);
         let mut history = vec![tool_images("batch", 4)];
+        // Use actual one-pixel images so the 4K window exercises the count limit.
+        for image in history[0].tool_image_attachments.as_mut().unwrap() {
+            image.data_base64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGNgAAIAAAUAAXpeqz8AAAAASUVORK5CYII=".into();
+        }
         tokio::time::timeout(std::time::Duration::from_secs(5), async {
             initial
                 .send_message_once_with_trace_and_request_context(history.clone(), None, None, None)

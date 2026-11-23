@@ -5822,6 +5822,7 @@ dependencies = [
  "fs2",
  "futures",
  "hex",
+ "image 0.25.10",
  "keyring-core",
  "libc",
  "log",

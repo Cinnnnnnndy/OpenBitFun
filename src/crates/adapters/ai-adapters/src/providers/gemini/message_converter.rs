@@ -385,17 +385,52 @@ impl GeminiMessageConverter {
         let mut parts = Vec::new();
 
         if let Some(items) = parsed.as_array() {
+            // Untyped {text: ...} also occurs in ordinary user-supplied JSON.
+            // Interpret it as a native Gemini part only in a recognized part list.
+            let user_parts = !is_model_role
+                && items.iter().any(|item| {
+                    item.get("inline_data").is_some()
+                        || item.get("inlineData").is_some()
+                        || matches!(
+                            item["type"].as_str(),
+                            Some(
+                                "text"
+                                    | "input_text"
+                                    | "output_text"
+                                    | "image"
+                                    | "image_url"
+                                    | "input_image"
+                            )
+                        )
+                });
             for item in items {
                 let item_type = item.get("type").and_then(Value::as_str);
                 match item_type {
-                    Some("text") | Some("input_text") | Some("output_text") => {
+                    Some("text" | "input_text" | "output_text") => {
                         if let Some(text) = item.get("text").and_then(Value::as_str) {
                             if !text.is_empty() {
                                 parts.push(json!({ "text": text }));
                             }
                         }
                     }
-                    Some("image_url") if !is_model_role => {
+                    None if user_parts => {
+                        if let Some(inline) =
+                            item.get("inline_data").or_else(|| item.get("inlineData"))
+                        {
+                            let mime = inline
+                                .get("mime_type")
+                                .or_else(|| inline.get("mimeType"))
+                                .and_then(Value::as_str);
+                            if let (Some(mime), Some(data)) = (mime, inline["data"].as_str()) {
+                                parts.push(json!({"inlineData": {"mimeType": mime, "data": data}}));
+                            }
+                        } else if let Some(text) =
+                            item["text"].as_str().filter(|text| !text.is_empty())
+                        {
+                            parts.push(json!({"text": text}));
+                        }
+                    }
+                    Some("image_url" | "input_image") if !is_model_role => {
                         if let Some(url) = item.get("image_url").and_then(|value| {
                             value
                                 .get("url")
@@ -883,6 +918,35 @@ mod tests {
             contents[0]["parts"][0]["thoughtSignature"],
             json!("skip_thought_signature_validator")
         );
+    }
+
+    #[test]
+    fn native_user_images_stay_in_order_with_text_on_the_gemini_wire() {
+        let png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a1j8AAAAASUVORK5CYII=";
+        let message = Message::user(
+            json!([
+                {"inline_data": {"mime_type": "image/png", "data": png}},
+                {"text": "Compare the two images"},
+                {"inlineData": {"mimeType": "image/png", "data": png}},
+                {"text": "Report the differences"}
+            ])
+            .to_string(),
+        );
+        let (_, contents) = GeminiMessageConverter::convert_messages(vec![message], "gemini");
+        assert_eq!(
+            contents,
+            vec![json!({"role": "user", "parts": [
+                {"inlineData": {"mimeType": "image/png", "data": png}},
+                {"text": "Compare the two images"},
+                {"inlineData": {"mimeType": "image/png", "data": png}},
+                {"text": "Report the differences"}
+            ]})]
+        );
+
+        let literal = r#"[{"text":"example JSON"}]"#;
+        let (_, contents) =
+            GeminiMessageConverter::convert_messages(vec![Message::user(literal.into())], "gemini");
+        assert_eq!(contents[0]["parts"], json!([{"text": literal}]));
     }
 
     #[test]

@@ -220,7 +220,7 @@ impl CompressionJob {
     }
 
     async fn request_summary(&self, messages: &[Message]) -> OpenBitFunResult<String> {
-        let mut messages = ExecutionEngine::build_ai_messages_for_send(
+        let (mut messages, image_turn_start) = ExecutionEngine::build_ai_messages_for_send(
             messages,
             &self.client.config.format,
             self.workspace.as_ref(),
@@ -244,11 +244,15 @@ impl CompressionJob {
             );
         }
         messages.push(AIMessage::user(self.compressor.build_compact_prompt()));
+        let context = ModelRequestContext {
+            image_turn_start: Some(image_turn_start),
+            ..self.request_context.clone()
+        };
         super::super::compression_request::request_summary(
             self.client.clone(),
             messages,
             self.tools.clone(),
-            &self.request_context,
+            &context,
             self.trace.clone(),
         )
         .await

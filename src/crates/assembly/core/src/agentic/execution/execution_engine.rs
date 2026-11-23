@@ -747,6 +747,7 @@ impl ExecutionEngine {
             output_schema: context
                 .get(openbitfun_runtime_ports::OUTPUT_SCHEMA_CONTEXT_KEY)
                 .and_then(|schema| serde_json::from_str(schema).ok()),
+            ..Default::default()
         }
     }
 
@@ -839,16 +840,18 @@ impl ExecutionEngine {
         messages: &[Message],
         tools: Option<&[ToolDefinition]>,
     ) -> usize {
-        MessageHelper::estimate_request_tokens(
+        MessageHelper::estimate_request_tokens_with(
             messages,
             tools,
             RequestReasoningTokenPolicy::LatestTurnOnly,
+            Message::estimate_non_image_tokens_with_reasoning,
         )
     }
 
     /// Estimate request pressure for compression decisions.
     ///
-    /// `total_tokens` tracks the whole provider request input. The snapshot also
+    /// Pixels can be resized or omitted on the outgoing request. Only text pressure
+    /// warrants compressing the durable conversation. The snapshot also
     /// keeps the mutable conversation portion and fixed scaffold overhead
     /// available for diagnostics, while the trigger decision reserves output and
     /// safety budget from the full context window.
@@ -996,7 +999,7 @@ impl ExecutionEngine {
     fn estimate_tail_tokens(messages: &[Message]) -> usize {
         messages
             .iter()
-            .map(|message| message.estimate_tokens_with_reasoning(true))
+            .map(|message| message.estimate_non_image_tokens_with_reasoning(true))
             .sum()
     }
 
@@ -1226,7 +1229,7 @@ impl ExecutionEngine {
             .unwrap_or(0);
         let preserved_tokens: usize = preserved
             .iter()
-            .map(|m| m.estimate_tokens_with_reasoning(true))
+            .map(|m| m.estimate_non_image_tokens_with_reasoning(true))
             .sum::<usize>()
             + tool_tokens
             + prepended_reminder_tokens
@@ -1237,13 +1240,13 @@ impl ExecutionEngine {
             + rounds
                 .iter()
                 .flat_map(|r| r.iter())
-                .map(|m| m.estimate_tokens_with_reasoning(true))
+                .map(|m| m.estimate_non_image_tokens_with_reasoning(true))
                 .sum::<usize>();
 
         while total_tokens > context_window && kept_start < rounds.len() {
             let round_tokens: usize = rounds[kept_start]
                 .iter()
-                .map(|m| m.estimate_tokens_with_reasoning(true))
+                .map(|m| m.estimate_non_image_tokens_with_reasoning(true))
                 .sum();
             total_tokens -= round_tokens;
             kept_start += 1;
@@ -1954,10 +1957,12 @@ impl ExecutionEngine {
     /// checked separately by ImageInputRequirement::validate.
     pub(crate) async fn resolve_image_input_requirement(
         messages: &[Message],
+        current_turn_start: usize,
         tools_enabled: bool,
         tool_context: &ToolUseContext,
     ) -> ImageInputRequirement {
-        let requirement = Self::image_input_requirement(messages, tools_enabled);
+        let requirement =
+            Self::image_input_requirement(messages, current_turn_start, tools_enabled);
         if requirement != ImageInputRequirement::NativeOrAnalysisTool {
             return requirement;
         }
@@ -1991,7 +1996,7 @@ impl ExecutionEngine {
             .iter()
             .chain(&visible.deferred_tools)
             .any(|tool| tool.name() == "analyze_image");
-        Self::image_input_requirement(messages, analysis_available)
+        Self::image_input_requirement(messages, current_turn_start, analysis_available)
     }
 
     pub(crate) async fn resolve_model_id_for_turn(
@@ -2168,7 +2173,10 @@ impl ExecutionEngine {
         attach_images: bool,
     ) -> openbitfun_core_types::UsageContextBreakdown {
         let kept_images = if attach_images {
-            Self::image_bearing_indices_to_keep(messages)
+            Self::image_bearing_indices_to_keep(
+                messages,
+                Self::image_turn_start(messages, current_turn_id),
+            )
         } else {
             HashSet::new()
         };
@@ -2212,6 +2220,16 @@ impl ExecutionEngine {
         )
     }
 
+    /// Provider usage for a prefix containing pixels cannot be split after the fact.
+    /// Earlier text-only anchors still calibrate the estimate of the remaining text.
+    fn text_only_anchor_prefix(messages: &[Message]) -> &[Message] {
+        let end = messages
+            .iter()
+            .position(Self::message_bears_images)
+            .unwrap_or(messages.len());
+        &messages[..end]
+    }
+
     /// True if this message would contribute at least one image to the model (before pruning).
     fn message_bears_images(msg: &Message) -> bool {
         if Self::skip_message_for_model_send(msg) {
@@ -2246,9 +2264,10 @@ impl ExecutionEngine {
 
     pub(crate) fn image_input_requirement(
         messages: &[Message],
+        current_turn_start: usize,
         analysis_tool_available: bool,
     ) -> ImageInputRequirement {
-        let retained = Self::image_bearing_indices_to_keep(messages);
+        let retained = Self::image_bearing_indices_to_keep(messages, current_turn_start);
         if retained.is_empty() {
             return ImageInputRequirement::None;
         }
@@ -2265,8 +2284,22 @@ impl ExecutionEngine {
         }
     }
 
-    /// Indices of the image-bearing messages that should keep image payloads.
-    fn image_bearing_indices_to_keep(messages: &[Message]) -> HashSet<usize> {
+    fn image_turn_start(messages: &[Message], current_turn_id: &str) -> usize {
+        messages
+            .iter()
+            .position(|message| {
+                message.metadata.turn_id.as_deref() == Some(current_turn_id)
+                    && !Self::skip_message_for_model_send(message)
+            })
+            .unwrap_or(messages.len())
+    }
+
+    /// History pixels are elided in cache-stable batches. Active-turn pixels
+    /// are kept for the selected model's outgoing token budget.
+    fn image_bearing_indices_to_keep(
+        messages: &[Message],
+        current_turn_start: usize,
+    ) -> HashSet<usize> {
         let with_images: Vec<usize> = messages
             .iter()
             .enumerate()
@@ -2274,7 +2307,13 @@ impl ExecutionEngine {
             .map(|(i, _)| i)
             .collect();
         let elided = Self::elided_image_message_count(with_images.len());
-        with_images[elided..].iter().copied().collect()
+        with_images
+            .into_iter()
+            .enumerate()
+            .filter_map(|(rank, index)| {
+                (rank >= elided || index >= current_turn_start).then_some(index)
+            })
+            .collect()
     }
 
     /// Number of oldest image-bearing messages whose pixels are elided. It only
@@ -2302,7 +2341,7 @@ impl ExecutionEngine {
         let finalize_tool_names = Self::finalize_tool_names(input.tool_definitions.as_deref());
         let finalize_runtime_tool_restrictions =
             Self::finalize_runtime_tool_restrictions(input.context, &finalize_tool_names);
-        let mut final_ai_messages = Self::build_ai_messages_for_send(
+        let (mut final_ai_messages, image_turn_start) = Self::build_ai_messages_for_send(
             input.messages,
             &input.ai_client.config.format,
             input.context.workspace.as_ref(),
@@ -2341,7 +2380,10 @@ impl ExecutionEngine {
             loaded_deferred_tool_specs: Vec::new(),
             model_config_id: input.primary_model_facts.model_id.clone(),
             effective_model_name: input.ai_client.config.model.clone(),
-            model_request_context: input.model_request_context.clone(),
+            model_request_context: ModelRequestContext {
+                image_turn_start: Some(image_turn_start),
+                ..input.model_request_context.clone()
+            },
             account_client_source: input.account_client_source.clone(),
             channel_client_source: input.channel_client_source.clone(),
             prepared_model: None,
@@ -2379,7 +2421,7 @@ impl ExecutionEngine {
         current_turn_id: &str,
         attach_images: bool,
         prepended_reminders: &[&str],
-    ) -> OpenBitFunResult<Vec<AIMessage>> {
+    ) -> OpenBitFunResult<(Vec<AIMessage>, usize)> {
         let limits = ImageLimits::for_provider(provider);
         let image_context =
             ToolUseContext::for_tool_listing(workspace.cloned(), workspace_services.cloned());
@@ -2390,6 +2432,7 @@ impl ExecutionEngine {
             .filter(|text| !text.is_empty())
             .collect::<Vec<_>>();
         let mut result = Vec::with_capacity(messages.len() + trimmed_reminders.len());
+        let mut image_turn_start = None;
         let mut attached_image_count = 0usize;
         let first_non_system_index = messages
             .iter()
@@ -2397,8 +2440,9 @@ impl ExecutionEngine {
             .unwrap_or(messages.len());
         let mut prepended_reminders_injected = false;
 
+        let current_turn_start = Self::image_turn_start(messages, current_turn_id);
         let keep_image_messages = if attach_images {
-            Self::image_bearing_indices_to_keep(messages)
+            Self::image_bearing_indices_to_keep(messages, current_turn_start)
         } else {
             HashSet::new()
         };
@@ -2415,6 +2459,9 @@ impl ExecutionEngine {
                 || Self::is_stale_interrupted_continue(msg, current_turn_id)
             {
                 continue;
+            }
+            if msg_idx == current_turn_start {
+                image_turn_start = Some(result.len());
             }
             let keep_this_message_images = attach_images && keep_image_messages.contains(&msg_idx);
             match &msg.content {
@@ -2552,7 +2599,8 @@ impl ExecutionEngine {
             }
         }
 
-        Ok(result)
+        let image_turn_start = image_turn_start.unwrap_or(result.len());
+        Ok((result, image_turn_start))
     }
 
     fn render_multimodal_as_text(text: &str, images: &[ImageContextData]) -> String {
@@ -3419,6 +3467,7 @@ impl ExecutionEngine {
             );
             Self::resolve_image_input_requirement(
                 &initial_messages,
+                Self::image_turn_start(&initial_messages, &context.dialog_turn_id),
                 enable_tools,
                 &description_context,
             )
@@ -4224,6 +4273,7 @@ impl ExecutionEngine {
             let pool_attempt = if let Some(pool_id) = selected_pool.as_deref() {
                 let image_requirement = Self::image_input_requirement(
                     &messages,
+                    Self::image_turn_start(&messages, &context.dialog_turn_id),
                     enable_tools && available_tools.iter().any(|name| name == "analyze_image"),
                 );
                 let (attempt, _next_client) = if let Some(prepared) = initial_pool_attempt.take() {
@@ -4348,7 +4398,7 @@ impl ExecutionEngine {
                 .session_manager
                 .select_latest_matching_token_anchor_for_model(
                     &context.session_id,
-                    &messages,
+                    Self::text_only_anchor_prefix(&messages),
                     &model_id,
                 )
                 .await;
@@ -4605,9 +4655,14 @@ impl ExecutionEngine {
                 .ordered_reminders();
             let send_prepended_reminder_tokens =
                 Self::prepended_reminder_tokens_for_pressure(&send_prepended_reminders);
-            let mut send_pressure = if send_pressure_reusable
-                && token_pressure.prepended_reminder_tokens == send_prepended_reminder_tokens
-            {
+            let same_pressure = send_pressure_reusable
+                && token_pressure.prepended_reminder_tokens == send_prepended_reminder_tokens;
+            let mut minimum_non_image_input_tokens = if same_pressure && anchor_details.is_some() {
+                token_pressure.total_tokens
+            } else {
+                0
+            };
+            let mut send_pressure = if same_pressure {
                 token_pressure
             } else {
                 Self::estimate_auto_compression_pressure(
@@ -4623,12 +4678,16 @@ impl ExecutionEngine {
                     round_index, send_pressure.total_tokens, context_window
                 );
                 let before_truncate_tokens = send_pressure.total_tokens;
+                let before_truncate_len = messages.len();
                 messages = Self::emergency_truncate_messages(
                     messages,
                     context_window,
                     tool_definitions.as_deref(),
                     send_prepended_reminder_tokens,
                 );
+                if messages.len() != before_truncate_len {
+                    minimum_non_image_input_tokens = 0;
+                }
                 self.session_manager
                     .prune_token_anchors_to_messages(&context.session_id, &messages)
                     .await;
@@ -4726,7 +4785,11 @@ impl ExecutionEngine {
             let analysis_available =
                 enable_tools && available_tools.iter().any(|name| name == "analyze_image");
             let send_image_requirement = if selected_pool.is_some() {
-                Self::image_input_requirement(&messages, analysis_available)
+                Self::image_input_requirement(
+                    &messages,
+                    Self::image_turn_start(&messages, &context.dialog_turn_id),
+                    analysis_available,
+                )
             } else if !primary_supports_image_understanding
                 && messages.iter().any(|message| {
                     message.metadata.turn_id.as_deref() == Some(context.dialog_turn_id.as_str())
@@ -4760,7 +4823,7 @@ impl ExecutionEngine {
                 &model_fingerprint,
                 selected_pool.is_some(),
             );
-            let ai_messages = Self::build_ai_messages_for_send(
+            let (ai_messages, image_turn_start) = Self::build_ai_messages_for_send(
                 &request_messages,
                 &ai_client.config.format,
                 context.workspace.as_ref(),
@@ -4770,6 +4833,11 @@ impl ExecutionEngine {
                 &send_prepended_reminders,
             )
             .await?;
+
+            round_context.model_request_context.image_turn_start = Some(image_turn_start);
+            round_context
+                .model_request_context
+                .minimum_non_image_input_tokens = minimum_non_image_input_tokens;
 
             let round_lifecycle =
                 active_round_lifecycle.get_or_insert_with(ModelRoundLifecycle::new);
@@ -5603,6 +5671,26 @@ impl ExecutionEngine {
                     &model_fingerprint,
                     selected_pool.is_some(),
                 );
+                let anchor = self
+                    .session_manager
+                    .select_latest_matching_token_anchor_for_model(
+                        &context.session_id,
+                        Self::text_only_anchor_prefix(&finalize_messages),
+                        &model_id,
+                    )
+                    .await
+                    .selected;
+                let mut finalize_request_context = model_request_context.clone();
+                if let Some(anchor) = anchor {
+                    let (pressure, _) = Self::estimate_auto_compression_pressure_with_anchor(
+                        &finalize_messages,
+                        tool_definitions.as_deref(),
+                        compression_trigger_budget,
+                        Some(&anchor),
+                        Self::prepended_reminder_tokens_for_pressure(&finalize_prepended_reminders),
+                    );
+                    finalize_request_context.minimum_non_image_input_tokens = pressure.total_tokens;
+                }
                 let final_round_result = self
                     .run_finalize_round(FinalizeRoundInput {
                         permission_constraints: tool_policy.permission_constraints.clone(),
@@ -5615,7 +5703,7 @@ impl ExecutionEngine {
                         round_group_id: finalize_round_group_id.clone(),
                         execution_context_vars: &execution_context_vars,
                         primary_model_facts: &primary_model_facts,
-                        model_request_context: &model_request_context,
+                        model_request_context: &finalize_request_context,
                         prepended_reminders: &finalize_prepended_reminders,
                         messages: &finalize_messages,
                         reminder_text: finalize_reminder,
@@ -5649,7 +5737,7 @@ impl ExecutionEngine {
                             round_group_id: finalize_round_group_id.clone(),
                             execution_context_vars: &execution_context_vars,
                             primary_model_facts: &primary_model_facts,
-                            model_request_context: &model_request_context,
+                            model_request_context: &finalize_request_context,
                             prepended_reminders: &finalize_prepended_reminders,
                             messages: &finalize_messages,
                             reminder_text: finalize_reminder,
@@ -6164,7 +6252,7 @@ mod tests {
             }
         }
         for provider in ["openai", "responses", "anthropic", "gemini"] {
-            let messages = ExecutionEngine::build_ai_messages_for_send(
+            let (messages, _) = ExecutionEngine::build_ai_messages_for_send(
                 &[source.clone()],
                 provider,
                 None,
@@ -6203,7 +6291,7 @@ mod tests {
             assert_eq!((decoded.width(), decoded.height()), (6, 4));
             assert_eq!(find_geometry(&wire), Some(observation.clone()), "{provider}: screenshot ref and projection geometry must remain attached to these pixels");
         }
-        let text_only = ExecutionEngine::build_ai_messages_for_send(
+        let (text_only, _) = ExecutionEngine::build_ai_messages_for_send(
             &[source.clone()],
             "openai",
             None,
@@ -6293,7 +6381,7 @@ mod tests {
             if attempt > 0 {
                 store.add_message("image-limit", Message::user("Continue".into()));
             }
-            let messages = ExecutionEngine::build_ai_messages_for_send(
+            let (messages, _) = ExecutionEngine::build_ai_messages_for_send(
                 &store.get_context_messages("image-limit"),
                 "openai",
                 None,
@@ -6361,17 +6449,17 @@ mod tests {
         let image = crate::agentic::image_analysis::attachments::test_image();
         let mut messages = vec![Message::user("Text only".into())];
         assert_eq!(
-            ExecutionEngine::image_input_requirement(&messages, false),
+            ExecutionEngine::image_input_requirement(&messages, messages.len(), false),
             Requirement::None
         );
         let user_image = Message::user_multimodal("Inherited image".into(), vec![image.clone()]);
         messages.push(user_image.clone());
         assert_eq!(
-            ExecutionEngine::image_input_requirement(&messages, true),
+            ExecutionEngine::image_input_requirement(&messages, messages.len(), true),
             Requirement::NativeOrAnalysisTool
         );
         assert_eq!(
-            ExecutionEngine::image_input_requirement(&messages, false),
+            ExecutionEngine::image_input_requirement(&messages, messages.len(), false),
             Requirement::Native
         );
         let tool_image = Message::tool_result(ToolResult {
@@ -6389,12 +6477,12 @@ mod tests {
         });
         messages.push(tool_image);
         assert_eq!(
-            ExecutionEngine::image_input_requirement(&messages, true),
+            ExecutionEngine::image_input_requirement(&messages, messages.len(), true),
             Requirement::Native
         );
         messages.push(user_image.clone());
         assert_eq!(
-            ExecutionEngine::image_input_requirement(&messages, true),
+            ExecutionEngine::image_input_requirement(&messages, messages.len(), true),
             Requirement::Native
         );
         messages.push(Message::internal_reminder_multimodal(
@@ -6404,13 +6492,13 @@ mod tests {
         ));
         // Elision advances in batches, so the tool pixels stay in the sent window.
         assert_eq!(
-            ExecutionEngine::image_input_requirement(&messages, true),
+            ExecutionEngine::image_input_requirement(&messages, messages.len(), true),
             Requirement::Native
         );
         messages.push(user_image.clone());
         messages.push(user_image.clone());
         assert_eq!(
-            ExecutionEngine::image_input_requirement(&messages, true),
+            ExecutionEngine::image_input_requirement(&messages, messages.len(), true),
             Requirement::Native
         );
         messages.push(Message::internal_reminder_multimodal(
@@ -6421,14 +6509,14 @@ mod tests {
         // The seventh image-bearing message elides the oldest batch, including
         // the tool pixels, from the same window used for sending.
         assert_eq!(
-            ExecutionEngine::image_input_requirement(&messages, true),
+            ExecutionEngine::image_input_requirement(&messages, messages.len(), true),
             Requirement::NativeOrAnalysisTool
         );
         let mut hidden = user_image;
         hidden.metadata.semantic_kind =
             Some(super::MessageSemanticKind::ComputerUseVerificationScreenshot);
         assert_eq!(
-            ExecutionEngine::image_input_requirement(&[hidden], true),
+            ExecutionEngine::image_input_requirement(&[hidden], 0, true),
             Requirement::None
         );
     }
@@ -6444,7 +6532,7 @@ mod tests {
             crate::agentic::tools::framework::ToolUseContext::for_tool_listing(None, None);
         context.agent_type = Some("Claw".into());
         assert_eq!(
-            ExecutionEngine::resolve_image_input_requirement(&messages, false, &context).await,
+            ExecutionEngine::resolve_image_input_requirement(&messages, 0, false, &context).await,
             Requirement::Native
         );
         context
@@ -6452,12 +6540,13 @@ mod tests {
             .denied_tool_names
             .insert("analyze_image".into());
         assert_eq!(
-            ExecutionEngine::resolve_image_input_requirement(&messages, true, &context).await,
+            ExecutionEngine::resolve_image_input_requirement(&messages, 0, true, &context).await,
             Requirement::Native
         );
         assert_eq!(
             ExecutionEngine::resolve_image_input_requirement(
                 &[Message::user("No image".into())],
+                0,
                 true,
                 &context
             )
@@ -6502,7 +6591,11 @@ mod tests {
                 .chain(&visible.deferred_tools)
                 .any(|tool| tool.name() == "analyze_image");
             assert_eq!(
-                ExecutionEngine::image_input_requirement(&messages, analysis_available),
+                ExecutionEngine::image_input_requirement(
+                    &messages,
+                    messages.len(),
+                    analysis_available
+                ),
                 super::ImageInputRequirement::NativeOrAnalysisTool,
             );
         }
@@ -6531,7 +6624,7 @@ mod tests {
             .with_turn_id("turn".into()),
         ];
         for provider in ["openai", "anthropic", "responses", "gemini"] {
-            let native = ExecutionEngine::build_ai_messages_for_send(
+            let (native, _) = ExecutionEngine::build_ai_messages_for_send(
                 &messages,
                 provider,
                 None,
@@ -6561,7 +6654,7 @@ mod tests {
                 );
             }
         }
-        let text_only = ExecutionEngine::build_ai_messages_for_send(
+        let (text_only, _) = ExecutionEngine::build_ai_messages_for_send(
             &messages,
             "openai",
             None,
@@ -6616,7 +6709,7 @@ mod tests {
         let image = crate::agentic::image_analysis::attachments::test_image();
         let image_message = |index: usize| {
             Message::user_multimodal(format!("Screenshot {index}"), vec![image.clone()])
-                .with_turn_id("turn".into())
+                .with_turn_id("earlier".into())
         };
         let send = |messages: Vec<Message>| async move {
             serde_json::to_value(
@@ -6630,7 +6723,8 @@ mod tests {
                     &["stable reminder"],
                 )
                 .await
-                .unwrap(),
+                .unwrap()
+                .0,
             )
             .unwrap()
         };
@@ -7777,6 +7871,158 @@ mod tests {
 
         assert_eq!(snapshot.total_tokens, 100 + tail_tokens);
         assert_eq!(details.expect("anchor details").tail_tokens, tail_tokens);
+    }
+
+    #[test]
+    fn image_projection_reserves_text_using_a_clean_anchor_without_compressing_pixels() {
+        let image = crate::agentic::image_analysis::attachments::test_image();
+        let prefix = vec![
+            Message::system("instructions".into()),
+            Message::user("history".into()),
+        ];
+        let anchor = TokenAnchor::from_request_prefix(
+            TokenAnchorInput {
+                session_id: "s".into(),
+                turn_id: "t".into(),
+                round_id: "r".into(),
+                model_id: "m".into(),
+                input_tokens: 900,
+                system_tokens_at_anchor: ExecutionEngine::system_tokens_for_pressure(&prefix),
+                tool_tokens_at_anchor: 0,
+                prepended_reminder_tokens_at_anchor: 0,
+            },
+            &prefix,
+        );
+        let mut messages = prefix;
+        messages.push(Message::user_multimodal("inspect".into(), vec![image; 30]));
+        let available = ExecutionEngine::text_only_anchor_prefix(&messages);
+        assert_eq!(available.len(), 2);
+        assert!(anchor.matches_prefix(available));
+        let (pressure, _) = ExecutionEngine::estimate_auto_compression_pressure_with_anchor(
+            &messages,
+            None,
+            CompressionTriggerBudget::for_model(2_000, None),
+            Some(&anchor),
+            0,
+        );
+        assert_eq!(
+            pressure.total_tokens,
+            900 + Message::user("inspect".into()).estimate_tokens_with_reasoning(false)
+        );
+        assert!(
+            messages
+                .last()
+                .unwrap()
+                .estimate_tokens_with_reasoning(false)
+                > 2_000
+        );
+        let kept = ExecutionEngine::emergency_truncate_messages(messages.clone(), 2_000, None, 0);
+        assert_eq!(kept.len(), messages.len());
+    }
+
+    #[tokio::test]
+    async fn image_projection_preserves_all_active_turn_pixels_through_history_batch_elision() {
+        use super::ImageInputRequirement;
+        let image = crate::agentic::image_analysis::attachments::test_image();
+        let mut messages = vec![
+            Message::user_multimodal("earlier".into(), vec![image.clone()])
+                .with_turn_id("old".into()),
+        ];
+        messages.push(
+            Message::tool_result(ToolResult {
+                tool_id: "read-image".into(),
+                tool_name: "Read".into(),
+                effective_tool_name: None,
+                result_for_assistant: None,
+                is_error: false,
+                duration_ms: None,
+                result: serde_json::json!({}),
+                image_attachments: Some(vec![crate::util::types::ToolImageAttachment {
+                    mime_type: "image/png".into(),
+                    data_base64: image
+                        .data_url
+                        .as_deref()
+                        .unwrap()
+                        .split_once(',')
+                        .unwrap()
+                        .1
+                        .into(),
+                }]),
+            })
+            .with_turn_id("active".into()),
+        );
+        for _ in 0..6 {
+            messages.push(
+                Message::user_multimodal("active image".into(), vec![image.clone()])
+                    .with_turn_id("active".into()),
+            );
+        }
+        let start = ExecutionEngine::image_turn_start(&messages, "active");
+        assert_eq!(
+            ExecutionEngine::image_input_requirement(&messages, start, true),
+            ImageInputRequirement::Native
+        );
+        let (outgoing, boundary) = ExecutionEngine::build_ai_messages_for_send(
+            &messages,
+            "openai",
+            None,
+            None,
+            "active",
+            true,
+            &[],
+        )
+        .await
+        .unwrap();
+        assert_eq!(boundary, 1);
+        assert!(outgoing[0].content.as_deref().unwrap().contains("omitted"));
+        assert_eq!(
+            outgoing[1].tool_image_attachments.as_ref().unwrap().len(),
+            1
+        );
+        assert!(outgoing[2..]
+            .iter()
+            .all(|m| m.content.as_deref().unwrap().contains("image_url")));
+    }
+
+    #[tokio::test]
+    async fn image_projection_turn_boundary_uses_emitted_messages_and_real_turn_identity() {
+        let messages = vec![
+            Message::system("system".into()),
+            Message::internal_reminder(InternalReminderKind::InterruptedContinue, "stale")
+                .with_turn_id("older".into()),
+            Message::user("earlier request".into()).with_turn_id("older".into()),
+            Message::user("verification".into())
+                .with_semantic_kind(MessageSemanticKind::ComputerUseVerificationScreenshot)
+                .with_turn_id("current".into()),
+            Message::user("inspect".into()).with_turn_id("current".into()),
+            Message::internal_reminder(InternalReminderKind::FinalizeCacheAnchor, "finish")
+                .with_turn_id("current".into()),
+        ];
+        let (outgoing, boundary) = ExecutionEngine::build_ai_messages_for_send(
+            &messages,
+            "openai",
+            None,
+            None,
+            "current",
+            true,
+            &["injected reminder"],
+        )
+        .await
+        .unwrap();
+        assert_eq!(boundary, 3);
+        assert_eq!(outgoing[boundary].content.as_deref(), Some("inspect"));
+        let (history, history_only) = ExecutionEngine::build_ai_messages_for_send(
+            &messages[..3],
+            "openai",
+            None,
+            None,
+            "current",
+            true,
+            &["injected reminder"],
+        )
+        .await
+        .unwrap();
+        assert_eq!(history_only, history.len());
     }
 
     #[test]

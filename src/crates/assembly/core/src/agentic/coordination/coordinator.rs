@@ -7187,6 +7187,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             } else {
                 Vec::new()
             };
+        let current_turn_start = image_input_messages.len();
         image_input_messages.extend(additional_prepended_messages.iter().cloned());
         image_input_messages.extend(
             wrapped_user_input_payload
@@ -7211,6 +7212,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             );
         let image_requirement = ExecutionEngine::resolve_image_input_requirement(
             &image_input_messages,
+            current_turn_start,
             session.config.enable_tools,
             &image_tool_context,
         )
