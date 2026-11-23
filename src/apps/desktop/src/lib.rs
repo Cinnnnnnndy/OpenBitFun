@@ -30,6 +30,8 @@ mod embedded_relay_host;
 mod figure_verifier;
 mod frontend_asset_cache;
 pub mod frontend_workbench;
+#[cfg(target_os = "linux")]
+mod linux_browser_layout;
 pub mod logging;
 pub mod macos_menubar;
 #[cfg(target_os = "macos")]
