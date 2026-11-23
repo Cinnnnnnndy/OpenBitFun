@@ -254,6 +254,7 @@
     "waitingForModelResponse": "等待模型响应..."
   },
   "historyState": {
+    "turnSaveFailed": "本轮已结束，会话记录保存失败。{{error}}",
     "emptyWindow": "这段历史中没有可显示的消息。",
     "loadingTitle": "正在加载历史会话",
     "loadingDescription": "正在准备该会话的历史内容。",
