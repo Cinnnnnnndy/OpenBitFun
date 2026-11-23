@@ -6,6 +6,7 @@ import AppErrorBoundary from "./app/components/AppErrorBoundary";
 import { STARTUP_OVERLAY_HIDDEN_EVENT } from "./app/startup/startupSignals";
 import { I18nProvider } from "./infrastructure/i18n/providers/I18nProvider";
 import { OpenBitFunDesignSystemProvider } from "./infrastructure/design-system";
+import { skinRuntime } from './infrastructure/visual-skin';
 import "./app/styles/index.scss";
 
 // The build-selected font profile is linked from index.html before first paint.
@@ -232,6 +233,12 @@ async function initializeBeforeRender(): Promise<void> {
     });
   });
   log.info('Theme system initialized');
+  await traceStartupStep('before_render_step', 'visual_skin_initialize', async () => {
+    await measureAsyncAndLog(log, 'Startup step completed', () => skinRuntime.initialize(), {
+      data: { step: 'skinRuntime.initialize' },
+    });
+  });
+  log.info('Visual skin runtime initialized');
   logElapsed(log, 'Startup phase completed', phaseStartedAt, {
     data: { phase: 'initializeBeforeRender' },
   });
@@ -330,7 +337,6 @@ async function startApplication(): Promise<void> {
   const windowKind = new URLSearchParams(window.location.search).get('openbitfunWindow');
   const isAgentCompanionWindow = windowKind === 'agent-companion';
   const isDesktopCardWindow = windowKind === 'desktop-card';
-  const isGenUIGalleryWindow = import.meta.env.DEV && windowKind === 'genui-gallery';
   // Select the dependency graph before importing either window. Start loading
   // alongside appearance initialization, avoiding another startup waterfall.
   // Keep separate import statements: a conditional import expression can be
@@ -340,8 +346,6 @@ async function startApplication(): Promise<void> {
     windowModule = import('./app/components/AgentCompanionDesktopPet/AgentCompanionDesktopPet');
   } else if (isDesktopCardWindow) {
     windowModule = import('./app/components/DesktopCard/DesktopCardWindow');
-  } else if (isGenUIGalleryWindow) {
-    windowModule = import('./tools/generative-ui/GenUIGallery');
   } else {
     windowModule = import('./app/startup/MainApplicationRoot');
   }
@@ -360,7 +364,7 @@ async function startApplication(): Promise<void> {
   });
   const { default: WindowContent } = await windowModule;
   const renderStartedAt = nowMs();
-  if (isAgentCompanionWindow || isDesktopCardWindow || isGenUIGalleryWindow) {
+  if (isAgentCompanionWindow || isDesktopCardWindow) {
     const windowStep = isDesktopCardWindow ? 'scheduleDesktopCardRender' : 'scheduleAgentCompanionRender';
     const windowPhase = isDesktopCardWindow ? 'desktop_card_render_scheduled' : 'agent_companion_render_scheduled';
     ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(

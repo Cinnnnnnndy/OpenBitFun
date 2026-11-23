@@ -1,9 +1,10 @@
 use openbitfun_product_domains::tool_permissions::{
     merge_permission_rule_layers, resolve_child_permission_policy, resolve_permission_policy,
-    wildcard_matches, ChildPermissionPolicyLayers, PermissionConstraintLayer,
-    PermissionDelegationContext, PermissionEffect, PermissionEvaluator, PermissionPolicyConfig,
-    PermissionPolicyLayers, PermissionPolicyPreset, PermissionReply, PermissionReplySource,
-    PermissionRequest, PermissionRequestEvent, PermissionRequestSource,
+    wildcard_matches, ChildPermissionPolicyLayers, PermissionApprovalModelKind,
+    PermissionApprovalOnAsk, PermissionApprovalOnError, PermissionApprovalStrategy,
+    PermissionConstraintLayer, PermissionDelegationContext, PermissionEffect, PermissionEvaluator,
+    PermissionPolicyConfig, PermissionPolicyLayers, PermissionPolicyPreset, PermissionReply,
+    PermissionReplySource, PermissionRequest, PermissionRequestEvent, PermissionRequestSource,
     PermissionRequestSourceKind, PermissionResourceCaseSensitivity, PermissionRule,
     PermissionRuntimeCeiling, ResolvedPermissionPolicy, ToolPermissionConfig,
 };
@@ -98,27 +99,8 @@ fn policy_presets_expand_into_ordinary_baseline_rules() {
     });
 
     assert_eq!(
-        ask_rules.rules(),
-        vec![
-            rule("*", "*", PermissionEffect::Ask),
-            rule("read", "*", PermissionEffect::Allow),
-            rule("read", "*/.env", PermissionEffect::Ask),
-            rule("read", "*/.env.*", PermissionEffect::Ask),
-            rule("read", "*/.env.example", PermissionEffect::Allow),
-            rule("websearch", "*", PermissionEffect::Allow),
-            rule("webfetch", "*", PermissionEffect::Allow),
-            rule("task", "*", PermissionEffect::Allow),
-            rule("skill", "*", PermissionEffect::Allow),
-            rule("git", "git status *", PermissionEffect::Allow),
-            rule("git", "git diff *", PermissionEffect::Allow),
-            rule("git", "git log *", PermissionEffect::Allow),
-            rule("git", "git show *", PermissionEffect::Allow),
-            rule("git", "git blame *", PermissionEffect::Allow),
-            rule("git", "git rev-parse *", PermissionEffect::Allow),
-            rule("git", "git describe *", PermissionEffect::Allow),
-            rule("git", "git shortlog *", PermissionEffect::Allow),
-            rule("git", "git branch", PermissionEffect::Allow),
-        ]
+        ask_rules.rules().first(),
+        Some(&rule("*", "*", PermissionEffect::Ask))
     );
     assert_eq!(
         full_access_rules.rules(),
@@ -126,7 +108,7 @@ fn policy_presets_expand_into_ordinary_baseline_rules() {
     );
     assert_eq!(
         evaluator.evaluate_policy_resource("edit", "src/main.rs", &ask_rules),
-        PermissionEffect::Ask
+        PermissionEffect::Allow
     );
     assert_eq!(
         evaluator.evaluate_policy_resource("edit", "src/main.rs", &full_access_rules),
@@ -148,6 +130,28 @@ fn ask_preset_allows_low_risk_actions_and_keeps_mutations_guarded() {
 
     for (action, resource) in [
         ("read", "C:/repo/README.md"),
+        ("edit", "C:/repo/src/main.rs"),
+        ("edit", "C:/repo/.env.example"),
+        ("process.control", "exec:1"),
+        ("schedule.manage", "job:demo"),
+        ("image.generate", "service:images"),
+        ("session.message", "workspace:demo:session:target"),
+        ("goal.create", "session:demo"),
+        ("goal.update", "session:demo"),
+        ("miniapp.create", "app:demo"),
+        ("miniapp.finalize", "app:demo"),
+        ("process.read_output", "exec:1"),
+        ("session.read", "workspace:demo"),
+        ("browser.read", "builtin:page-1"),
+        ("terminal.read", "terminal:all"),
+        ("control.describe", "capabilities"),
+        ("goal.read", "session:demo"),
+        ("review.read", "github:repo:1"),
+        ("miniapp.read", "session:demo"),
+        ("computer_use", "screenshot"),
+        ("computer_use", "get_app_state:app_name=Editor"),
+        ("mcp", "server:list_resources"),
+        ("mcp", "server:list_prompts"),
         ("read", "C:/repo/.env.example"),
         ("websearch", "OpenBitFun permission model"),
         ("webfetch", "https://example.com/docs"),
@@ -175,7 +179,26 @@ fn ask_preset_allows_low_risk_actions_and_keeps_mutations_guarded() {
         ("read", "C:/repo/.env"),
         ("read", "C:/repo/.env.local"),
         ("external_directory", "C:/outside"),
-        ("edit", "C:/repo/src/main.rs"),
+        ("edit", "C:/repo/.env"),
+        ("edit", "C:/repo/.env.local"),
+        ("edit", "C:/repo/cert.pem"),
+        ("edit", "C:/repo/private.key"),
+        ("edit", "C:/repo/.git/config"),
+        ("edit", "C:/repo/.ssh/config"),
+        ("delete", "C:/repo/src/main.rs"),
+        ("process.write_input", "exec:1"),
+        ("browser.interact", "builtin:page-1"),
+        ("terminal.control", "terminal:1"),
+        ("custom_tool", "ExecControl"),
+        ("custom_tool", "ControlHub:read"),
+        ("session.manage", "session:demo"),
+        ("review.write", "github:repo:1"),
+        ("miniapp.interact", "session:demo"),
+        ("miniapp.publish", "app:demo"),
+        ("computer_use", "click"),
+        ("computer_use", "start_control:mode=foreground"),
+        ("computer_use", "run_script"),
+        ("mcp", "server:read_resource:secret"),
         ("bash", "cargo test"),
         ("git", "git branch feature/new"),
         ("git", "git add src/main.rs"),
@@ -393,7 +416,7 @@ fn task_and_skill_default_allow_do_not_authorize_child_tools() {
         PermissionEffect::Allow
     );
     assert_eq!(
-        evaluator.evaluate_policy_resource("edit", "src/main.rs", &resolved),
+        evaluator.evaluate_policy_resource("delete", "src/main.rs", &resolved),
         PermissionEffect::Ask
     );
 }
@@ -949,4 +972,87 @@ fn stored_permission_preferences_survive_default_change() {
         PermissionMode::from_config(&missing),
         PermissionMode::FullAccess
     );
+}
+
+#[test]
+fn approval_configuration_is_additive_and_validates_model_bindings() {
+    let legacy: ToolPermissionConfig = serde_json::from_value(json!({
+        "policy": {"preset": "ask", "rules": []},
+        "interaction": {"auto_approve_ask": false}
+    }))
+    .unwrap();
+    assert_eq!(
+        legacy.approval.strategy,
+        PermissionApprovalStrategy::Interactive
+    );
+    assert_eq!(
+        legacy.approval.model_kind,
+        PermissionApprovalModelKind::Chat
+    );
+    assert_eq!(legacy.approval.chat_model_id, "fast");
+    assert_eq!(legacy.approval.timeout_ms, 30_000);
+
+    // Legacy auto-approval settings resolve to model approval at runtime.
+    let legacy_auto: ToolPermissionConfig = serde_json::from_value(json!({
+        "policy": {"preset": "ask", "rules": []},
+        "interaction": {"auto_approve_ask": true}
+    }))
+    .unwrap();
+    assert_eq!(legacy_auto.approval.chat_model_id, "fast");
+    let mut model_approval = legacy_auto.approval.clone();
+    model_approval.strategy = PermissionApprovalStrategy::Model;
+    assert!(model_approval.validate().is_ok());
+
+    let configured: ToolPermissionConfig = serde_json::from_value(json!({
+        "policy": {"preset": "ask", "rules": []},
+        "interaction": {"auto_approve_ask": false},
+        "approval": {
+            "strategy": "model",
+            "model_kind": "chat",
+            "chat_model_id": "approval-model",
+            "timeout_ms": 12000,
+            "on_ask": "user",
+            "on_error": "reject"
+        }
+    }))
+    .unwrap();
+    assert_eq!(
+        configured.approval.strategy,
+        PermissionApprovalStrategy::Model
+    );
+    assert_eq!(
+        configured.approval.model_kind,
+        PermissionApprovalModelKind::Chat
+    );
+    assert_eq!(configured.approval.on_ask, PermissionApprovalOnAsk::User);
+    assert_eq!(
+        configured.approval.on_error,
+        PermissionApprovalOnError::Reject
+    );
+    assert!(configured.approval.validate().is_ok());
+    let serialized_approval = serde_json::to_value(&configured.approval).unwrap();
+    assert_eq!(serialized_approval["model_kind"], "chat");
+    assert_eq!(serialized_approval["chat_model_id"], "approval-model");
+    assert!(serialized_approval.get("model").is_none());
+    assert!(serialized_approval.get("headless_fallback").is_none());
+    let mut invalid = configured.approval.clone();
+    invalid.chat_model_id.clear();
+    assert!(invalid.validate().is_err());
+
+    let decision_model_without_chat_model_id =
+        serde_json::from_value::<ToolPermissionConfig>(json!({
+            "approval": {
+                "strategy": "model",
+                "model_kind": "decision",
+                "chat_model_id": "",
+                "timeout_ms": 30000,
+                "on_ask": "user",
+                "on_error": "ask"
+            }
+        }))
+        .unwrap();
+    assert!(decision_model_without_chat_model_id
+        .approval
+        .validate()
+        .is_ok());
 }

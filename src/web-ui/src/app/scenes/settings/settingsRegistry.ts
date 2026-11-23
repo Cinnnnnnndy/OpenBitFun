@@ -112,7 +112,6 @@ export const SETTINGS_PAGE_MANIFESTS: readonly SettingsPageManifest[] = [
     descriptionKey: 'navigation.pages.appearance.description',
     keywords: [
       'theme', 'font', 'size', 'motion', 'animation',
-      'appearance pack', 'skin', 'import',
       'session', 'panel', 'layout', 'overlay',
       'chat', 'content', 'width', 'resize',
       'sidebar', 'navigation', 'pin', 'order',
@@ -121,8 +120,8 @@ export const SETTINGS_PAGE_MANIFESTS: readonly SettingsPageManifest[] = [
     searchPhrases: [
       phrase('settings/appearance', 'title'),
       phrase('settings/appearance', 'subtitle'),
-      phrase('settings/appearance', 'package.title'),
-      phrase('settings/appearance', 'package.description'),
+      phrase('settings/appearance', 'theme.title'),
+      phrase('settings/appearance', 'theme.description'),
       phrase('settings/application', 'appearance.fontSize.title'),
       phrase('settings/appearance', 'sessionPanel.title'),
       phrase('settings/appearance', 'sessionPanel.displayMode'),
@@ -184,12 +183,6 @@ export const SETTINGS_PAGE_MANIFESTS: readonly SettingsPageManifest[] = [
         searchPhrases: [phrase('settings/application', 'messageSending.title'), phrase('settings/application', 'messageSending.duringTurn'), phrase('settings/application', 'messageSending.description')],
       },
       {
-        id: 'btw-close-confirmation',
-        labelKey: 'navigation.sections.btw-close-confirmation',
-        keywords: ['btw', 'side conversation', 'close', 'confirmation', 'prompt'],
-        searchPhrases: [phrase('settings/application', 'btwCloseConfirmation.title'), phrase('settings/application', 'btwCloseConfirmation.label')],
-      },
-      {
         id: 'text-selection',
         labelKey: 'navigation.sections.text-selection',
         keywords: ['selection', 'annotation', 'excerpt', 'toolbar', 'popup', 'flowchat'],
@@ -240,8 +233,8 @@ export const SETTINGS_PAGE_MANIFESTS: readonly SettingsPageManifest[] = [
     icon: Brain,
     labelKey: 'navigation.pages.sessionMemory.label',
     descriptionKey: 'navigation.pages.sessionMemory.description',
-    keywords: ['session', 'memory', 'harness', 'title', 'remember', 'recall'],
-    namespaces: ['settings', 'settings/runtime', 'settings/models', 'settings/memory', 'flow-chat'],
+    keywords: ['session', 'memory', 'harness', 'title', 'remember', 'recall', 'btw', 'side question'],
+    namespaces: ['settings', 'settings/runtime', 'settings/models', 'settings/memory', 'settings/application', 'flow-chat'],
     searchPhrases: [],
     sections: [
       {
@@ -249,6 +242,12 @@ export const SETTINGS_PAGE_MANIFESTS: readonly SettingsPageManifest[] = [
         labelKey: 'navigation.sections.session',
         keywords: ['session', 'harness', 'mode', 'title'],
         searchPhrases: [phrase('settings/runtime', 'defaultHarness.title'), phrase('settings/models', 'sessionTitle.title')],
+      },
+      {
+        id: 'btw',
+        labelKey: 'navigation.sections.btw',
+        keywords: ['btw', 'side question', 'side conversation', 'model', 'pool', 'close', 'confirmation'],
+        searchPhrases: [phrase('settings/models', 'btwModel.title'), phrase('settings/models', 'btwModel.label'), phrase('settings/application', 'btwCloseConfirmation.label')],
       },
       {
         id: 'memory',
@@ -285,9 +284,9 @@ export const SETTINGS_PAGE_MANIFESTS: readonly SettingsPageManifest[] = [
       phrase('settings/runtime', 'toolExecution.sectionTitle'),
       phrase('settings/runtime', 'deferredToolLoading.sectionTitle'),
       phrase('settings/runtime', 'toolPresentation.mode'),
+      phrase('settings/agentic-tools', 'config.forkSubagentDefaultModel'),
       phrase('settings/review-capacity', 'capacity.title'),
       phrase('settings/models', 'toolArgumentJsonRepair.title'),
-      phrase('settings/runtime', 'genui.title'),
     ],
     load: () => import('./pages/ai/ExecutionSettingsPage'),
   }),

@@ -13,6 +13,7 @@ import { getTurnCompletionNotice } from '../utils/turnCompletionNotice';
 import { createAbsoluteSessionTurnIndexResolver } from '../utils/flowChatTurnOrdinal';
 import { getTurnOutputDurationMs, getTurnTtftMs } from '../utils/turnUsageMetrics';
 import { projectAdjacentFlowGroups, canStartFreshFlowGroupRunAt } from '../grouping/groupProjection';
+import { figurePreparation } from '../grouping/figurePreparation';
 import { hasModelRoundNarrative } from '../grouping/roundGroups';
 import { isSuppressedBackgroundTurn } from '../utils/backgroundDelivery';
 
@@ -146,12 +147,16 @@ function isStableTurnProjection(turn: DialogTurn): boolean {
 }
 
 interface SessionProjectionCache {
+  sessionId: Session['sessionId'];
   turnCatalogRef: Session['turnCatalog'] | undefined;
   isPartial: boolean | undefined;
   totalTurnCount: number | undefined;
   needsUserAttention: Session['needsUserAttention'];
   virtualItems: VirtualItem[];
 }
+
+// A retained projection stays reachable only while its source turn array does.
+const retainedSessionProjections = new WeakMap<DialogTurn[], SessionProjectionCache>();
 
 // Settled source Turns can be shared by live, history and side views without
 // making any one view the owner of another view's streaming state or body.
@@ -417,11 +422,15 @@ function projectTurnItemsWithPrefixCache(
   return reconciled;
 }
 
-/** Each mounted projection owns its mutable streaming prefix and warm snapshots. */
-export function createSessionVirtualItemProjector(): (session: Session | null) => VirtualItem[] {
+/** Each mounted projection owns its mutable streaming prefix. */
+export function createSessionVirtualItemProjector(
+  { reuseSnapshotsAcrossMounts = false }: { reuseSnapshotsAcrossMounts?: boolean } = {},
+): (session: Session | null) => VirtualItem[] {
   let sessionId: string | null = null;
   let previousProjection: SessionProjectionCache | undefined;
-  let warmProjections = new WeakMap<DialogTurn[], SessionProjectionCache>();
+  let warmProjections = reuseSnapshotsAcrossMounts
+    ? retainedSessionProjections
+    : new WeakMap<DialogTurn[], SessionProjectionCache>();
   const cachedTurnPrefixById = new Map<string, CachedTurnPrefixProjection>();
   const emptyItems: VirtualItem[] = [];
 
@@ -429,7 +438,7 @@ export function createSessionVirtualItemProjector(): (session: Session | null) =
     if (!session) {
       sessionId = null;
       previousProjection = undefined;
-      warmProjections = new WeakMap();
+      if (!reuseSnapshotsAcrossMounts) warmProjections = new WeakMap();
       cachedTurnPrefixById.clear();
       return emptyItems;
     }
@@ -437,6 +446,7 @@ export function createSessionVirtualItemProjector(): (session: Session | null) =
     sessionId = session.sessionId;
     const restored = warmProjections.get(session.dialogTurns);
     if (restored
+      && restored.sessionId === session.sessionId
       && restored.turnCatalogRef === session.turnCatalog
       && restored.isPartial === session.isPartial
       && restored.totalTurnCount === session.totalTurnCount
@@ -455,6 +465,7 @@ export function createSessionVirtualItemProjector(): (session: Session | null) =
 
     const items = projectSessionItems(session, cachedTurnPrefixById);
     const projection = {
+      sessionId: session.sessionId,
       turnCatalogRef: session.turnCatalog,
       isPartial: session.isPartial,
       totalTurnCount: session.totalTurnCount,
@@ -555,6 +566,7 @@ function projectSessionItems(
     const turnOutputDurationMs = getTurnOutputDurationMs(turn.modelRounds);
     const turnTtftMs = getTurnTtftMs(turn.modelRounds);
     const flushRoundEntries = (rounds: ModelRound[]) => {
+      const preparation = figurePreparation(session.workspacePath);
       rounds.forEach((round, roundIndex) => {
         // Keep the same owner row when a tool or model round completes.
         const trailingItem = round.items.at(-1);
@@ -565,6 +577,7 @@ function projectSessionItems(
         items.push({
           type: 'model-round',
           data: round,
+          projectedGroups: preparation(round),
           turnId: turn.id,
           isLastRound: roundIndex === rounds.length - 1,
           isTurnComplete,

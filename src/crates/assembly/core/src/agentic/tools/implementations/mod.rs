@@ -1,12 +1,8 @@
 //! Tool implementation module
 
-pub mod agent_control_tool;
-pub mod agent_list_tool;
-pub mod agent_wait_tool;
+pub mod agent_collaboration;
 #[cfg(feature = "tools-image-analysis")]
 pub mod analyze_image_tool;
-#[cfg(feature = "tools-miniapp")]
-pub mod appearance_publish_tool;
 pub mod ask_user_question_tool;
 pub mod code_review_tool;
 #[cfg(feature = "tools-computer-use")]
@@ -38,8 +34,6 @@ pub mod frontend_workbench_tool;
 pub mod gen_office_file_tool;
 #[cfg(feature = "tools-image-generation")]
 pub mod generate_image_tool;
-#[cfg(feature = "tools-miniapp")]
-pub mod generative_ui_tool;
 #[cfg(feature = "tools-git")]
 pub mod get_file_diff_tool;
 pub mod get_time_tool;
@@ -79,7 +73,6 @@ pub mod session_history_tool;
 pub mod session_message_tool;
 pub mod skill_tool;
 pub mod skills;
-pub mod task;
 pub mod thread_goal_tools;
 pub mod todo_write_tool;
 pub mod util;
@@ -92,13 +85,13 @@ pub mod worktree_tool;
 
 #[deprecated(note = "GetToolSpecTool is owned by the product tool runtime boundary")]
 pub use crate::agentic::tools::product_runtime::GetToolSpecTool;
-pub use agent_control_tool::AgentControlTool;
-pub use agent_list_tool::AgentListTool;
-pub use agent_wait_tool::AgentWaitTool;
+pub(crate) use agent_collaboration::AgentExecutionTool;
+pub use agent_collaboration::{
+    AgentControlTool, AgentForkTool, AgentListTool, AgentSendInputTool, AgentSpawnTool,
+    AgentWaitTool, LaunchReviewAgentTool, TaskTool,
+};
 #[cfg(feature = "tools-image-analysis")]
 pub use analyze_image_tool::AnalyzeImageTool;
-#[cfg(feature = "tools-miniapp")]
-pub use appearance_publish_tool::PublishAppearanceTool;
 pub use ask_user_question_tool::AskUserQuestionTool;
 pub use code_review_tool::CodeReviewTool;
 #[cfg(feature = "tools-computer-use")]
@@ -120,8 +113,6 @@ pub use frontend_workbench_tool::FrontendWorkbenchTool;
 pub use gen_office_file_tool::GenOfficeFileTool;
 #[cfg(feature = "tools-image-generation")]
 pub use generate_image_tool::GenerateImageTool;
-#[cfg(feature = "tools-miniapp")]
-pub use generative_ui_tool::GenerativeUITool;
 #[cfg(feature = "tools-git")]
 pub use get_file_diff_tool::GetFileDiffTool;
 pub use get_time_tool::GetTimeTool;
@@ -161,8 +152,6 @@ pub use session_control_tool::SessionControlTool;
 pub use session_history_tool::SessionHistoryTool;
 pub use session_message_tool::SessionMessageTool;
 pub use skill_tool::SkillTool;
-pub(crate) use task::AgentExecutionTool;
-pub use task::{AgentSendInputTool, AgentSpawnTool, LaunchReviewAgentTool, TaskTool};
 pub use thread_goal_tools::{CreateGoalTool, GetGoalTool, UpdateGoalTool};
 pub use todo_write_tool::TodoWriteTool;
 #[cfg(feature = "tools-image-analysis")]

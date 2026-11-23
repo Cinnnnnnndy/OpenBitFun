@@ -33,6 +33,7 @@ Use these tables to select tools for the user's tasks, then put their exact name
 | Tool name | Purpose |
 | --- | --- |
 | `AgentSpawn` | Launch an agent to work independently in the background. |
+| `AgentFork` | Launch a background agent with a copy of the current conversation context. |
 | `AgentSendInput` | Send an instruction to an existing agent. |
 | `AgentWait` | Wait for selected background agent results. |
 | `AgentList` | List direct child agents and their status. |
@@ -67,7 +68,6 @@ Use these tables to select tools for the user's tasks, then put their exact name
 | Tool name | Purpose |
 | --- | --- |
 | `AskUserQuestion` | Ask the user focused follow-up questions during execution. |
-| `GenerativeUI` | Render HTML or SVG visualizations and lightweight interactive widgets in chat. |
 
 ## Computer use and automation
 
@@ -83,7 +83,6 @@ Use these tables to select tools for the user's tasks, then put their exact name
 | --- | --- |
 | `OpenBitFunControl` | Discover and control OpenBitFun features and settings. |
 | `FrontendWorkbench` | Draft and hot-apply the packaged OpenBitFun frontend with rollback protection. |
-| `PublishAppearance` | Submit an Appearance package to the Skin market for review. |
 
 ## MiniApp development and publishing
 

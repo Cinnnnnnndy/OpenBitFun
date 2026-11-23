@@ -126,7 +126,7 @@ fn tool_display_mode(tool_name: &str, tool_state: &ToolDisplayState) -> ToolDisp
         }
         // Agent launches always render as Block — even during early detection / params streaming,
         // we want to show the subagent card with real-time progress rather than inline "Delegating...".
-        "Task" | "AgentSpawn" => ToolDisplayMode::Block,
+        "Task" | "AgentSpawn" | "AgentFork" => ToolDisplayMode::Block,
 
         // Always block tools
         "TodoWrite" | "AskUserQuestion" | "CreatePlan" => ToolDisplayMode::Block,
@@ -426,7 +426,7 @@ fn inline_pending_text(canonical: &str, tool_state: &ToolDisplayState) -> String
         "LS" => "Listing directory...".to_string(),
         "WebSearch" => "Searching web...".to_string(),
         "WebFetch" => "Fetching from the web...".to_string(),
-        "Task" | "AgentSpawn" => "Launching agent...".to_string(),
+        "Task" | "AgentSpawn" | "AgentFork" => "Launching agent...".to_string(),
         "TodoWrite" => "Updating todos...".to_string(),
         "HmosCompilation" => "Compiling HarmonyOS project...".to_string(),
         "Skill" => "Loading skill...".to_string(),
@@ -640,7 +640,7 @@ fn render_block_dispatch(
         "OpenBitFunControl" if login_qr_result(tool_state).is_some() => {
             render_login_qr_block(tool_state, theme, focused, spinner_frame, available_width)
         }
-        "Task" | "AgentSpawn" => {
+        "Task" | "AgentSpawn" | "AgentFork" => {
             render_task_block(tool_state, theme, focused, spinner_frame, available_width)
         }
         "TodoWrite" => {
@@ -1514,7 +1514,11 @@ fn render_task_block(
         ToolDisplayStatus::Running | ToolDisplayStatus::Streaming
     );
 
-    let title = format!("{} Agent", capitalize_first(&subagent_type));
+    let title = if tool_state.tool_name == "AgentFork" {
+        tool_state.tool_name.clone()
+    } else {
+        format!("{} Agent", capitalize_first(&subagent_type))
+    };
 
     // Build description line with tool call count (if available)
     let desc_text = if let Some(ref progress) = tool_state.subagent_progress {
@@ -2139,7 +2143,12 @@ fn param_str(params: &serde_json::Value, keys: &[&str]) -> String {
 
 /// Extract the Skill tool's command, retaining legacy parameter aliases.
 fn skill_display_name(params: &serde_json::Value) -> String {
-    param_str(params, &["command", "name", "skill_name"])
+    ["command", "skill", "name", "skill_name"]
+        .iter()
+        .filter_map(|key| params.get(*key)?.as_str().map(str::trim))
+        .find(|name| !name.is_empty())
+        .unwrap_or("unknown")
+        .to_string()
 }
 
 /// Extract an optional string parameter
@@ -2199,6 +2208,26 @@ fn capitalize_first(s: &str) -> String {
 mod tests {
     use super::*;
     use ratatui::{backend::TestBackend, style::Color, widgets::List, Terminal};
+
+    #[test]
+    fn agent_fork_renders_a_launch_without_an_agent_type() {
+        let state = ToolDisplayState {
+            tool_id: "fork-call".into(),
+            tool_name: "AgentFork".into(),
+            parameters: serde_json::json!({"agent_id":"review", "prompt":"Check the inherited findings"}),
+            status: ToolDisplayStatus::Running,
+            result: None,
+            progress_message: None,
+            duration_ms: None,
+            metadata: None,
+            subagent_progress: None,
+        };
+        let rendered = render_tool_card_inner(&state, &Theme::dark(), false, false, "", 80);
+        let text = rendered.plain_lines.join("\n");
+        assert!(text.contains("AgentFork"));
+        assert!(text.contains("Check the inherited findings"));
+        assert!(!text.contains("Unknown"));
+    }
 
     fn login_qr_state() -> ToolDisplayState {
         let qr = openbitfun_core::service::remote_connect::QrGenerator::present_content(
@@ -2299,6 +2328,20 @@ mod tests {
     fn skill_name_is_read_from_command_parameter() {
         let params = serde_json::json!({"command": "arkts-error-fixes"});
 
+        for command in [
+            serde_json::Value::Null,
+            serde_json::json!(" "),
+            serde_json::json!(3),
+        ] {
+            assert_eq!(
+                skill_display_name(&serde_json::json!({"command":command,"skill":" visualize "})),
+                "visualize"
+            );
+        }
         assert_eq!(skill_display_name(&params), "arkts-error-fixes");
+        assert_eq!(
+            skill_display_name(&serde_json::json!({"skill": "visualize"})),
+            "visualize"
+        );
     }
 }

@@ -35,6 +35,7 @@ import {
 } from '../../state-machine/types';
 import type { AnyFlowItem, DialogTurn, FlowToolItem, Session } from '../../types/flow-chat';
 import { isUnmaterializedSessionDraft } from '../../utils/sessionDraft';
+import { isAcpFlowSession } from '../../utils/acpSession';
 import { installLiveSessionInteractionMailbox } from '../liveSessionInteractionStore';
 import { agenticEventListener } from '../AgenticEventListener';
 import { pendingQueueManager } from './PendingQueueModule';
@@ -81,8 +82,16 @@ export function isSessionProjectionAttachable(
 type RefreshRequester = (sessionId?: string) => void;
 let installedRefreshRequester: RefreshRequester | null = null;
 
+function canReconcileSession(sessionId?: string): boolean {
+  return isSurfaceReconcileEnabled()
+    || Boolean(sessionId && isRuntimeSessionProjectionStale(
+      getActiveSurfaceScope().surfaceId,
+      sessionId,
+    ));
+}
+
 export function requestPeerSessionRefresh(sessionId?: string): void {
-  if (!isSurfaceReconcileEnabled()) {
+  if (!canReconcileSession(sessionId)) {
     return;
   }
   installedRefreshRequester?.(sessionId);
@@ -452,10 +461,18 @@ export function installPeerSessionRefresh(context: FlowChatContext): () => void 
     requestedSessionId?: string,
     staleOnly = false,
   ): Promise<void> {
-    if (disposed || inFlight || !isSurfaceReconcileEnabled()) {
+    if (disposed || inFlight) {
       if (inFlight) {
         enqueueFollowUpRefresh(requestedSessionId);
       }
+      return;
+    }
+    const state = context.flowChatStore.getState();
+    const sessionId = requestedSessionId || state.activeSessionId;
+    // A pristine local window can reload while its host keeps executing. Its
+    // explicitly stale projection needs the same fenced journal replay as a
+    // device switch, without enabling reconciliation for ordinary idle opens.
+    if (!canReconcileSession(sessionId ?? undefined)) {
       return;
     }
     // Peer history and live records share the durable subscription. Runtime
@@ -482,8 +499,6 @@ export function installPeerSessionRefresh(context: FlowChatContext): () => void 
       void context.ensureLiveSubscription?.();
     }
 
-    const state = context.flowChatStore.getState();
-    const sessionId = requestedSessionId || state.activeSessionId;
     // Attach is per (surface, session), not per the tab currently focused.
     // After a switch, every live session on this surface may have missed
     // DialogTurnStarted; dropped-event refresh requests name those sessions
@@ -493,6 +508,15 @@ export function installPeerSessionRefresh(context: FlowChatContext): () => void 
     }
     const session = state.sessions.get(sessionId);
     if (!isSessionProjectionAttachable(session)) {
+      // A reloaded background ACP session may never have been clicked. Its
+      // still-running prompt must be recovered without making the controller
+      // activate that tab. Reuse the existing bounded, deduplicated prewarm.
+      if (session && isAcpFlowSession(session) && session.historyState === 'metadata-only') {
+        const scope = getActiveSurfaceScope();
+        void import('./SessionModule').then(({ prewarmHistoricalSession }) => {
+          if (scope.isCurrent()) prewarmHistoricalSession(context, sessionId);
+        });
+      }
       return;
     }
     ensureSubscription();
@@ -564,7 +588,7 @@ export function installPeerSessionRefresh(context: FlowChatContext): () => void 
           // every non-active running chat after a multi-session switch.
           requireActiveSession: false,
           shouldApply: () => {
-            if (!isSurfaceReconcileEnabled()) {
+            if (!canReconcileSession(sessionId)) {
               return false;
             }
             const currentMachine = stateMachineManager.get(sessionId);
@@ -773,7 +797,12 @@ export function installPeerSessionRefresh(context: FlowChatContext): () => void 
     }
     immediateTimer = setTimeout(() => {
       immediateTimer = null;
-      void runRefresh(sessionId);
+      void runRefresh(sessionId).finally(() => {
+        // A request can return before installing an attachment (for example,
+        // no active tab during startup). It must not strand a named repair
+        // queued behind that initial request.
+        if (!inFlight && immediateTimer === null) drainFollowUpRefresh();
+      });
     }, 0);
   }
 
@@ -821,7 +850,23 @@ export function installPeerSessionRefresh(context: FlowChatContext): () => void 
     document.addEventListener('visibilitychange', handleVisibilityChanged);
   }
 
-  scheduleRefresh();
+  // Hydration can finish before this listener is installed. Its explicit gap
+  // is durable, but the notification was not; repair background sessions too,
+  // without waiting for another token or requiring their tab to be activated.
+  const initialScope = getActiveSurfaceScope();
+  const initialState = context.flowChatStore.getState();
+  const initialGaps = new Set<string>();
+  if (initialScope.surfaceId === 'local') {
+    for (const sessionId of initialState.sessions.keys()) {
+      if (isRuntimeSessionProjectionStale(initialScope.surfaceId, sessionId)) {
+        initialGaps.add(sessionId);
+        scheduleRefresh(sessionId);
+      }
+    }
+  }
+  if (initialGaps.size === 0 || (initialState.activeSessionId && !initialGaps.has(initialState.activeSessionId))) {
+    scheduleRefresh(initialState.activeSessionId ?? undefined);
+  }
 
   return () => {
     disposed = true;

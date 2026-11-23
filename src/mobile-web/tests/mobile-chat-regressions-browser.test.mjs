@@ -11,12 +11,29 @@ async function closeDetails(page) {
   await page.waitForFunction(() => !document.querySelector('.chat-tool-details'));
 }
 
+test('a mobile reader opens the standalone figure through the workspace download handler', async () => {
+  const source = await startSourceServer();
+  const browser = await launchBrowser();
+  try {
+    const page = await browser.newPage();
+    await page.setViewport({ width: 390, height: 844 });
+    await page.goto(source.origin);
+    await page.evaluate(async () => (await import('/tests/helpers/mobile-chat-regressions-fixture.tsx')).showTranscript(false, 'figure'));
+    const link = await page.waitForSelector('button.file-link');
+    await link.click();
+    await page.waitForFunction(() => document.body.dataset.downloadPath === 'artifacts/map.svg');
+  } finally {
+    await browser.close();
+    await source.close();
+  }
+});
+
 test('message times and quiet tool failures work at compact and wide sizes', { timeout: 60000 }, async () => {
   const source = await startSourceServer();
   const browser = await launchBrowser();
   try {
     const page = await browser.newPage();
-    await page.goto(source.origin);
+    await page.goto(source.origin + '/?lang=en');
     const times = await page.evaluate(async () => {
       const { messageTimestamp } = await import('/src/i18n/messageTime.ts');
       return ['1700000000', '1700000000000', '1700000000000000', '1700000000000000000', '', 'invalid']
@@ -68,4 +85,24 @@ test('message times and quiet tool failures work at compact and wide sizes', { t
     await page.waitForSelector('.chat-tool-card[data-prominent="true"]');
     assert.equal(await page.$('.chat-tool-list--collapsed'), null, 'approval stays reachable');
   } finally { await browser.close(); await source.close(); }
+});
+
+test('agent launch tools retain their child branch cards', { timeout: 60000 }, async () => {
+  const source = await startSourceServer();
+  const browser = await launchBrowser();
+  try {
+    const page = await browser.newPage();
+    await page.goto(source.origin);
+    for (const width of [390, 1280]) {
+      await page.setViewport({ width, height: 844 });
+      for (const launchTool of ['AgentSpawn', 'AgentFork']) {
+        await page.evaluate(async name => (await import('/tests/helpers/mobile-chat-regressions-fixture.tsx')).showTranscript(false, 'subagent', 'completed', name), launchTool);
+        await page.waitForSelector('.chat-task-card');
+        assert.equal(await page.$$eval('.chat-task-card', nodes => nodes.length), 1, launchTool);
+      }
+    }
+  } finally {
+    await browser.close();
+    await source.close();
+  }
 });

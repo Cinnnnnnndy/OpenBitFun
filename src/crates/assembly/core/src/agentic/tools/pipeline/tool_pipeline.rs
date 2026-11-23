@@ -9,7 +9,8 @@ use crate::agentic::core::{ToolCall, ToolExecutionState, ToolResult as ModelTool
 use crate::agentic::events::types::ToolEventData;
 use crate::agentic::tools::computer_use_host::ComputerUseHostRef;
 use crate::agentic::tools::framework::ToolResult as FrameworkToolResult;
-use crate::agentic::tools::registry::ToolRegistry;
+use crate::agentic::tools::implementations::agent_collaboration::with_collaboration_model_policy;
+use crate::agentic::tools::registry::{ToolRef, ToolRegistry};
 use crate::agentic::tools::tool_context_runtime;
 use crate::agentic::tools::tool_context_runtime::ToolUseContext;
 use crate::agentic::tools::tool_result_storage;
@@ -24,7 +25,6 @@ use openbitfun_agent_runtime::permission::{
     plan_permission_intents, PendingPermissionReceiver, PermissionIntentPlan,
     PermissionRequestManager, PermissionWaitOutcome,
 };
-use openbitfun_agent_runtime::sdk::PermissionReplySource;
 use openbitfun_agent_stream::ToolArgumentRepairKind;
 use openbitfun_agent_tools::{
     build_invalid_tool_call_error_message, build_normal_tool_json_repair_notice,
@@ -42,8 +42,11 @@ use openbitfun_agent_tools::{
 #[cfg(feature = "ptc-runtime")]
 use openbitfun_core_types::PtcLanguage;
 use openbitfun_runtime_ports::{
-    PermissionReply, PermissionRequest, PermissionRequestSource, PermissionRequestSourceKind,
-    PermissionResourceCaseSensitivity, RoundInjectionToolPreemption,
+    PermissionApprovalOnAsk, PermissionApprovalOnError, PermissionApprovalStrategy,
+    PermissionDecision, PermissionDecisionInput, PermissionDecisionOutcome, PermissionDecisionPort,
+    PermissionReasonCode, PermissionReply, PermissionReplySource, PermissionRequest,
+    PermissionRequestSource, PermissionRequestSourceKind, PermissionResourceCaseSensitivity,
+    PermissionRiskClass, RoundInjectionToolPreemption,
 };
 #[cfg(feature = "ptc-runtime")]
 use openbitfun_runtime_ports::{
@@ -279,7 +282,7 @@ fn resolve_pipeline_invocation(
     tool_call: &ToolCall,
     context: &ToolExecutionContext,
 ) -> (ResolvedToolInvocation, Option<String>) {
-    let invocation = match ResolvedToolInvocation::from_wire_call(
+    let mut invocation = match ResolvedToolInvocation::from_wire_call(
         tool_call.tool_name.clone(),
         tool_call.arguments.clone(),
     ) {
@@ -308,6 +311,19 @@ fn resolve_pipeline_invocation(
                 "Tool '{effective_tool_name}' is not an available deferred tool in the current context"
             )),
         );
+    }
+
+    // Hooks and permission rules operate on canonical fields, while history
+    // retains the model's wire input for replay and diagnostics.
+    if invocation.effective_tool_name == "Skill" {
+        use crate::agentic::tools::implementations::SkillTool;
+        let name = SkillTool::requested_skill(&invocation.effective_arguments).map(str::to_owned);
+        if let Some(args) = invocation.effective_arguments.as_object_mut() {
+            args.remove("skill");
+            if let Some(name) = name {
+                args.insert("command".into(), serde_json::Value::String(name));
+            }
+        }
     }
 
     (invocation, None)
@@ -711,7 +727,32 @@ fn permission_resource_case_sensitivity(
     }
 }
 
-const SUBAGENT_LAUNCH_TOOL_NAMES: &[&str] = &["Task", "AgentSpawn"];
+fn permission_decision_input(
+    request: &PermissionRequest,
+    task: &ToolTask,
+    description: String,
+    input_schema: serde_json::Value,
+) -> PermissionDecisionInput {
+    PermissionDecisionInput {
+        request_id: request.request_id.clone(),
+        tool_identity: request.source.identity.clone(),
+        tool_description: description,
+        tool_input_schema: input_schema,
+        tool_arguments: task.invocation.effective_arguments.clone(),
+        recent_tool_calls: task.options.recent_tool_calls.clone(),
+        workspace_scope: request.project_path.clone(),
+        current_user_message: task.options.current_user_message.clone(),
+        delegation: request.delegation.as_ref().map(|delegation| {
+            openbitfun_runtime_ports::PermissionDecisionDelegation {
+                parent_session_id: delegation.parent_session_id.clone(),
+                parent_tool_call_id: delegation.parent_tool_call_id.clone(),
+                subagent_type: delegation.subagent_type.clone(),
+            }
+        }),
+    }
+}
+
+const SUBAGENT_LAUNCH_TOOL_NAMES: &[&str] = &["Task", "AgentSpawn", "AgentFork"];
 
 /// Native hook session facts derived from one tool task.
 fn native_hook_session_facts<'a>(
@@ -747,6 +788,7 @@ pub struct ToolPipeline {
     cancellation_tokens: ToolCancellationTokenStore,
     computer_use_host: Option<ComputerUseHostRef>,
     permission_request_manager: Option<Arc<PermissionRequestManager>>,
+    permission_decision_provider: Option<Arc<dyn PermissionDecisionPort>>,
     permission_plans: Arc<TokioMutex<HashMap<String, PermissionExecutionPlan>>>,
     /// Tool task ids a PreToolUse hook approved. The approval waives the
     /// interactive permission prompt only; policy denials still apply.
@@ -825,84 +867,22 @@ impl PtcToolCallHandler for PtcPipelineToolCallHandler {
         request: PtcToolSpecRequest,
     ) -> Result<serde_json::Value, PortError> {
         let mut execution_context = self.context.clone();
-        execution_context.loaded_deferred_tool_specs =
-            self.loaded_deferred_tool_specs.lock().await.clone();
         if let Some(allowed_tools) = ToolPipeline::ptc_nested_allowed_tools(&execution_context) {
             execution_context.allowed_tools = allowed_tools;
         }
-        let mut context = tool_context_runtime::build_tool_use_context_for_execution_context(
+        let context = tool_context_runtime::build_tool_use_context_for_execution_context(
             &execution_context,
             None,
             self.pipeline.computer_use_host.clone(),
             CancellationToken::new(),
             None,
         );
-        context.loaded_deferred_tool_specs = execution_context.loaded_deferred_tool_specs.clone();
-
-        let input = serde_json::json!({ "tool_name": request.tool_name });
-        let results =
-            crate::agentic::tools::product_runtime::resolve_product_get_tool_spec_results(
-                &input,
-                &context,
-                GET_TOOL_SPEC_TOOL_NAME,
-            )
-            .await
-            .map_err(|error| PortError::new(PortErrorKind::InvalidRequest, error.to_string()))?;
-        let value = results
-            .into_iter()
-            .find_map(|result| match result {
-                FrameworkToolResult::Result { data, .. } => Some(data),
-                FrameworkToolResult::StreamChunk { .. } | FrameworkToolResult::Progress { .. } => {
-                    None
-                }
-            })
-            .ok_or_else(|| {
-                PortError::new(PortErrorKind::Backend, "GetToolSpec returned no definition")
-            })?;
-
-        let catalog_generation = value
-            .get("catalog_generation")
-            .and_then(serde_json::Value::as_u64)
-            .ok_or_else(|| {
-                PortError::new(
-                    PortErrorKind::Backend,
-                    "GetToolSpec result has no catalog generation",
-                )
-            })?;
-        let tool_name = value
-            .get("tool_name")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or_default()
-            .to_string();
-
-        let tool = self
-            .pipeline
-            .tool_registry
-            .read()
-            .await
-            .get_tool(&tool_name)
-            .ok_or_else(|| {
-                PortError::new(
-                    PortErrorKind::Backend,
-                    format!("GetToolSpec returned no registered tool: {tool_name}"),
-                )
-            })?;
-        let object = value.as_object().ok_or_else(|| {
-            PortError::new(
-                PortErrorKind::Backend,
-                "GetToolSpec result is not an object",
-            )
-        })?;
-        let description = object
-            .get("description")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or_default()
-            .to_string();
-        let input_schema = object
-            .get("input_schema")
-            .cloned()
-            .unwrap_or_else(|| serde_json::json!({}));
-        let output_schema = tool.output_schema();
+        let detail = crate::agentic::tools::product_runtime::resolve_product_deferred_tool_detail(
+            &request.tool_name,
+            &context,
+        )
+        .await
+        .map_err(|error| PortError::new(PortErrorKind::InvalidRequest, error))?;
         let language = if self
             .context
             .context_vars
@@ -914,18 +894,28 @@ impl PtcToolCallHandler for PtcPipelineToolCallHandler {
             PtcLanguage::TypeScript
         };
         let sdk_source = render_ptc_loaded_tool_sdk(
-            &PtcToolContract::new(tool_name.clone(), description, input_schema, output_schema),
+            &PtcToolContract::new(
+                detail.tool_name.clone(),
+                detail.description,
+                detail.input_schema,
+                detail.output_schema,
+            ),
             language,
         );
 
         let mut loaded = self.loaded_deferred_tool_specs.lock().await;
-        if let Some(existing) = loaded.iter_mut().find(|spec| spec.tool_name == tool_name) {
-            existing.catalog_generation = catalog_generation;
+        let receipt = LoadedDeferredToolSpec {
+            tool_name: detail.tool_name,
+            catalog_generation: detail.catalog_generation,
+            spec_fingerprint: Some(detail.spec_fingerprint),
+        };
+        if let Some(existing) = loaded
+            .iter_mut()
+            .find(|spec| spec.tool_name == receipt.tool_name)
+        {
+            *existing = receipt;
         } else {
-            loaded.push(LoadedDeferredToolSpec {
-                tool_name,
-                catalog_generation,
-            });
+            loaded.push(receipt);
         }
         Ok(build_ptc_tool_spec_response(language, sdk_source))
     }
@@ -943,6 +933,7 @@ impl ToolPipeline {
             cancellation_tokens: ToolCancellationTokenStore::new(),
             computer_use_host,
             permission_request_manager: None,
+            permission_decision_provider: None,
             permission_plans: Arc::new(TokioMutex::new(HashMap::new())),
             hook_preapprovals: Arc::new(TokioMutex::new(HashSet::new())),
             hook_asks: Arc::new(TokioMutex::new(HashMap::new())),
@@ -954,6 +945,17 @@ impl ToolPipeline {
         permission_request_manager: Arc<PermissionRequestManager>,
     ) -> Self {
         self.permission_request_manager = Some(permission_request_manager);
+        self
+    }
+
+    /// Injects the approval provider owned by the execution host. Keeping the
+    /// provider on the pipeline ensures remote and detached hosts make the
+    /// decision where the tools execute rather than on a controller.
+    pub fn with_permission_decision_provider(
+        mut self,
+        provider: Arc<dyn PermissionDecisionPort>,
+    ) -> Self {
+        self.permission_decision_provider = Some(provider);
         self
     }
 
@@ -1098,11 +1100,62 @@ impl ToolPipeline {
         Ok(PermissionPlanDraft::Requests(requests))
     }
 
+    async fn permission_decision_inputs(
+        &self,
+        requests: &[PermissionRequest],
+        tasks: &[ToolTask],
+        cancellation: &CancellationToken,
+    ) -> Result<Vec<PermissionDecisionInput>, openbitfun_runtime_ports::PortError> {
+        let missing_context = || {
+            openbitfun_runtime_ports::PortError::new(
+                openbitfun_runtime_ports::PortErrorKind::NotAvailable,
+                "Permission approval lost its tool invocation or definition",
+            )
+        };
+        let mut inputs = Vec::with_capacity(requests.len());
+        for request in requests {
+            let task = tasks
+                .iter()
+                .find(|task| {
+                    request.tool_call_id.as_deref() == Some(task.tool_call.tool_id.as_str())
+                })
+                .ok_or_else(missing_context)?;
+            let tool = self
+                .tool_registry
+                .read()
+                .await
+                .get_tool(task.effective_tool_name())
+                .ok_or_else(missing_context)?;
+            let context = self.build_tool_use_context(task, cancellation.clone());
+            let description = tool
+                .description_with_context(Some(&context))
+                .await
+                .map_err(|error| {
+                    openbitfun_runtime_ports::PortError::new(
+                        openbitfun_runtime_ports::PortErrorKind::Backend,
+                        error.to_string(),
+                    )
+                })?;
+            let schema = tool
+                .input_schema_for_model_with_context(Some(&context))
+                .await;
+            inputs.push(permission_decision_input(
+                request,
+                task,
+                description,
+                schema,
+            ));
+        }
+        Ok(inputs)
+    }
+
     async fn register_permission_requests(
         &self,
         requests: Vec<PermissionRequest>,
+        tasks: &[ToolTask],
         dialog_turn_id: &str,
-        auto_approve: bool,
+        options: &ToolExecutionOptions,
+        cancellation_token: &CancellationToken,
     ) -> OpenBitFunResult<Vec<PendingPermissionReceiver>> {
         let manager = self.permission_request_manager.as_ref().ok_or_else(|| {
             OpenBitFunError::service(
@@ -1110,43 +1163,261 @@ impl ToolPipeline {
             )
         })?;
 
-        let receivers = if auto_approve {
-            manager
-                .register_batch_non_interactive_for_turn(
-                    requests.clone(),
-                    dialog_turn_id.to_string(),
-                )
-                .await
+        let mut decisions = vec![None; requests.len()];
+        let strategy = if options.auto_approve_ask {
+            PermissionApprovalStrategy::ImmediateAllow
         } else {
-            manager
-                .register_batch_for_turn(requests.clone(), dialog_turn_id.to_string())
-                .await
-        }
-        .map_err(|error| OpenBitFunError::service(error.to_string()))?;
-
-        if auto_approve {
-            for request in &requests {
-                if let Err(error) = manager
-                    .reply(
-                        &request.request_id,
-                        PermissionReply::Once,
-                        openbitfun_runtime_ports::PermissionReplySource::AutoApprove,
-                    )
+            options.permission_approval_strategy
+        };
+        debug!(
+            "Starting permission approval: dialog_turn_id={}, request_count={}, strategy={:?}, user_input_available={}",
+            dialog_turn_id,
+            requests.len(),
+            strategy,
+            options.permission_user_input_available
+        );
+        if matches!(strategy, PermissionApprovalStrategy::Model) {
+            if let Some(provider) = self.permission_decision_provider.as_ref() {
+                let approval_started_at = Instant::now();
+                debug!(
+                    "Calling permission approval provider: dialog_turn_id={}, request_count={}",
+                    dialog_turn_id,
+                    requests.len()
+                );
+                let evaluated = match self
+                    .permission_decision_inputs(&requests, tasks, cancellation_token)
                     .await
                 {
-                    self.cancel_permission_request_ids(
-                        requests
-                            .iter()
-                            .map(|request| request.request_id.clone())
-                            .collect(),
-                        "Automatic permission approval failed".to_string(),
-                    )
-                    .await;
-                    return Err(OpenBitFunError::service(error.to_string()));
+                    Ok(inputs) => provider.evaluate(inputs, cancellation_token.clone()).await,
+                    Err(error) => Err(error),
+                };
+                match evaluated {
+                    Ok(values)
+                        if values.len() == requests.len()
+                            && values
+                                .iter()
+                                .zip(requests.iter())
+                                .all(|(decision, request)| {
+                                    decision.request_id == request.request_id
+                                }) =>
+                    {
+                        debug!(
+                            "Permission approval provider returned decisions: dialog_turn_id={}, request_count={}, duration_ms={}",
+                            dialog_turn_id,
+                            values.len(),
+                            elapsed_ms_u64(approval_started_at)
+                        );
+                        for (index, value) in values.into_iter().enumerate() {
+                            decisions[index] = Some(value);
+                        }
+                    }
+                    Ok(values) => {
+                        warn!(
+                            "Permission approval provider returned an invalid decision set: dialog_turn_id={}, expected_count={}, actual_count={}, duration_ms={}",
+                            dialog_turn_id,
+                            requests.len(),
+                            values.len(),
+                            elapsed_ms_u64(approval_started_at)
+                        );
+                        if matches!(
+                            options.permission_approval_on_error,
+                            PermissionApprovalOnError::Ask
+                        ) && options.permission_user_input_available
+                        {
+                            debug!(
+                                "Routing invalid permission approval result to user confirmation: dialog_turn_id={}",
+                                dialog_turn_id
+                            );
+                            let receivers = manager
+                                .register_batch_for_turn(requests, dialog_turn_id.to_string())
+                                .await
+                                .map_err(|error| OpenBitFunError::service(error.to_string()))?;
+                            return Ok(receivers);
+                        }
+                        decisions.fill(Some(PermissionDecision {
+                            request_id: String::new(),
+                            outcome: PermissionDecisionOutcome::Deny,
+                            probability: None,
+                            risk_class: Some(PermissionRiskClass::Unknown),
+                            reason_code: Some(PermissionReasonCode::ProviderError),
+                        }));
+                    }
+                    Err(error) => {
+                        warn!(
+                            "Permission approval provider failed: dialog_turn_id={}, request_count={}, duration_ms={}, error={}",
+                            dialog_turn_id,
+                            requests.len(),
+                            elapsed_ms_u64(approval_started_at),
+                            error
+                        );
+                        if matches!(
+                            options.permission_approval_on_error,
+                            PermissionApprovalOnError::Ask
+                        ) && options.permission_user_input_available
+                        {
+                            let receivers = manager
+                                .register_batch_for_turn(requests, dialog_turn_id.to_string())
+                                .await
+                                .map_err(|error| OpenBitFunError::service(error.to_string()))?;
+                            debug!(
+                                "Routing permission approval provider failure to user confirmation: dialog_turn_id={}",
+                                dialog_turn_id
+                            );
+                            return Ok(receivers);
+                        }
+                        decisions.fill(Some(PermissionDecision {
+                            request_id: String::new(),
+                            outcome: PermissionDecisionOutcome::Deny,
+                            probability: None,
+                            risk_class: Some(PermissionRiskClass::Unknown),
+                            reason_code: Some(PermissionReasonCode::ProviderError),
+                        }));
+                    }
+                }
+            } else {
+                warn!(
+                    "Permission approval requested without a provider: dialog_turn_id={}, request_count={}, on_error={:?}, user_input_available={}",
+                    dialog_turn_id,
+                    requests.len(),
+                    options.permission_approval_on_error,
+                    options.permission_user_input_available
+                );
+                if matches!(
+                    options.permission_approval_on_error,
+                    PermissionApprovalOnError::Reject
+                ) || !options.permission_user_input_available
+                {
+                    decisions.fill(Some(PermissionDecision {
+                        request_id: String::new(),
+                        outcome: PermissionDecisionOutcome::Deny,
+                        probability: None,
+                        risk_class: Some(PermissionRiskClass::Unknown),
+                        reason_code: Some(PermissionReasonCode::ProviderError),
+                    }));
+                }
+                // No provider is a service error. The configured ask fallback
+                // remains interactive; reject is handled below without ever
+                // widening the request.
+                if matches!(
+                    options.permission_approval_on_error,
+                    PermissionApprovalOnError::Ask
+                ) && options.permission_user_input_available
+                {
+                    let receivers = manager
+                        .register_batch_for_turn(requests, dialog_turn_id.to_string())
+                        .await
+                        .map_err(|error| OpenBitFunError::service(error.to_string()))?;
+                    debug!(
+                        "Routing missing permission approval provider to user confirmation: dialog_turn_id={}",
+                        dialog_turn_id
+                    );
+                    return Ok(receivers);
                 }
             }
         }
 
+        let mut receivers = Vec::with_capacity(requests.len());
+        for (index, request) in requests.into_iter().enumerate() {
+            let decision = decisions[index].as_ref();
+            let (mut interactive, mut reply, mut source) = match (strategy, decision) {
+                (PermissionApprovalStrategy::ImmediateAllow, _) => {
+                    (false, PermissionReply::Once, PermissionReplySource::ImmediateAllow)
+                }
+                (PermissionApprovalStrategy::Model, Some(decision)) => match decision.outcome {
+                    PermissionDecisionOutcome::Allow => {
+                        (false, PermissionReply::Once, PermissionReplySource::Model)
+                    }
+                    PermissionDecisionOutcome::Deny => (
+                        false,
+                        PermissionReply::Reject {
+                            feedback: Some(if decision.reason_code
+                                == Some(PermissionReasonCode::ProviderError)
+                            {
+                                "Approval provider failed; policy is configured to reject on error"
+                            } else {
+                                "Approval model denied this request"
+                            }
+                            .into()),
+                        },
+                        if decision.reason_code == Some(PermissionReasonCode::ProviderError) {
+                            PermissionReplySource::Model
+                        } else {
+                            PermissionReplySource::ModelDeny
+                        },
+                    ),
+                    PermissionDecisionOutcome::Ask => match options.permission_approval_on_ask {
+                        PermissionApprovalOnAsk::User => (true, PermissionReply::Once, PermissionReplySource::User),
+                        PermissionApprovalOnAsk::Reject => (
+                            false,
+                            PermissionReply::Reject {
+                                feedback: Some("Approval model requested user confirmation; policy is configured to reject it".into()),
+                            },
+                            PermissionReplySource::ModelAsk,
+                        ),
+                    },
+                },
+                (PermissionApprovalStrategy::Model, None) => (
+                    false,
+                    PermissionReply::Reject {
+                        feedback: Some("Approval provider did not return a decision".into()),
+                    },
+                    PermissionReplySource::Model,
+                ),
+                _ => (true, PermissionReply::Once, PermissionReplySource::User),
+            };
+            if interactive && !options.permission_user_input_available {
+                interactive = false;
+                reply = PermissionReply::Reject {
+                    feedback: Some(
+                        "Permission requires user confirmation, but this execution host has no user mailbox"
+                            .into(),
+                    ),
+                };
+                source = match strategy {
+                    PermissionApprovalStrategy::Model => PermissionReplySource::ModelAsk,
+                    _ => PermissionReplySource::System,
+                };
+                warn!(
+                    "Permission approval requires user confirmation but no mailbox is available: request_id={}, strategy={:?}",
+                    request.request_id,
+                    strategy
+                );
+            }
+            debug!(
+                "Resolved permission approval: request_id={}, strategy={:?}, outcome={:?}, risk_class={:?}, reason_code={:?}, interactive={}, source={:?}",
+                request.request_id,
+                strategy,
+                decision.map(|value| value.outcome),
+                decision.and_then(|value| value.risk_class),
+                decision.and_then(|value| value.reason_code),
+                interactive,
+                source
+            );
+            let pending = if interactive {
+                manager
+                    .register_batch_for_turn(vec![request.clone()], dialog_turn_id.to_string())
+                    .await
+            } else {
+                manager
+                    .register_batch_non_interactive_for_turn(
+                        vec![request.clone()],
+                        dialog_turn_id.to_string(),
+                    )
+                    .await
+            }
+            .map_err(|error| OpenBitFunError::service(error.to_string()))?;
+            receivers.extend(pending);
+            if !interactive {
+                manager
+                    .reply(&request.request_id, reply, source)
+                    .await
+                    .map_err(|error| OpenBitFunError::service(error.to_string()))?;
+                debug!(
+                    "Applied automatic permission reply: request_id={}, source={:?}",
+                    request.request_id, source
+                );
+            }
+        }
         Ok(receivers)
     }
 
@@ -1447,6 +1718,48 @@ impl ToolPipeline {
         });
     }
 
+    async fn admitted_tool(
+        &self,
+        task: &ToolTask,
+        context: &ToolUseContext,
+    ) -> Result<Option<ToolRef>, ToolExecutionAdmissionRejection> {
+        let name = &task.invocation.effective_tool_name;
+        let (tool, generation) = {
+            let registry = self.tool_registry.read().await;
+            (
+                registry.get_tool(name),
+                registry.current_snapshot_generation(),
+            )
+        };
+        let request = ToolExecutionAdmissionRequest {
+            tool_name: name,
+            allowed_tools: &task.context.allowed_tools,
+            runtime_tool_restrictions: &task.context.runtime_tool_restrictions,
+            deferred_tools: &task.context.deferred_tools,
+            loaded_deferred_tool_specs: &task.context.loaded_deferred_tool_specs,
+            current_catalog_generation: generation,
+            get_tool_spec_tool_name: GET_TOOL_SPEC_TOOL_NAME,
+        };
+        let fingerprint = async {
+            let selected = resolve_contextual_tool(tool.clone()?, context)?;
+            if !openbitfun_agent_tools::ContextualToolManifestItem::is_available_in_context(
+                selected.as_ref(),
+                context,
+            )
+            .await
+            {
+                return None;
+            }
+            let detail = with_collaboration_model_policy(
+                openbitfun_agent_tools::contextual_tool_spec(selected.as_ref(), context),
+            )
+            .await;
+            Some(detail.spec_fingerprint)
+        };
+        validate_tool_execution_admission(request, fingerprint).await?;
+        Ok(tool)
+    }
+
     async fn prepare_permission_plans(&self, task_ids: &[String]) -> OpenBitFunResult<()> {
         let mut drafts = Vec::with_capacity(task_ids.len());
         let mut ordered_requests = Vec::new();
@@ -1476,35 +1789,19 @@ impl ToolPipeline {
             {
                 continue;
             }
-            let tool = {
-                let registry = self.tool_registry.read().await;
-                if validate_tool_execution_admission(ToolExecutionAdmissionRequest {
-                    tool_name: &tool_name,
-                    allowed_tools: &task.context.allowed_tools,
-                    runtime_tool_restrictions: &task.context.runtime_tool_restrictions,
-                    deferred_tools: &task.context.deferred_tools,
-                    loaded_deferred_tool_specs: &task.context.loaded_deferred_tool_specs,
-                    current_catalog_generation: registry.current_snapshot_generation(),
-                    get_tool_spec_tool_name: GET_TOOL_SPEC_TOOL_NAME,
-                })
-                .is_err()
-                {
-                    continue;
-                }
-                registry.get_tool(&tool_name)
-            };
-            let Some(tool) = tool else {
+            let tool_context = self.build_tool_use_context(&task, CancellationToken::new());
+            let Ok(Some(tool)) = self.admitted_tool(&task, &tool_context).await else {
                 continue;
             };
-            let tool_context = self.build_tool_use_context(&task, CancellationToken::new());
             let validation = tool
                 .validate_input(&task.invocation.effective_arguments, Some(&tool_context))
                 .await;
             if !validation.result {
                 continue;
             }
-            let intents =
-                tool.permission_intents(&task.invocation.effective_arguments, &tool_context)?;
+            let intents = tool
+                .prepare_permission_intents(&task.invocation.effective_arguments, &tool_context)
+                .await?;
             let draft = self
                 .draft_permission_plan(
                     task.clone(),
@@ -1529,10 +1826,16 @@ impl ToolPipeline {
                 .iter()
                 .map(|(_, request)| request.clone())
                 .collect::<Vec<_>>();
-            let auto_approve = task_ids
+            let base_options = task_ids
                 .first()
                 .and_then(|task_id| self.state_manager.get_task(task_id))
-                .is_some_and(|task| task.options.auto_approve_ask);
+                .map(|task| task.options.clone())
+                .ok_or_else(|| OpenBitFunError::service("Permission batch lost its owning task"))?;
+            let auto_approve = base_options.auto_approve_ask;
+            let parent_cancellation = base_options
+                .parent_cancellation_token
+                .clone()
+                .unwrap_or_else(CancellationToken::new);
             let dialog_turn_id = task_ids
                 .first()
                 .and_then(|task_id| self.state_manager.get_task(task_id))
@@ -1562,9 +1865,30 @@ impl ToolPipeline {
                     groups.push((approve, vec![request]));
                 }
             }
+            let approval_tasks = if !auto_approve
+                && base_options.permission_approval_strategy == PermissionApprovalStrategy::Model
+            {
+                task_ids
+                    .iter()
+                    .filter_map(|task_id| self.state_manager.get_task(task_id))
+                    .collect::<Vec<_>>()
+            } else {
+                Vec::new()
+            };
             for (approve, requests) in groups {
+                let mut options = base_options.clone();
+                if auto_approve && !approve {
+                    options.auto_approve_ask = false;
+                    options.permission_approval_strategy = PermissionApprovalStrategy::Interactive;
+                }
                 match self
-                    .register_permission_requests(requests, &dialog_turn_id, approve)
+                    .register_permission_requests(
+                        requests,
+                        &approval_tasks,
+                        &dialog_turn_id,
+                        &options,
+                        &parent_cancellation,
+                    )
                     .await
                 {
                     Ok(group) => receivers.extend(group),
@@ -1746,6 +2070,28 @@ impl ToolPipeline {
     }
 
     async fn cleanup_permission_plans(&self, task_ids: &[String], reason: String) {
+        for task_id in task_ids {
+            if let Some(task) = self.state_manager.get_task(task_id) {
+                let context = self.build_tool_use_context(&task, CancellationToken::new());
+                let tool = self
+                    .tool_registry
+                    .read()
+                    .await
+                    .get_tool(task.effective_tool_name());
+                if let Some(tool) = tool {
+                    tool.release_permission_preparation(task.effective_arguments(), &context)
+                        .await;
+                    if task.original_effective_arguments != *task.effective_arguments() {
+                        tool.release_permission_preparation(
+                            &task.original_effective_arguments,
+                            &context,
+                        )
+                        .await;
+                    }
+                }
+            }
+        }
+
         {
             // Hook approvals are scoped to the batch that produced them; a
             // later call must be evaluated on its own merits.
@@ -1798,19 +2144,37 @@ impl ToolPipeline {
             PermissionPlanDraft::Rejected { reason } => {
                 PermissionExecutionPlan::Rejected { reason }
             }
-            PermissionPlanDraft::Requests(requests) => PermissionExecutionPlan::Awaiting(
-                self.register_permission_requests(
-                    requests,
-                    &task.context.dialog_turn_id,
-                    task.options.auto_approve_ask
-                        && !self
-                            .hook_asks
-                            .lock()
-                            .await
-                            .contains_key(&task.tool_call.tool_id),
+            PermissionPlanDraft::Requests(requests) => {
+                let mut approval_options = task.options.clone();
+                if !approval_options.auto_approve_ask
+                    || self
+                        .hook_asks
+                        .lock()
+                        .await
+                        .contains_key(&task.tool_call.tool_id)
+                {
+                    approval_options.auto_approve_ask = false;
+                    if self
+                        .hook_asks
+                        .lock()
+                        .await
+                        .contains_key(&task.tool_call.tool_id)
+                    {
+                        approval_options.permission_approval_strategy =
+                            PermissionApprovalStrategy::Interactive;
+                    }
+                }
+                PermissionExecutionPlan::Awaiting(
+                    self.register_permission_requests(
+                        requests,
+                        std::slice::from_ref(task),
+                        &task.context.dialog_turn_id,
+                        &approval_options,
+                        cancellation_token,
+                    )
+                    .await?,
                 )
-                .await?,
-            ),
+            }
         };
 
         self.await_permission_execution_plan(plan, cancellation_token)
@@ -2331,74 +2695,55 @@ impl ToolPipeline {
         // Repetition alone is not execution failure: polling and status checks
         // may legitimately reuse identical arguments. The execution engine
         // evaluates repeated patterns only after observing actual tool results.
-        let (admission, tool) = {
-            let registry = self.tool_registry.read().await;
-            let admission = validate_tool_execution_admission(ToolExecutionAdmissionRequest {
-                tool_name: &tool_name,
-                allowed_tools: &task.context.allowed_tools,
-                runtime_tool_restrictions: &task.context.runtime_tool_restrictions,
-                deferred_tools: &task.context.deferred_tools,
-                loaded_deferred_tool_specs: &task.context.loaded_deferred_tool_specs,
-                current_catalog_generation: registry.current_snapshot_generation(),
-                get_tool_spec_tool_name: GET_TOOL_SPEC_TOOL_NAME,
-            });
-            (
-                admission,
-                registry.get_tool(&tool_name).or_else(|| {
-                    #[cfg(feature = "ptc-runtime")]
-                    {
-                        (tool_name == openbitfun_agent_tools::PTC_RUN_CODE_TOOL_NAME).then(|| {
-                            Arc::new(crate::agentic::tools::implementations::PtcRunCodeTool::new())
-                                as Arc<dyn crate::agentic::tools::framework::Tool>
-                        })
-                    }
-                    #[cfg(not(feature = "ptc-runtime"))]
-                    {
-                        None
-                    }
-                }),
-            )
-        };
-
-        if let Err(err) = admission {
-            let error_msg = err.to_string();
-            if task.invocation.is_deferred() {
-                warn!("Deferred tool gateway admission rejected: {}", error_msg);
-            } else {
-                warn!("Tool execution admission rejected: {}", error_msg);
-            }
-
-            self.state_manager
-                .update_state(
-                    &tool_id,
-                    ToolExecutionState::Failed {
-                        error_detail: None,
-                        error: error_msg,
-                        is_retryable: false,
-                        duration_ms: None,
-                        queue_wait_ms: None,
-                        preflight_ms: None,
-                        confirmation_wait_ms: None,
-                        execution_ms: None,
-                    },
-                )
-                .await;
-
-            return Err(map_tool_execution_admission_rejection(err));
-        }
-
-        let registered_tool = tool.ok_or_else(|| {
-            let error_msg = format!("Tool '{}' is not registered or enabled.", tool_name);
-            error!("{}", error_msg);
-            OpenBitFunError::tool(error_msg)
-        })?;
-
         let cancellation_token = task
             .options
             .parent_cancellation_token
             .as_ref()
             .map(CancellationToken::child_token)
             .unwrap_or_default();
+        let tool_context = self.build_tool_use_context(&task, cancellation_token.clone());
+        let tool = match self.admitted_tool(&task, &tool_context).await {
+            Ok(tool) => tool,
+            Err(err) => {
+                let error_msg = err.to_string();
+                if task.invocation.is_deferred() {
+                    warn!("Deferred tool gateway admission rejected: {}", error_msg);
+                } else {
+                    warn!("Tool execution admission rejected: {}", error_msg);
+                }
+
+                self.state_manager
+                    .update_state(
+                        &tool_id,
+                        ToolExecutionState::Failed {
+                            error_detail: None,
+                            error: error_msg,
+                            is_retryable: false,
+                            duration_ms: None,
+                            queue_wait_ms: None,
+                            preflight_ms: None,
+                            confirmation_wait_ms: None,
+                            execution_ms: None,
+                        },
+                    )
+                    .await;
+
+                return Err(map_tool_execution_admission_rejection(err));
+            }
+        };
+
+        #[cfg(feature = "ptc-runtime")]
+        let tool = tool.or_else(|| {
+            (tool_name == openbitfun_agent_tools::PTC_RUN_CODE_TOOL_NAME).then(|| {
+                Arc::new(crate::agentic::tools::implementations::PtcRunCodeTool::new()) as ToolRef
+            })
+        });
+        let registered_tool = tool.ok_or_else(|| {
+            let error_msg = format!("Tool '{}' is not registered or enabled.", tool_name);
+            error!("{}", error_msg);
+            OpenBitFunError::tool(error_msg)
+        })?;
+
         if cancellation_token.is_cancelled() {
             self.state_manager
                 .update_state(
@@ -2417,7 +2762,6 @@ impl ToolPipeline {
                 "Tool was cancelled before validation".to_string(),
             ));
         }
-        let tool_context = self.build_tool_use_context(&task, cancellation_token.clone());
         // Keep the registered mux in the execution path. It rechecks the
         // persisted conflict choice immediately before dispatch and applies
         // remote fail-closed routing from the full ToolUseContext.
@@ -2494,7 +2838,9 @@ impl ToolPipeline {
             self.await_prepared_permission_plan(&tool_id, &cancellation_token)
                 .await
         } else {
-            let permission_intents = tool.permission_intents(&tool_args, &tool_context)?;
+            let permission_intents = tool
+                .prepare_permission_intents(&tool_args, &tool_context)
+                .await?;
             self.authorize_permission_intents(
                 &task,
                 &tool_name,
@@ -3308,7 +3654,9 @@ impl ToolPipeline {
                     .unwrap_or_else(|| "Invalid edited tool input".to_string()),
             ));
         }
-        let intents = tool.permission_intents(&arguments, &context)?;
+        let intents = tool
+            .prepare_permission_intents(&arguments, &context)
+            .await?;
         if let PermissionPlanDraft::Rejected { reason } = self
             .draft_permission_plan(
                 task.clone(),
@@ -3421,7 +3769,7 @@ mod tests {
         DialogRoundInjectionInterrupt, SessionRoundInjectionBuffer,
     };
     use crate::agentic::tools::framework::{Tool, ToolResult, ValidationResult};
-    use crate::agentic::tools::implementations::task::AgentExecutionTool;
+    use crate::agentic::tools::implementations::agent_collaboration::AgentExecutionTool;
     use crate::agentic::tools::tool_context_runtime::ToolUseContext;
     use crate::agentic::tools::ToolRuntimeRestrictions;
     use crate::agentic::WorkspaceBinding;
@@ -3450,6 +3798,7 @@ mod tests {
         LoadedDeferredToolSpec {
             tool_name: tool_name.to_string(),
             catalog_generation,
+            spec_fingerprint: None,
         }
     }
 
@@ -4443,6 +4792,36 @@ mod tests {
 
     #[cfg(feature = "ptc-runtime")]
     #[tokio::test]
+    async fn ptc_get_tool_spec_reloads_the_sdk_and_retains_one_receipt() {
+        let mut context = test_tool_execution_context();
+        context.agent_type = "Claw".into();
+        let handler = PtcPipelineToolCallHandler {
+            pipeline: Arc::new(test_tool_pipeline()),
+            context,
+            options: ToolExecutionOptions::default(),
+            parent_tool_id: "run-code".into(),
+            loaded_deferred_tool_specs: Default::default(),
+        };
+        for operation in ["first", "repeat"] {
+            let response = handler
+                .get_tool_spec(PtcToolSpecRequest {
+                    operation_id: operation.into(),
+                    tool_name: "SessionHistory".into(),
+                })
+                .await
+                .unwrap();
+            assert!(response["sdk_source"]
+                .as_str()
+                .unwrap()
+                .contains("SessionHistory"));
+        }
+        let loaded = handler.loaded_deferred_tool_specs.lock().await;
+        assert_eq!(loaded.len(), 1);
+        assert!(loaded[0].spec_fingerprint.is_some());
+    }
+
+    #[cfg(feature = "ptc-runtime")]
+    #[tokio::test]
     async fn ptc_run_code_dispatches_nested_calls_through_the_pipeline() {
         let pipeline = test_tool_pipeline();
         register_static_test_tool(&pipeline, "Read", json!({"content": "ok"}), 0).await;
@@ -4537,6 +4916,142 @@ mod tests {
             tool_call_id: parent_tool_call_id.to_string(),
         });
         context
+    }
+
+    #[derive(Default)]
+    struct RecordingApprovalProvider(Mutex<Vec<PermissionDecisionInput>>);
+
+    #[async_trait]
+    impl PermissionDecisionPort for RecordingApprovalProvider {
+        async fn evaluate(
+            &self,
+            batch: Vec<PermissionDecisionInput>,
+            _: CancellationToken,
+        ) -> Result<Vec<PermissionDecision>, openbitfun_runtime_ports::PortError> {
+            let decisions = batch
+                .iter()
+                .map(|input| PermissionDecision {
+                    request_id: input.request_id.clone(),
+                    outcome: PermissionDecisionOutcome::Allow,
+                    probability: None,
+                    risk_class: None,
+                    reason_code: None,
+                })
+                .collect();
+            self.0.lock().unwrap().extend(batch);
+            Ok(decisions)
+        }
+    }
+
+    #[tokio::test]
+    async fn model_approval_carries_batched_inputs_and_effective_deferred_call() {
+        let manager = permission_test_manager(Arc::new(MemoryPermissionStore::default()));
+        let provider = Arc::new(RecordingApprovalProvider::default());
+        let pipeline = test_tool_pipeline()
+            .with_permission_request_manager(manager.clone())
+            .with_permission_decision_provider(provider.clone());
+        let executed = Arc::new(AtomicUsize::new(0));
+        register_v2_file_test_tool(
+            &pipeline,
+            vec![PermissionIntent::new("edit", vec!["src/main.rs".into()])],
+            executed.clone(),
+        )
+        .await;
+        let options = ToolExecutionOptions {
+            permission_approval_strategy: PermissionApprovalStrategy::Model,
+            current_user_message: Some("Apply the requested changes".into()),
+            recent_tool_calls: vec![openbitfun_runtime_ports::PermissionDecisionToolCall {
+                tool: "Read".into(),
+                arguments: json!({"path":"src/main.rs"}),
+            }],
+            ..Default::default()
+        };
+        let mut calls = vec![
+            test_tool_call("first", "Write"),
+            test_tool_call("second", "Write"),
+        ];
+        calls[0].arguments = json!({"path":"src/main.rs","content":"完整参数\n".repeat(100)});
+        calls[1].arguments = json!({"path":"src/other.rs","nested":{"flag":true}});
+        let results = pipeline
+            .execute_tools(calls.clone(), permission_test_context(), options.clone())
+            .await
+            .unwrap();
+        assert!(results.iter().all(|result| !result.result.is_error));
+        assert_eq!(executed.load(Ordering::SeqCst), 2);
+        {
+            let inputs = provider.0.lock().unwrap();
+            assert_eq!(inputs.len(), 2);
+            for (input, call) in inputs.iter().zip(&calls) {
+                assert_eq!(input.tool_arguments, call.arguments);
+                assert_eq!(input.tool_description, "File permission test tool");
+                assert_eq!(input.tool_input_schema, json!({"type":"object"}));
+                assert_eq!(input.recent_tool_calls, options.recent_tool_calls);
+                assert_eq!(input.current_user_message, options.current_user_message);
+            }
+        }
+        // Nested/deferred authorization may have no state-manager entry. Use
+        // its resolved invocation, including rewritten input, not outer args.
+        let arguments = json!({"path":"src/main.rs","content":"rewritten input"});
+        let task = ToolTask::new_resolved(
+            test_tool_call("nested", CALL_DEFERRED_TOOL_NAME),
+            ResolvedToolInvocation::direct("Write", arguments.clone()),
+            None,
+            permission_test_context(),
+            options,
+        );
+        let context = pipeline.build_tool_use_context(&task, CancellationToken::new());
+        let authorization = pipeline
+            .authorize_permission_intents(
+                &task,
+                "Write",
+                vec![PermissionIntent::new("edit", vec!["src/main.rs".into()])],
+                &context,
+                &CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        assert!(matches!(authorization, PermissionAuthorization::Allowed));
+        let inputs = provider.0.lock().unwrap();
+        assert_eq!(inputs.len(), 3);
+        assert_eq!(inputs[2].tool_identity, "Write");
+        assert_eq!(inputs[2].tool_arguments, arguments);
+        assert!(manager.pending_requests().is_empty());
+    }
+
+    #[tokio::test]
+    async fn model_approval_missing_definition_uses_headless_error_fallback() {
+        let manager = permission_test_manager(Arc::new(MemoryPermissionStore::default()));
+        let provider = Arc::new(RecordingApprovalProvider::default());
+        let pipeline = test_tool_pipeline()
+            .with_permission_request_manager(manager.clone())
+            .with_permission_decision_provider(provider.clone());
+        let task = ToolTask::new(
+            test_tool_call("missing-definition", "MissingTool"),
+            permission_test_context(),
+            ToolExecutionOptions {
+                permission_approval_strategy: PermissionApprovalStrategy::Model,
+                permission_user_input_available: false,
+                permission_approval_on_error: PermissionApprovalOnError::Ask,
+                ..Default::default()
+            },
+        );
+        let context = pipeline.build_tool_use_context(&task, CancellationToken::new());
+        let authorization = pipeline
+            .authorize_permission_intents(
+                &task,
+                "MissingTool",
+                vec![PermissionIntent::new("edit", vec!["src/main.rs".into()])],
+                &context,
+                &CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        assert!(matches!(
+            authorization,
+            PermissionAuthorization::UserRejected { .. }
+        ));
+        assert!(provider.0.lock().unwrap().is_empty());
+        assert!(manager.pending_requests().is_empty());
     }
 
     #[tokio::test]
@@ -5911,7 +6426,7 @@ mod tests {
             audit[1].event,
             PermissionAuditEvent::Replied {
                 reply: PermissionReply::Once,
-                source: openbitfun_runtime_ports::PermissionReplySource::AutoApprove,
+                source: openbitfun_runtime_ports::PermissionReplySource::ImmediateAllow,
             }
         ));
         assert!(matches!(
@@ -5970,6 +6485,30 @@ mod tests {
             .expect("permission audit lock")
             .iter()
             .any(|record| matches!(record.event, PermissionAuditEvent::Cancelled { .. })));
+    }
+
+    #[test]
+    fn skill_alias_reaches_hooks_as_command_without_changing_wire_history() {
+        let mut context = test_tool_execution_context();
+        context.deferred_tools.push("Skill".into());
+        let args = json!({"command":null, "skill": "visualize", "arguments": "monthly sales"});
+        for (name, wire) in [
+            ("Skill", args.clone()),
+            (
+                CALL_DEFERRED_TOOL_NAME,
+                json!({"tool_name": "Skill", "args": args}),
+            ),
+        ] {
+            let mut call = test_tool_call("skill-alias", name);
+            call.arguments = wire.clone();
+            let (invocation, error) = resolve_pipeline_invocation(&call, &context);
+            assert!(error.is_none());
+            assert_eq!(invocation.wire_arguments, wire);
+            assert_eq!(
+                invocation.effective_arguments,
+                json!({"command": "visualize", "arguments": "monthly sales"})
+            );
+        }
     }
 
     #[tokio::test]
@@ -6033,7 +6572,64 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn deferred_gateway_rejects_registry_refresh_before_execution() {
+    async fn deferred_gateway_keeps_loaded_spec_across_unrelated_refresh() {
+        let pipeline = test_tool_pipeline();
+        let name = "get_weather";
+        register_capturing_test_tool(&pipeline, name, Arc::new(Mutex::new(None))).await;
+        let mut context = test_tool_execution_context();
+        context.allowed_tools = vec![CALL_DEFERRED_TOOL_NAME.into(), name.into()];
+        context.deferred_tools = vec![name.into()];
+        let use_context = tool_context_runtime::build_tool_use_context_for_execution_context(
+            &context,
+            None,
+            None,
+            CancellationToken::new(),
+            None,
+        );
+        let tools = pipeline.tool_registry.read().await.get_all_tools();
+        let mut detail = openbitfun_agent_tools::resolve_get_tool_spec_detail(
+            &tools,
+            name,
+            &use_context,
+            GET_TOOL_SPEC_TOOL_NAME,
+        )
+        .await
+        .unwrap();
+        detail.catalog_generation = current_registry_generation(&pipeline).await;
+        context.loaded_deferred_tool_specs =
+            vec![serde_json::from_value(detail.to_value()).unwrap()];
+
+        register_static_test_tool(&pipeline, "unrelated", json!(null), 0).await;
+        assert!(current_registry_generation(&pipeline).await > detail.catalog_generation);
+        let mut call = test_tool_call("before_replace", CALL_DEFERRED_TOOL_NAME);
+        call.arguments = json!({"tool_name": name, "args": {"city":"Shanghai"}});
+        let results = pipeline
+            .execute_tools(
+                vec![call.clone()],
+                context.clone(),
+                ToolExecutionOptions::default(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(results[0].result.result["received"]["city"], "Shanghai");
+
+        register_static_test_tool(&pipeline, name, json!({"replacement": true}), 0).await;
+        call.tool_id = "after_replace".into();
+        let results = pipeline
+            .execute_tools(vec![call], context, ToolExecutionOptions::default())
+            .await
+            .unwrap();
+        assert!(results[0].result.is_error);
+        assert!(results[0]
+            .result
+            .result_for_assistant
+            .as_deref()
+            .unwrap()
+            .contains("is stale"));
+    }
+
+    #[tokio::test]
+    async fn deferred_gateway_rejects_legacy_receipt_after_registry_refresh() {
         let pipeline = test_tool_pipeline();
         let old_received_arguments = Arc::new(Mutex::new(None));
         register_capturing_test_tool(
@@ -6940,38 +7536,46 @@ mod tests {
         assert!(value.get("workspaceServices").is_none());
     }
 
-    #[test]
-    fn deferred_tool_admission_allows_missing_catalog_spec() {
+    #[tokio::test]
+    async fn deferred_tool_admission_allows_missing_catalog_spec() {
         let mut task = test_tool_task("tool_1", "WebFetch");
         task.context.deferred_tools = vec!["WebFetch".to_string()];
 
-        validate_tool_execution_admission(ToolExecutionAdmissionRequest {
-            tool_name: &task.tool_call.tool_name,
-            allowed_tools: &task.context.allowed_tools,
-            runtime_tool_restrictions: &task.context.runtime_tool_restrictions,
-            deferred_tools: &task.context.deferred_tools,
-            loaded_deferred_tool_specs: &task.context.loaded_deferred_tool_specs,
-            current_catalog_generation: 0,
-            get_tool_spec_tool_name: GET_TOOL_SPEC_TOOL_NAME,
-        })
+        validate_tool_execution_admission(
+            ToolExecutionAdmissionRequest {
+                tool_name: &task.tool_call.tool_name,
+                allowed_tools: &task.context.allowed_tools,
+                runtime_tool_restrictions: &task.context.runtime_tool_restrictions,
+                deferred_tools: &task.context.deferred_tools,
+                loaded_deferred_tool_specs: &task.context.loaded_deferred_tool_specs,
+                current_catalog_generation: 0,
+                get_tool_spec_tool_name: GET_TOOL_SPEC_TOOL_NAME,
+            },
+            async { None },
+        )
+        .await
         .expect("deferred exposure must not block execution when no spec is loaded");
     }
 
-    #[test]
-    fn tool_catalog_rejects_reloading_already_loaded_tool() {
+    #[tokio::test]
+    async fn tool_catalog_rejects_reloading_already_loaded_tool() {
         let mut task = test_tool_task("tool_1", "GetToolSpec");
         task.tool_call.arguments = json!({ "tool_name": "WebFetch" });
         task.context.loaded_deferred_tool_specs = vec![loaded_spec("WebFetch", 0)];
 
-        let result = validate_tool_execution_admission(ToolExecutionAdmissionRequest {
-            tool_name: &task.tool_call.tool_name,
-            allowed_tools: &task.context.allowed_tools,
-            runtime_tool_restrictions: &task.context.runtime_tool_restrictions,
-            deferred_tools: &task.context.deferred_tools,
-            loaded_deferred_tool_specs: &task.context.loaded_deferred_tool_specs,
-            current_catalog_generation: 0,
-            get_tool_spec_tool_name: GET_TOOL_SPEC_TOOL_NAME,
-        });
+        let result = validate_tool_execution_admission(
+            ToolExecutionAdmissionRequest {
+                tool_name: &task.tool_call.tool_name,
+                allowed_tools: &task.context.allowed_tools,
+                runtime_tool_restrictions: &task.context.runtime_tool_restrictions,
+                deferred_tools: &task.context.deferred_tools,
+                loaded_deferred_tool_specs: &task.context.loaded_deferred_tool_specs,
+                current_catalog_generation: 0,
+                get_tool_spec_tool_name: GET_TOOL_SPEC_TOOL_NAME,
+            },
+            async { None },
+        )
+        .await;
 
         assert!(
             result.is_ok(),

@@ -2,6 +2,20 @@
 
 [中文](./README.zh-CN.md) | English
 
+## Responses connection settings
+
+In **Settings → Models → provider/model editor → Advanced settings**, choose
+**HTTP** or **WebSocket** for Responses models. Existing configurations keep
+HTTP with full context. WebSocket supports either full context or incremental
+context using `previous_response_id`, with `store: false` in both cases.
+HTTP cannot use incremental context, and there is no automatic transport switch.
+
+Provider settings are defaults for its Responses models. Editing a model creates
+an override; **Use provider settings** clears it. Choose WebSocket only for a
+provider that supports Responses WebSocket connections. An unsupported Peer host
+must be upgraded before these settings can be edited or tested there.
+
+
 ## Overview
 
 This directory contains OpenBitFun’s **Web UI** (React + TypeScript). The same frontend codebase is reused by:
@@ -362,14 +376,13 @@ open the model picker. **Refresh models** fetches the account's current list
 without signing out or reopening the editor. Saved models remain selectable;
 you can also enter a provider-supported model ID manually.
 
-Antigravity queries its authenticated `fetchAvailableModels` endpoint; Codex
-uses its subscription catalog, including models unavailable through the public
-OpenAI API. For OpenCode, choose Go/Zen and a model; OpenBitFun selects the
+Codex uses its subscription catalog, including models unavailable through the
+public OpenAI API. For OpenCode, choose Go/Zen and a model; OpenBitFun selects the
 matching Chat Completions, Responses, or Messages protocol from the account catalog.
 xAI and Hermes query their model endpoints. Hermes uses Chat Completions with
 Nous OAuth bearer authentication for all models, including `anthropic/*`, matching
 the current upstream default while its native Messages cache issue is unresolved.
-Saved model IDs and subscription credentials remain valid.
+Saved model IDs and supported subscription credentials remain valid.
 
 Subscription login supplies the required authentication and account headers even
 if a saved model used custom-header replace mode. There is no need to paste tokens
@@ -380,8 +393,8 @@ The account's returned IDs determine availability. A familiar or older ID does
 not prove the underlying model is outdated, and a model advertised by a vendor
 is not necessarily available through every subscription or OAuth client. A
 failed subscription lookup shows an error instead of presenting preset models
-as an account result. Antigravity browser login requires the local desktop;
-device-code login can authorize the other providers from another browser.
+as an account result. Antigravity subscription imports from earlier versions
+remain readable for cleanup but are rejected at runtime.
 
 ## Gitee pull requests
 
@@ -588,3 +601,28 @@ partial view of available events. Peer detail bodies remain owned by the canonic
 record replica. This observer UI adds no runtime or filesystem dependency for
 Remote Control or Detached Dispatch jobs. Automated fixtures simulate these routing
 and device-switch contracts; live remote and native visual checks remain manual.
+
+### Subagent model selection policy
+
+In **Settings → Execution → Subagents**, **Allow agents to choose subagent models**
+controls `ai.allow_subagent_model_override` on the executing host. It defaults to
+`true`, including when loading older configurations. When disabled, AgentSpawn, AgentFork,
+AgentSendInput, legacy Task and LaunchReviewAgent omit `model_id` from model-facing
+schemas and related instructions. Calls that still supply the field fail before
+launching or switching a subagent; remove the argument to use configured models.
+Configured defaults, model pools, Agent-specific models and backend-owned Review
+model preferences remain effective. Existing running agents keep their models.
+
+The next tool catalog reflects a setting change, including deferred tool specs
+and PTC bindings; execution rechecks the current host setting. SSH workspaces,
+mobile/IM controllers and detached jobs use the execution host's policy. In Peer
+Device Mode, the setting belongs to the peer; hosts must advertise
+`subagent_model_override_policy_v1`. Older hosts show an unsupported setting rather
+than saving a value they cannot enforce.
+
+`AgentFork` launches a background agent with a copy of the current conversation
+context and the current agent type. It takes `agent_id`, `prompt`, and optionally
+`model_id`; it does not accept `agent_type`. Use `AgentSpawn` for a fresh specialist
+conversation. Both return `bg_task_id` and support the existing AgentWait,
+AgentSendInput, and AgentControl workflow. Forks retain the existing workspace,
+permission, and nested-delegation constraints.

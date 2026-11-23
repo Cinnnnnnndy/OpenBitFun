@@ -109,7 +109,7 @@ urlencoding = { workspace = true }
 # QR code generation
 
 # WebSocket client
-tokio-tungstenite = { workspace = true, optional = true }
+tokio-tungstenite = { workspace = true, default-features = true, optional = true }
 
 # Event layer dependency (lowest layer)
 openbitfun-core-types = { path = "../../contracts/core-types" }
@@ -151,6 +151,7 @@ ts = [
 ]
 product-full = [
     "agent-runtime",
+    "decision-model-credentials",
     "product-search",
     "document-read",
     "diagnostics",
@@ -265,6 +266,7 @@ agent-runtime = [
     "tokio/rt",
     "tokio/time",
 ]
+decision-model-credentials = ["openbitfun-services-core/credential-vault"]
 product-search = [
     "dep:openbitfun-product-domains",
     "agent-runtime",
@@ -393,7 +395,6 @@ tools-office-documents = [
 tools-miniapp = [
     "dep:openbitfun-product-domains",
     "openbitfun-tool-packs/miniapp",
-    "openbitfun-product-domains/appearance-market",
     "openbitfun-product-domains/miniapp",
     "openbitfun-services-integrations/miniapp-runtime",
     "openbitfun-services-integrations/miniapp-market",
@@ -487,7 +488,7 @@ ssh-remote = [
 
 [dev-dependencies]
 # Loopback Socket.IO fixture for remote controller interaction tests.
-tokio-tungstenite = { workspace = true }
+tokio-tungstenite = { workspace = true, default-features = true }
 openbitfun-runtime-services = { path = "../../execution/runtime-services", features = ["test-support"] }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }

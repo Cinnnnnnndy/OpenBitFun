@@ -45,6 +45,7 @@ Notes:
 | `ListModels` | Deferred | None | - |
 | `Task` | Direct | None | - |
 | `AgentSpawn` | Direct | None | - |
+| `AgentFork` | Direct | None | - |
 | `AgentSendInput` | Direct | None | - |
 | `AgentControl` | Direct | None | - |
 | `AgentList` | Direct | None | - |
@@ -74,14 +75,12 @@ Notes:
 | `ReadMCPResource` | Deferred | None | - |
 | `ListMCPPrompts` | Deferred | None | - |
 | `GetMCPPrompt` | Deferred | None | - |
-| `GenerativeUI` | Direct | None | - |
 | `Worktree` | Deferred | None | - |
 | `ReviewPlatform` | Deferred | None | - |
 | `InitMiniApp` | Direct | None | - |
 | `FinalizeMiniApp` | Direct | None | - |
 | `PublishMiniApp` | Direct | None | - |
 | `FrontendWorkbench` | Direct | None | - |
-| `PublishAppearance` | Direct | None | - |
 | `PageManage` | Direct | None | - |
 | `PageDeploy` | Direct | None | - |
 | `PagePublish` | Direct | None | - |

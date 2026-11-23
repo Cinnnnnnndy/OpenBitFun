@@ -49,7 +49,7 @@
   },
   "subscriptionAuth": {
     "sectionTitle": "订阅账号",
-    "sectionDescription": "连接 Codex、Antigravity、OpenCode、xAI、Hermes 或 ZCode 订阅",
+    "sectionDescription": "连接 Codex、OpenCode、xAI、Hermes 或 ZCode 订阅",
     "rescan": "刷新状态",
     "import": "导入使用",
     "login": "登录",
@@ -66,7 +66,7 @@
     "refreshFailed": "刷新失败：{{error}}",
     "loginSuccess": "登录成功",
     "loginFailed": "登录失败：{{error}}",
-    "peerLoginRequiresLocalDevice": "Antigravity 登录必须在运行 OpenBitFun 的设备上完成，请切换到该设备后再登录",
+    "peerLoginRequiresLocalDevice": "Antigravity 订阅登录已不再支持，现有配置会保留",
     "logoutSuccess": "已退出登录",
     "logoutCleanupPending": "已退出登录，凭据清理仍在等待中，稍后会自动重试",
     "logoutFailed": "退出登录失败：{{error}}",
@@ -82,7 +82,7 @@
     "chooseRegionHint": "选择你购买 Coding Plan 订阅的平台。",
     "products": {
       "codex": "Codex",
-      "antigravity": "Antigravity",
+      "antigravity": "Antigravity（已下线）",
       "opencode": "OpenCode",
       "grok": "Grok",
       "hermes": "Hermes",
@@ -92,7 +92,7 @@
     },
     "details": {
       "codex": "ChatGPT",
-      "antigravity": "Google",
+      "antigravity": "已下线 · 不再支持订阅导入",
       "opencode": "Zen",
       "grok": "SuperGrok",
       "hermes": "Nous Portal",
@@ -112,7 +112,7 @@
       "opencode": "OpenCode",
       "apiKey": "API Key",
       "codex": "Codex",
-      "antigravity": "Antigravity",
+      "antigravity": "Antigravity（已下线）",
       "grok": "Grok",
       "hermes": "Hermes",
       "workbuddy": "WorkBuddy（已下线）",
@@ -147,8 +147,13 @@
     "logoutNoAffectedModels": "当前没有模型配置使用此订阅账号",
     "logoutConsequence": "模型配置不会被删除；重新登录同一订阅账号后可以继续使用",
     "confirmLogout": "确认退出",
+    "forget": "移除账号",
+    "forgetConfirmTitle": "确认移除已退出的订阅账号",
+    "forgetConsequence": "该账号当前未登录，移除只会删除保留的账号标识和这一行记录；模型配置会保留，重新登录即可再次创建该账号",
+    "confirmForget": "确认移除",
+    "forgetSuccess": "已移除订阅账号",
     "openCodeRemoved": "OpenCode Console OAuth 仅支持 Zen。Go 模型请选择 API key 并填写密钥，已有模型配置保留。",
-    "retiredProvider": "WorkBuddy 订阅已下线：厂商不再支持订阅授权。现有模型配置与凭据均保留，如需继续使用这些模型请新建 API Key 服务。",
+    "retiredProvider": "此订阅服务已下线：不再支持订阅访问。现有模型配置与凭据均保留，如需继续使用这些模型请新建 API Key 服务。",
     "editorDescription": "此服务的模型共用当前登录的订阅账号",
     "accountLabel": "账号",
     "accountAuthentication": "订阅账号授权",
@@ -783,7 +788,17 @@
       "validJson": "JSON格式有效",
       "mergeHint": "自定义字段将覆盖默认请求体中的对应字段"
     },
-    "description": "用于适配服务的特殊请求与响应要求；不确定时保留默认值"
+    "description": "用于适配服务的特殊请求与响应要求；不确定时保留默认值",
+    "responses": {
+      "transportLabel": "Responses 传输方式",
+      "transportHint": "仅影响 Responses 请求，模型可覆盖供应商默认值。WebSocket 失败时报告错误，不切换到 HTTP。",
+      "contextLabel": "上下文发送",
+      "contextHint": "HTTP 发送全量上下文。WebSocket 增量模式复用已完成的响应，需要恢复时重新发送全量上下文。始终不启用响应存储。",
+      "full": "全量",
+      "incremental": "增量",
+      "unsupported": "此宿主不支持 Responses WebSocket 设置，请更新宿主后配置。",
+      "reset": "恢复供应商设置"
+    }
   },
   "providersDescription": "统一管理 API 地址、认证方式和同一服务下的模型",
   "editSettingsTitle": "模型参数",
@@ -1032,5 +1047,15 @@
     "noCandidates": "暂无可用的备用模型",
     "mode": "使用方式",
     "modeHint": "自动切换会在失败时依次尝试备用渠道；固定使用只走所选渠道，失败时不切换。"
+  },
+  "btwModel": {
+    "title": "侧问",
+    "label": "默认模型",
+    "inherit": "继承父会话",
+    "pool": "模型池：{{name}}",
+    "unavailable": "已保存的选择不可用，请另选模型或恢复继承",
+    "unsupported": "此宿主不支持侧问默认模型设置。",
+    "failed": "无法读取或保存侧问模型设置，已保留原有选择。",
+    "retry": "重试"
   }
 }

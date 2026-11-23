@@ -38,6 +38,43 @@ pnpm --dir tests/e2e exec wdio run ./config/wdio.conf.ts --spec "./specs/<file>.
 
 Prefer the narrowest relevant spec first, then broaden only if needed.
 
+For ACP queue recovery, finish Desktop and production frontend builds, then run
+`node tests/e2e/scripts/run-acp-queue-recovery.mjs`. The isolated macOS native
+runner uses a controlled ACP subprocess over real stdio, production controls,
+and read-only singleton diagnostics. It covers background reload recovery,
+session switching, non-blocking metadata reads and live metadata updates,
+model-change publication, ACP send-now queue promotion, delayed cancellation,
+admission deduplication, protocol errors and child-process exit/reconnect.
+ACP send-now promotes a queued message for execution after the current prompt;
+it does not inject native steering into an external agent. It retains `acp-queue-recovery.json`, event logs
+and screenshots in the printed temporary directory. Frontend/binary/font-profile
+overrides match the other native workload runners. This is local Desktop
+coverage; it does not establish live-provider or any remote-scenario behavior.
+
+For the static/streaming long-session performance matrix, see the workload and
+measurement definitions in [README.md](README.md#long-session-performance).
+After building Desktop and production frontend assets, run
+`pnpm --dir tests/e2e run test:perf:long-session`. Its isolated runner measures
+first entry, repeated switching, bidirectional continuous wheel input and distant
+turn-rail jumps. Validate metric aggregation and the private SSE model with
+`pnpm --dir tests/e2e run test:perf:long-session:contract`.
+`--scenario multi-tool` selects 26 model rounds and exactly 100 recorded tool
+calls per historical turn (25 each of Read, Edit, Write and ExecCommand). The
+same contract test validates generated files and preserves the old template.
+Keep failed evidence; compare matching workloads/native profiles and avoid
+concurrent builds. RAF is not compositor FPS. This is local desktop coverage;
+none of the four remote scenarios is exercised.
+
+For concurrent primary/BTW streaming and scrolling, use
+`node tests/e2e/scripts/run-long-session-performance.mjs --suite btw-scroll --scenario multi-tool --repeats 2`.
+It opens a real `/btw` child from a 200-turn, 100-tool-calls-per-turn parent,
+seeds both live responses with 512 paragraphs, then measures both directions
+in primary live/history content and the BTW live transcript. The child is a new
+transient conversation, not a second persisted 200-turn fixture. Both streams
+must advance during each phase; subsequent output must preserve a reading
+anchor, both DOM windows stay bounded, and return-to-latest must reach the
+final paragraph. Keep ordinary acceptance runs separate from CDP diagnostics.
+
 For historical FlowChat scroll continuity, build Desktop and current frontend
 assets, then run:
 

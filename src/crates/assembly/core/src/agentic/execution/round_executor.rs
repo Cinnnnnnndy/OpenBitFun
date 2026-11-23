@@ -45,7 +45,7 @@ use openbitfun_ai_adapters::{
 };
 use openbitfun_core_types::errors::{AiProviderError, ErrorCategory};
 use openbitfun_core_types::ModelResponseReplay;
-use openbitfun_runtime_ports::PermissionRule;
+use openbitfun_runtime_ports::{PermissionApprovalStrategy, PermissionRule};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -96,6 +96,38 @@ fn normalize_deferred_tool_calls_for_replay(tool_calls: &mut [ToolCall]) {
     }
 }
 
+/// Project only prior assistant tool inputs from the executing session's model
+/// context. Tool-result messages and assistant text never enter approval history.
+fn permission_tool_history(
+    messages: &[AIMessage],
+) -> Vec<openbitfun_runtime_ports::PermissionDecisionToolCall> {
+    let mut history = messages
+        .iter()
+        .rev()
+        .filter(|message| message.role == "assistant")
+        .filter_map(|message| message.tool_calls.as_ref())
+        .flat_map(|calls| calls.iter().rev())
+        .take(openbitfun_ai_adapters::permission::MAX_PERMISSION_HISTORY_TOOL_CALLS)
+        .map(|call| {
+            let deferred = (call.name == CALL_DEFERRED_TOOL_NAME)
+                .then(|| parse_call_deferred_tool_input(&call.arguments).ok())
+                .flatten();
+            match deferred {
+                Some(call) => openbitfun_runtime_ports::PermissionDecisionToolCall {
+                    tool: call.tool_name,
+                    arguments: call.args,
+                },
+                None => openbitfun_runtime_ports::PermissionDecisionToolCall {
+                    tool: call.name.clone(),
+                    arguments: call.arguments.clone(),
+                },
+            }
+        })
+        .collect::<Vec<_>>();
+    history.reverse();
+    history
+}
+
 /// Mutable lifecycle shared by all provider attempts that belong to one
 /// logical model round, including attempts made after overflow recovery.
 #[derive(Debug)]
@@ -131,6 +163,7 @@ impl ModelRoundLifecycle {
         // Cancellation and local runtime failures also classify as Unknown.
         // Only failures from the model request may enter pool recovery.
         self.safe_to_switch_model
+            && !matches!(error, OpenBitFunError::AIProvider(error) if error.delivery_uncertain)
             && matches!(
                 error,
                 OpenBitFunError::AIProvider(_)
@@ -1021,7 +1054,7 @@ impl RoundExecutor {
                 .map_err(|error| OpenBitFunError::AIClient(error.to_string()).with_channel_bound_replay())?;
             let mut usage_context =
                 openbitfun_services_core::token_usage::types::ModelRequestUsageContext {
-                    context_composition: context.context_composition.clone(),
+                    context_composition: None,
                     version: 1,
                     round_id: round_id.clone(),
                     attempt_id: attempt_id.clone(),
@@ -1129,6 +1162,12 @@ impl RoundExecutor {
                     let provider_error = e.downcast_ref::<AiProviderError>().cloned();
                     let err_msg = format!("{e:#}");
                     let error = Self::terminal_request_error(&e, lifecycle.attempts_started());
+                    if provider_error
+                        .as_ref()
+                        .is_some_and(|error| error.delivery_uncertain)
+                    {
+                        return Err(error);
+                    }
                     let prefer_alternative = Self::prefer_pool_alternative(
                         &error.error_category(),
                         lifecycle,
@@ -1622,6 +1661,9 @@ impl RoundExecutor {
                         Self::error_trace_response("error", err_msg.clone()),
                     )
                     .await;
+                    if provider_error.is_some_and(|error| error.delivery_uncertain) {
+                        return Err(stream_err.error);
+                    }
                     let prefer_alternative = Self::prefer_pool_alternative(
                         &stream_error_category,
                         lifecycle,
@@ -2087,7 +2129,57 @@ impl RoundExecutor {
             );
             let permission_mode =
                 Self::resolve_permission_mode(&global_config, &context.context_vars);
-            let auto_approve_ask = permission_mode.auto_approve_ask();
+            let context_approval_strategy = context
+                .context_vars
+                .get(openbitfun_agent_runtime::permission::PERMISSION_APPROVAL_STRATEGY_CONTEXT_KEY)
+                .and_then(|value| match value.trim().to_ascii_lowercase().as_str() {
+                    "interactive" => Some(PermissionApprovalStrategy::Interactive),
+                    "immediate_allow" => Some(PermissionApprovalStrategy::ImmediateAllow),
+                    "model" => Some(PermissionApprovalStrategy::Model),
+                    _ => None,
+                });
+            let context_approval_override = context_approval_strategy.is_some();
+            let legacy_auto_approval = global_config.tool_permissions.interaction.auto_approve_ask;
+            let permission_approval_strategy = context_approval_strategy
+                .or_else(|| {
+                    context
+                        .context_vars
+                        .get(openbitfun_agent_runtime::permission::PERMISSION_MODE_CONTEXT_KEY)
+                        .and_then(|value| openbitfun_runtime_ports::PermissionMode::parse(value))
+                        .and_then(|mode| {
+                            (mode == openbitfun_runtime_ports::PermissionMode::AutoApprove)
+                                .then_some(PermissionApprovalStrategy::Model)
+                        })
+                })
+                .or_else(|| legacy_auto_approval.then_some(PermissionApprovalStrategy::Model))
+                .unwrap_or(global_config.tool_permissions.approval.strategy);
+            let approval_config_validation = global_config.tool_permissions.approval.validate();
+            let approval_config_valid = approval_config_validation.is_ok();
+            let auto_approve_ask =
+                permission_approval_strategy == PermissionApprovalStrategy::ImmediateAllow;
+            let permission_user_input_available = context
+                .context_vars
+                .get(openbitfun_agent_runtime::user_questions::USER_INPUT_AVAILABLE_CONTEXT_KEY)
+                .and_then(|value| value.parse::<bool>().ok())
+                .unwrap_or(true);
+            debug!(
+                "Resolved permission approval strategy: round_id={}, strategy={:?}, context_override={}, persisted_auto_approve={}, config_valid={}, user_input_available={}",
+                round_id,
+                permission_approval_strategy,
+                context_approval_override,
+                legacy_auto_approval,
+                approval_config_valid,
+                permission_user_input_available
+            );
+            if permission_approval_strategy == PermissionApprovalStrategy::Model {
+                if let Err(error) = approval_config_validation {
+                    warn!(
+                        "Permission approval configuration is invalid; provider binding will be skipped: round_id={}, error={}",
+                        round_id,
+                        error
+                    );
+                }
+            }
 
             let project_rules = match context.workspace.as_ref() {
                 Some(workspace) if workspace.is_remote() => {
@@ -2125,6 +2217,12 @@ impl RoundExecutor {
                 &context.permission_constraints,
                 context.permission_runtime_ceiling.as_ref(),
             );
+            let current_user_message = ai_messages.iter().rev().find_map(|message| {
+                (message.role == "user")
+                    .then(|| message.content.clone())
+                    .flatten()
+                    .filter(|content| !content.trim().is_empty())
+            });
 
             // Create tool execution options (use configured timeout values)
             let tool_options = ToolExecutionOptions {
@@ -2132,6 +2230,19 @@ impl RoundExecutor {
                 subagent_batch_execution_policy,
                 permission_policy,
                 auto_approve_ask,
+                permission_approval_strategy,
+                permission_approval_timeout_ms: global_config.tool_permissions.approval.timeout_ms,
+                permission_approval_on_ask: global_config.tool_permissions.approval.on_ask,
+                permission_approval_on_error: global_config.tool_permissions.approval.on_error,
+                current_user_message,
+                recent_tool_calls: if permission_approval_strategy
+                    == PermissionApprovalStrategy::Model
+                {
+                    permission_tool_history(&ai_messages)
+                } else {
+                    Vec::new()
+                },
+                permission_user_input_available,
                 ..ToolExecutionOptions::default()
             };
 
@@ -2146,7 +2257,162 @@ impl RoundExecutor {
 
             // Execute tools — convert pipeline-level Err into per-tool error results
             // so the model always receives a tool_result for every tool_call.
-            let execution_results = match tool_pipeline
+            let execution_pipeline = if permission_approval_strategy
+                == PermissionApprovalStrategy::Model
+                && approval_config_valid
+            {
+                // Resolve the approval model on the executing host. A failed
+                // binding deliberately leaves the provider absent so the
+                // pipeline applies its configured fail-closed fallback.
+                let provider: Option<Arc<dyn openbitfun_runtime_ports::PermissionDecisionPort>> =
+                    match global_config.tool_permissions.approval.model_kind {
+                        openbitfun_runtime_ports::PermissionApprovalModelKind::Chat
+                            if !global_config
+                                .tool_permissions
+                                .approval
+                                .chat_model_id
+                                .trim()
+                                .is_empty() =>
+                        {
+                            debug!(
+                                "Binding chat permission approval provider: round_id={}, model_id={}",
+                                round_id,
+                                global_config.tool_permissions.approval.chat_model_id.trim()
+                            );
+                            let approval_client = if global_config
+                                .tool_permissions
+                                .approval
+                                .chat_model_id
+                                .trim()
+                                == context.model_config_id
+                            {
+                                Some(ai_client.clone())
+                            } else {
+                                match crate::infrastructure::ai::AIClientFactory::get_global().await
+                                {
+                                    Ok(factory) => {
+                                        match factory
+                                            .get_client_resolved(
+                                                global_config
+                                                    .tool_permissions
+                                                    .approval
+                                                    .chat_model_id
+                                                    .trim(),
+                                            )
+                                            .await
+                                        {
+                                            Ok(client) => Some(client),
+                                            Err(error) => {
+                                                warn!("Approval model is unavailable on the execution host: {error}");
+                                                None
+                                            }
+                                        }
+                                    }
+                                    Err(error) => {
+                                        warn!("Approval model factory is unavailable on the execution host: {error}");
+                                        None
+                                    }
+                                }
+                            };
+                            approval_client.map(|client| {
+                                Arc::new(
+                                    openbitfun_ai_adapters::permission::ChatPermissionDecisionProvider::new(
+                                        client,
+                                        Duration::from_millis(
+                                            global_config.tool_permissions.approval.timeout_ms,
+                                        ),
+                                    ),
+                                ) as Arc<dyn openbitfun_runtime_ports::PermissionDecisionPort>
+                            })
+                        }
+                        #[cfg(feature = "decision-model-credentials")]
+                        openbitfun_runtime_ports::PermissionApprovalModelKind::Decision
+                            if !global_config.ai.decision_model.model_name.trim().is_empty() =>
+                        {
+                            debug!(
+                                "Binding decision permission approval provider: round_id={}, model_name={}",
+                                round_id,
+                                global_config.ai.decision_model.model_name.trim()
+                            );
+                            let endpoint = global_config.ai.decision_model.endpoint.trim();
+                            let api_key = crate::service::decision_model::get_api_key().await;
+                            match (endpoint, api_key) {
+                                (endpoint, Ok(Some(api_key)))
+                                    if !endpoint.is_empty() && !api_key.trim().is_empty() =>
+                                {
+                                    openbitfun_ai_adapters::permission::JevPermissionDecisionProvider::new(
+                                        openbitfun_ai_adapters::permission::JevPermissionDecisionConfig {
+                                            endpoint: endpoint.to_string(),
+                                            api_key,
+                                            model: global_config.ai.decision_model.model_name.trim().to_string(),
+                                            timeout: Duration::from_millis(
+                                                global_config.tool_permissions.approval.timeout_ms,
+                                            ),
+                                        },
+                                    )
+                                    .map(|provider| {
+                                        Arc::new(provider)
+                                            as Arc<dyn openbitfun_runtime_ports::PermissionDecisionPort>
+                                    })
+                                    .map_err(|error| {
+                                        warn!("Jev approval provider is unavailable on the execution host: {error}");
+                                        error
+                                    })
+                                    .ok()
+                                }
+                                (endpoint, Ok(Some(_))) if endpoint.is_empty() => {
+                                    warn!("Jev approval provider is unavailable: decision-model endpoint is not configured");
+                                    None
+                                }
+                                (_, Ok(Some(_))) => {
+                                    warn!("Jev approval provider is unavailable: decision-model API key is empty");
+                                    None
+                                }
+                                (_, Ok(None)) => {
+                                    warn!("Jev approval provider is unavailable: decision-model API key is not configured");
+                                    None
+                                }
+                                (_, Err(error)) => {
+                                    warn!("Jev approval provider credential lookup failed: {error}");
+                                    None
+                                }
+                            }
+                        }
+                        #[cfg(not(feature = "decision-model-credentials"))]
+                        openbitfun_runtime_ports::PermissionApprovalModelKind::Decision => {
+                            warn!("Decision-model approval is unavailable because decision-model credentials are not enabled");
+                            None
+                        }
+                        _ => {
+                            warn!(
+                                "Permission approval model binding is missing or invalid: round_id={}",
+                                round_id
+                            );
+                            None
+                        }
+                    };
+                if let Some(provider) = provider {
+                    debug!(
+                        "Bound permission approval provider: round_id={}, strategy={:?}",
+                        round_id, permission_approval_strategy
+                    );
+                    Arc::new(
+                        (**tool_pipeline)
+                            .clone()
+                            .with_permission_decision_provider(provider),
+                    )
+                } else {
+                    warn!(
+                        "Permission approval provider unavailable; pipeline will apply fallback: round_id={}, strategy={:?}",
+                        round_id,
+                        permission_approval_strategy
+                    );
+                    tool_pipeline.clone()
+                }
+            } else {
+                tool_pipeline.clone()
+            };
+            let execution_results = match execution_pipeline
                 .execute_tools(tool_calls.clone(), tool_context, tool_options)
                 .await
             {
@@ -2662,6 +2928,42 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn permission_history_keeps_latest_five_inputs_in_order_without_results() {
+        use crate::util::types::Message as AIMessage;
+        let calls = (0..7)
+            .map(|index| openbitfun_core_types::ToolCall {
+                id: format!("id-{index}"),
+                name: format!("tool-{index}"),
+                arguments: json!({"index":index}),
+                raw_arguments: None,
+            })
+            .collect::<Vec<_>>();
+        let mut first = AIMessage::assistant("assistant text must be excluded".into());
+        first.tool_calls = Some(calls[..4].to_vec());
+        first.reasoning_content = Some("reasoning must be excluded".into());
+        let mut second = AIMessage::assistant("".into());
+        second.tool_calls = Some(calls[4..].to_vec());
+        second.tool_calls.as_mut().unwrap()[2].name = "CallDeferredTool".into();
+        second.tool_calls.as_mut().unwrap()[2].arguments = json!({
+            "tool_name":"ActualTool", "args":{"nested":{"flag":true}}
+        });
+        let mut result = AIMessage::assistant("execution result must be excluded".into());
+        result.role = "tool".into();
+        result.tool_calls = Some(calls.clone());
+        let history = super::permission_tool_history(&[first, result, second]);
+        assert_eq!(history.len(), 5);
+        for (offset, call) in history[..4].iter().enumerate() {
+            assert_eq!(call.tool, format!("tool-{}", offset + 2));
+            assert_eq!(call.arguments, json!({"index":offset + 2}));
+        }
+        assert_eq!(history[4].tool, "ActualTool");
+        assert_eq!(history[4].arguments, json!({"nested":{"flag":true}}));
+        let encoded = serde_json::to_string(&history).unwrap();
+        assert!(!encoded.contains("must be excluded"));
+        assert!(super::permission_tool_history(&[]).is_empty());
+    }
+
+    #[test]
     fn model_round_lifecycle_reuses_identity_and_counts_recovery_attempts() {
         let mut lifecycle = ModelRoundLifecycle::new();
         let round_id = lifecycle.round_id.clone();
@@ -2694,6 +2996,10 @@ pub(super) mod tests {
             ErrorCategory::Unknown,
         ));
         assert!(lifecycle.allows_pool_failover(&error));
+        let mut uncertain =
+            AiProviderError::classified("delivery unknown".into(), ErrorCategory::Network);
+        uncertain.delivery_uncertain = true;
+        assert!(!lifecycle.allows_pool_failover(&OpenBitFunError::AIProvider(uncertain)));
         lifecycle.observe_output(true);
         assert!(!lifecycle.allows_pool_failover(&error));
     }
@@ -2777,7 +3083,6 @@ pub(super) mod tests {
 
     pub(in crate::agentic::execution) fn test_round_context() -> RoundContext {
         RoundContext {
-            context_composition: None,
             session_id: "session-1".to_string(),
             subagent_parent_info: None,
             permission_delegation: None,
@@ -2998,6 +3303,7 @@ pub(super) mod tests {
                     skip_ssl_verify: false,
                     custom_request_body: None,
                     custom_request_body_mode: None,
+                    responses: None,
                 },
             ))
         }
@@ -3951,6 +4257,7 @@ pub(super) mod tests {
                         openbitfun_core_types::ModelResponseReplayItem::OpaqueReasoning {
                             item_id: Some("historical-reasoning".into()),
                             summary: vec![],
+                            content: None,
                             opaque_state: "synthetic-encrypted-state".into(),
                         },
                         openbitfun_core_types::ModelResponseReplayItem::FunctionCall {
@@ -4830,14 +5137,8 @@ pub(super) mod tests {
             .iter()
             .filter_map(|message| message.metadata.model_response_replay.as_ref())
             .collect();
-        assert_eq!(
-            replays.len(),
-            if opaque {
-                restored_messages.len() / 2
-            } else {
-                0
-            }
-        );
+        // Plain assistant snapshots now preserve Responses message phases too.
+        assert_eq!(replays.len(), restored_messages.len() / 2);
         for (index, replay) in replays.into_iter().enumerate() {
             assert_eq!(
                 replay.account_origin.as_ref().unwrap(),
@@ -4847,9 +5148,15 @@ pub(super) mod tests {
                     upstream_account_id: Some("restart-backup-seat".into()),
                 }
             );
-            assert!(replay.items.iter().any(|item| matches!(item,
+            assert_eq!(
+                replay.items.iter().any(|item| matches!(item,
                 openbitfun_core_types::ModelResponseReplayItem::OpaqueReasoning { opaque_state, .. }
-                    if opaque_state == &format!("synthetic-state-{index}"))));
+                    if opaque_state == &format!("synthetic-state-{index}"))),
+                opaque
+            );
+            assert!(replay.items.iter().any(|item| matches!(item,
+                openbitfun_core_types::ModelResponseReplayItem::AssistantMessage { text: Some(text), .. }
+                    if text == "Persisted backup answer")));
         }
         if phase != "seed" {
             let directory = config.user_data_dir().await.join("subscription-routing");
@@ -6500,12 +6807,6 @@ pub(super) mod tests {
             let source = test_account_source(vec![primary.client(), backup.client()], false);
             let mut context = test_round_context();
             context.account_client_source = Some(source);
-            let composition = openbitfun_core_types::UsageContextBreakdown {
-                system_prompt: 3,
-                conversation: 7,
-                ..Default::default()
-            };
-            context.context_composition = Some(composition.clone());
             let mut executor = test_round_executor();
             executor.usage_service = Some(service.clone());
             let result = executor
@@ -6534,7 +6835,7 @@ pub(super) mod tests {
                 .request_context()
                 .unwrap()
                 .context_composition
-                == Some(composition.clone())));
+                .is_none()));
             let failed = records
                 .iter()
                 .find(|record| record.request_context().unwrap().attempt_index == 1)
@@ -6961,9 +7262,13 @@ pub(super) mod tests {
                     openbitfun_core_types::ModelResponseReplayItem::OpaqueReasoning {
                         item_id: Some("original-reasoning".into()),
                         summary: vec![],
+                        content: None,
                         opaque_state: "original-encrypted-state".into(),
                     },
-                    openbitfun_core_types::ModelResponseReplayItem::AssistantMessage,
+                    openbitfun_core_types::ModelResponseReplayItem::AssistantMessage {
+                        phase: None,
+                        text: None,
+                    },
                     openbitfun_core_types::ModelResponseReplayItem::FunctionCall {
                         call_id: "already-executed".into(),
                     },
@@ -7073,6 +7378,7 @@ pub(super) mod tests {
                     openbitfun_core_types::ModelResponseReplayItem::OpaqueReasoning {
                         item_id: None,
                         summary: vec![],
+                        content: None,
                         opaque_state: "opaque-test-state".into(),
                     },
                 ],
@@ -7137,6 +7443,7 @@ pub(super) mod tests {
                     openbitfun_core_types::ModelResponseReplayItem::OpaqueReasoning {
                         item_id: Some("reasoning-history".into()),
                         summary: vec![],
+                        content: None,
                         opaque_state: "account-a-encrypted-reasoning".into(),
                     },
                 );
@@ -7758,6 +8065,73 @@ pub(super) mod tests {
             let attempt = records[0].request_context().unwrap();
             assert_eq!(attempt.outcome, ModelRequestOutcome::Cancelled);
             assert!(!records[0].usage_is_known());
+        }
+    }
+
+    #[tokio::test]
+    async fn websocket_interruption_never_retries_or_recovers_partial_output() {
+        use futures::{SinkExt, StreamExt};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use tokio_tungstenite::tungstenite::Message;
+        for partial in [false, true] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url = format!("http://{}/responses", listener.local_addr().unwrap());
+            let requests = Arc::new(AtomicUsize::new(0));
+            let observed = requests.clone();
+            let server = tokio::spawn(async move {
+                loop {
+                    let (tcp, _) = listener.accept().await.unwrap();
+                    let mut socket = tokio_tungstenite::accept_async(tcp).await.unwrap();
+                    socket.next().await.unwrap().unwrap();
+                    observed.fetch_add(1, Ordering::SeqCst);
+                    socket
+                        .send(Message::Text(
+                            json!({"type":"response.created","response":{"id":"r1"}})
+                                .to_string()
+                                .into(),
+                        ))
+                        .await
+                        .unwrap();
+                    if partial {
+                        socket.send(Message::Text(json!({"type":"response.output_text.delta","delta":"Partial answer"}).to_string().into())).await.unwrap();
+                    }
+                    let _ = socket.close(None).await;
+                }
+            });
+            let client = Arc::new(crate::infrastructure::ai::AIClient::new(serde_json::from_value(json!({
+                "name":"fixture","base_url":url,"request_url":url,"model":"test","api_key":"synthetic",
+                "format":"responses","context_window":4096,"inline_think_in_text":false,"skip_ssl_verify":false,
+                "responses":{"transport":"websocket","context":"incremental"}
+            })).unwrap()));
+            let executor = test_round_executor();
+            let result = tokio::time::timeout(
+                Duration::from_secs(5),
+                executor.execute_round(
+                    client,
+                    test_round_context(),
+                    vec![super::AIMessage::user("Inspect".into())],
+                    None,
+                    None,
+                ),
+            )
+            .await;
+            server.abort();
+            let error = result
+                .expect("uncertain delivery must stop promptly")
+                .expect_err("must preserve the interrupted request");
+            assert!(
+                matches!(error, OpenBitFunError::AIProvider(ref provider) if provider.delivery_uncertain)
+            );
+            assert_eq!(requests.load(Ordering::SeqCst), 1);
+            assert!(!executor
+                .event_queue
+                .dequeue_batch(100)
+                .await
+                .iter()
+                .any(|event| matches!(
+                    event.event,
+                    AgenticEvent::ModelRoundAttemptSuperseded { .. }
+                )));
         }
     }
 

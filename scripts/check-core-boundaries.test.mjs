@@ -579,8 +579,8 @@ test('portable contract crates expose only capability-local feature slices', asy
   // Workspace byte readers expose AsyncRead/AsyncSeek without selecting a
   // process, network, scheduler, or full Tokio runtime at the contract layer.
   assert.deepEqual(new Set(runtimePortFeatures['workspace-ports']), new Set(['dep:anyhow', 'dep:tokio-util', 'dep:tokio', 'tokio/io-util']));
-  assert.deepEqual(runtimePortFeatures['terminal-port'], ['dep:tokio']);
-  assert.deepEqual(runtimePortFeatures['remote-exec-port'], ['dep:tokio']);
+  assert.deepEqual(runtimePortFeatures['terminal-port'], ['dep:tokio', 'dep:tokio-util']);
+  assert.deepEqual(runtimePortFeatures['remote-exec-port'], ['dep:tokio', 'dep:tokio-util']);
   assert.deepEqual(
     new Set(runtimePortFeatures['tool-runtime-handles']),
     new Set([
@@ -640,7 +640,7 @@ test('runtime-ports async dependencies stay behind their exact port owners', () 
   );
   assert.deepEqual(
     ownersByDependency.get('tokio-util'),
-    new Set(['workspace-ports']),
+    new Set(['permission', 'remote-exec-port', 'terminal-port', 'ts', 'workspace-ports']),
   );
   assert.deepEqual(
     ownersByDependency.get('tokio'),
@@ -815,18 +815,19 @@ const RUNTIME_PORT_FEATURE_PROFILES = {
   'agent-api': ['dep:openbitfun-core-types'],
   'git-port': [],
   'hook-function-runtime': [],
-  permission: ['dep:openbitfun-product-domains'],
+  permission: ['dep:openbitfun-product-domains', 'dep:tokio-util'],
   'plugin-runtime': [],
   'product-search': ['dep:openbitfun-product-domains'],
   'ptc-runtime': [],
-  'remote-exec-port': ['dep:tokio'],
+  'remote-exec-port': ['dep:tokio', 'dep:tokio-util'],
   'remote-workspace-ports': ['dep:openbitfun-core-types'],
   'runtime-event-port': [],
   'script-tool-runtime': [],
-  'terminal-port': ['dep:tokio'],
+  'terminal-port': ['dep:tokio', 'dep:tokio-util'],
   'tool-runtime-handles': ['workspace-ports', 'terminal-port', 'remote-exec-port'],
   ts: [
     'dep:ts-rs',
+    'dep:tokio-util',
     'agent-api',
     'permission',
     'openbitfun-core-types/ts',
@@ -1914,6 +1915,7 @@ const CLI_REVIEWED_CORE_FEATURES = [
   'workspace-icons',
   'tools-pages',
   ...ACP_REVIEWED_CORE_FEATURES,
+  'decision-model-credentials',
   'product-search',
   'remote-connect',
   'file-watch',
@@ -3048,6 +3050,7 @@ test('services integrations Reqwest policy uses Cargo-decoded feature references
 reqwest = ["dep:reqwest"]
 browser-control = ["reqwest", "reqwest/rustls-no-provider"]
 file-watch = ["reqwest?/__native-tls"]
+remote-ssh-concrete = ["reqwest", "reqwest/stream"]
 mcp = ["reqwest", "reqwest/rustls-no-provider", "reqwest/json"]
 models-dev = ["reqwest", "reqwest/rustls-no-provider", "reqwest/system-proxy"]
 speech = ["reqwest", "reqwest/rustls-no-provider", "reqwest/http3"]
@@ -3058,6 +3061,7 @@ speech = ["reqwest", "reqwest/rustls-no-provider", "reqwest/http3"]
     .join('\n');
   assert.match(messages, /browser-control.*missing Reqwest feature reference reqwest\/json/);
   assert.match(messages, /file-watch.*outside its reviewed owner features/);
+  assert.match(messages, /remote-ssh-concrete.*outside its reviewed owner features/);
   assert.match(messages, /mcp.*missing Reqwest feature reference reqwest\/stream/);
   assert.doesNotMatch(messages, /models-dev.*system-proxy/);
   assert.match(messages, /speech.*unreviewed Reqwest feature reference reqwest\/http3/);
@@ -3222,7 +3226,7 @@ test('Reqwest consumers inherit the workspace version without duplicating featur
     rule.reason.includes('Reqwest consumers must inherit the workspace-owned compatible version')
   );
 
-  assert.equal(rules.length, 7);
+  assert.equal(rules.length, 6);
   for (const rule of rules) {
     const pattern = rule.patterns[0].regex;
     assert.match('reqwest = { workspace = true, features = ["rustls-no-provider"] }', pattern);
@@ -4022,7 +4026,7 @@ test('split core boundary check keeps self-test execution behavior', () => {
 test('Task execution boundary requires policy-aware child delegation', () => {
   const executionRule = requiredContentRules.find(
     (rule) => rule.path
-      === 'src/crates/assembly/core/src/agentic/tools/implementations/task/execution.rs'
+      === 'src/crates/assembly/core/src/agentic/tools/implementations/agent_collaboration/execution.rs'
       && rule.patterns.some((pattern) => pattern.message.includes('background launches')),
   );
   assert.ok(executionRule, 'Task execution must have a required-content rule');
@@ -5049,6 +5053,44 @@ test('vendored Engine.IO remains in resolved feature audits without becoming a p
     'a product workspace member cannot bypass ownership checks through a vendor path');
 });
 
+test('vendored screenshots keeps its reviewed external identity and image profile', () => {
+  const owner = packageAt('owner', 'src/apps/example/Cargo.toml');
+  const vendor = {
+    ...packageAt('screenshots', 'third_party/screenshots/Cargo.toml', [{
+      name: 'image',
+      rename: null,
+      kind: null,
+      optional: false,
+      target: null,
+      features: [],
+      uses_default_features: true,
+    }]),
+    version: '0.8.10',
+  };
+  const graph = collectCargoMetadataGraph({
+    root: TEST_ROOT,
+    manifestPaths: [join(TEST_ROOT, 'Cargo.toml')],
+    loadMetadata: () => ({
+      packages: [owner, vendor],
+      workspace_members: [owner.id],
+      resolve: { nodes: [{ id: vendor.id, features: ['default'], deps: [] }] },
+    }),
+  });
+
+  assert.deepEqual(graph.packages.map(pkg => pkg.name), ['owner']);
+  assert.ok(graph.resolvedPackageFeatures.some(record => record.name === 'screenshots'));
+  assert.deepEqual(findThirdPartyCapabilityFeatureViolations([vendor]), []);
+  assert.ok(collectCargoMetadataGraph({
+    root: TEST_ROOT,
+    manifestPaths: [join(TEST_ROOT, 'Cargo.toml')],
+    loadMetadata: () => ({
+      packages: [owner, vendor],
+      workspace_members: [owner.id, vendor.id],
+      resolve: { nodes: [] },
+    }),
+  }).packages.some(pkg => pkg.name === 'screenshots'));
+});
+
 test('vendored Tao is external only at its reviewed version and stays in feature audits', () => {
   const owner = packageAt('owner', 'src/apps/example/Cargo.toml');
   const vendor = { ...packageAt('tao', 'third_party/tao/Cargo.toml'), version: '0.36.0' };
@@ -5132,4 +5174,22 @@ test('workspace icon image codecs remain an exact feature-owned slice', () => {
   assert.deepEqual(findThirdPartyCapabilityFeatureViolations([pkg]), []);
   pkg.features['workspace-icons'].push('image/gif');
   assert.match(findThirdPartyCapabilityFeatureViolations([pkg]).map(v => v.message).join('\n'), /workspace-icons.*unexpected.*gif/);
+});
+
+
+test('Responses WebSocket adapter uses framing over the existing Reqwest upgrade', () => {
+  const pkg = packageAt('openbitfun-ai-adapters', 'src/crates/adapters/ai-adapters/Cargo.toml', [{
+    name: 'tokio-tungstenite', kind: null, optional: false, uses_default_features: false,
+    features: ['handshake'],
+  }]);
+  assert.deepEqual(findThirdPartyCapabilityFeatureViolations([pkg]), []);
+  for (const change of [
+    { features: ['handshake', 'connect'] },
+    { features: ['handshake', 'rustls-tls-native-roots'] },
+    { uses_default_features: true },
+  ]) {
+    const mutated = structuredClone(pkg);
+    Object.assign(mutated.dependencies[0], change);
+    assert.ok(findThirdPartyCapabilityFeatureViolations([mutated]).length > 0);
+  }
 });

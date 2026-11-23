@@ -18,6 +18,7 @@ impl ClawMode {
             default_tools: vec![
                 "AskUserQuestion".to_string(),
                 "AgentSpawn".to_string(),
+                "AgentFork".to_string(),
                 "AgentSendInput".to_string(),
                 "AgentControl".to_string(),
                 "AgentList".to_string(),
@@ -45,7 +46,6 @@ impl ClawMode {
                 "get_goal".to_string(),
                 "create_goal".to_string(),
                 "update_goal".to_string(),
-                "GenerativeUI".to_string(),
                 "Skill".to_string(),
                 "ListWorkspaces".to_string(),
                 "SessionControl".to_string(),
@@ -58,7 +58,6 @@ impl ClawMode {
                 "ControlHub".to_string(),
                 "ComputerUse".to_string(),
                 "OpenBitFunControl".to_string(),
-                "PublishAppearance".to_string(),
                 "PageManage".to_string(),
             ],
         }

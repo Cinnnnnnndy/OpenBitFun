@@ -4,6 +4,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   symlinkSync,
@@ -280,7 +281,6 @@ jobs:
   assert.match(result.stderr, /interactive capability gate must run exactly/u);
   assert.match(result.stderr, /interactive capability gate must remain blocking/u);
   assert.match(result.stderr, /ProductControl owner\/delivery-profile gate is missing/u);
-  assert.match(result.stderr, /CLI ProductControl self-control coverage requires/u);
 });
 
 test('rejects explicit setup-node node-version below the project baseline when node-version-file is valid', (t) => {
@@ -415,6 +415,19 @@ jobs:
   assert.match(result.stdout, /GitHub YAML config check passed/);
 });
 
+test('workflows leave CLI functional tests to local runs', () => {
+  const directory = path.join(repoRoot, '.github/workflows');
+  for (const file of readdirSync(directory).filter((name) => /\.ya?ml$/.test(name))) {
+    const workflow = yaml.parse(readFileSync(path.join(directory, file), 'utf8'));
+    for (const job of Object.values(workflow.jobs)) {
+      for (const step of job.steps ?? []) {
+        const command = (step.run ?? '').replaceAll('\\\n', ' ');
+        assert.doesNotMatch(command, /\bcargo (?:test|nextest run)\b[^\n]*\bopenbitfun-cli\b/, file);
+      }
+    }
+  }
+});
+
 test('keeps Rust CI independent, restore-only on PRs, and target-focused', () => {
   const workflow = yaml.parse(
     readFileSync(path.join(repoRoot, '.github/workflows/ci.yml'), 'utf8'),
@@ -431,8 +444,8 @@ test('keeps Rust CI independent, restore-only on PRs, and target-focused', () =>
   );
   assert.deepEqual(
     rustJob.strategy.matrix.os,
-    ['ubuntu-latest', 'macos-15-intel', 'windows-latest'],
-    'Rust validation must retain the reviewed Linux, macOS, and Windows matrix',
+    ['ubuntu-latest', 'macos-15', 'windows-latest'],
+    'Rust validation must retain the reviewed Linux, Apple Silicon macOS, and Windows matrix',
   );
   assert.equal(
     rustJob.steps.some((step) => step.uses?.startsWith('actions/download-artifact@')),
@@ -454,7 +467,7 @@ test('keeps Rust CI independent, restore-only on PRs, and target-focused', () =>
     'The frontend build must not upload an artifact with no consumer',
   );
 
-  for (const jobName of ['cli-test', 'rust-build-check']) {
+  for (const jobName of ['runtime-test', 'rust-build-check']) {
     const job = workflow.jobs[jobName];
     const cache = job.steps.find((step) =>
       step.uses?.startsWith('swatinem/rust-cache@'),
@@ -471,32 +484,32 @@ test('keeps Rust CI independent, restore-only on PRs, and target-focused', () =>
       /github\.base_ref \|\| github\.ref_name/,
       `${jobName} must not mix main and explore build outputs`,
     );
+    if (jobName === 'rust-build-check') {
+      assert.match(
+        cache?.with?.['shared-key'] ?? '',
+        /runner\.arch/,
+        'Rust validation caches must stay isolated by architecture',
+      );
+    }
   }
 
-  const cliJob = workflow.jobs['cli-test'];
+  const runtimeJob = workflow.jobs['runtime-test'];
   assert.deepEqual(
-    cliJob.strategy.matrix.include.map((entry) => entry.os),
-    rustJob.strategy.matrix.os,
-    'CLI and Rust validation must exercise the same Linux, Intel macOS, and Windows hosts',
+    runtimeJob.strategy.matrix.include.map((entry) => entry.os),
+    ['ubuntu-latest', 'macos-15'],
   );
-  assert.equal(
-    cliJob.strategy.matrix.include.find((entry) => entry.os === 'macos-15-intel').cache_key,
-    'macos-intel',
-  );
-  assert.equal(cliJob['timeout-minutes'], '${{ matrix.timeout_minutes }}');
+  const runtimeSteps = runtimeJob.steps.filter((step) => step.run?.startsWith('cargo test'));
   assert.deepEqual(
-    cliJob.strategy.matrix.include.map((entry) => entry.timeout_minutes),
-    [30, 75, 30],
-    'Only the cold Intel macOS CLI build needs a longer job budget',
+    runtimeSteps.filter((step) => step.if === "runner.os == 'macOS'").map((step) => step.run),
+    ['cargo test --locked -p openbitfun-acp'],
   );
-  assert.ok(
-    cliJob.strategy.matrix.include.some((entry) => entry.os === 'windows-latest'),
-    'Windows ConPTY contracts must run before Nightly',
-  );
-  assert.equal(
-    cliJob.steps.find((step) => step.name === 'Run Windows CLI terminal contracts')?.run,
-    'cargo test --locked -p openbitfun-cli --test terminal_process_contracts -- --test-threads=1',
-  );
+  assert.ok(runtimeSteps.every((step) => step['continue-on-error'] !== true));
+  const linuxCommands = runtimeSteps
+    .filter((step) => step.if === "runner.os == 'Linux'")
+    .map((step) => step.run);
+  assert.ok(linuxCommands.includes('cargo test --locked -p openbitfun-acp -p openbitfun-agent-runtime'));
+  assert.ok(linuxCommands.includes('cargo test --locked -p openbitfun-sdk-host -p openbitfun-sdk-host-app'));
+  assert.ok(linuxCommands.some((command) => command.startsWith('cargo test --locked -p terminal-core ')));
 
   const rustCache = rustJob.steps.find((step) =>
     step.uses?.startsWith('swatinem/rust-cache@'),
@@ -590,8 +603,10 @@ test('keeps Rust CI independent, restore-only on PRs, and target-focused', () =>
   const linuxFullCoreLibraryTests = rustJob.steps.find(
     (step) => step.name === 'Run full core library tests on Linux',
   );
+  const linuxCoreCommand = 'node scripts/ci/rust-stack-diagnostics.mjs --output "${{ runner.temp }}/rust-stack-diagnostics" -- --locked -p openbitfun-core --features product-full --lib';
+  const otherCoreCommand = 'node scripts/ci/rust-stack-diagnostics.mjs --output "${{ runner.temp }}/rust-stack-diagnostics" -- --locked -p openbitfun-core --lib';
   const coreLibraryTestSteps = rustJob.steps.filter(
-    (step) => /^cargo test --locked -p openbitfun-core\b.*\s--lib$/.test(step.run ?? ''),
+    (step) => /^(?:cargo test|node scripts\/ci\/rust-stack-diagnostics\.mjs .* --) --locked -p openbitfun-core\b.*\s--lib$/.test(step.run ?? ''),
   );
   const desktopLibraryTests = rustJob.steps.find(
     (step) => step.name === 'Run desktop library tests',
@@ -608,7 +623,7 @@ test('keeps Rust CI independent, restore-only on PRs, and target-focused', () =>
   );
   assert.equal(
     coreLibraryTests?.run,
-    'cargo test --locked -p openbitfun-core --lib',
+    otherCoreCommand,
   );
   assert.equal(
     linuxFullCoreLibraryTests?.if,
@@ -616,18 +631,31 @@ test('keeps Rust CI independent, restore-only on PRs, and target-focused', () =>
   );
   assert.equal(
     linuxFullCoreLibraryTests?.run,
-    'cargo test --locked -p openbitfun-core --features product-full --lib',
+    linuxCoreCommand,
   );
+  assert.equal(coreLibraryTests?.id, 'core-library-tests');
+  assert.equal(coreLibraryTests?.['continue-on-error'], undefined);
+  assert.equal(linuxFullCoreLibraryTests?.id, 'full-core-library-tests');
+  assert.equal(linuxFullCoreLibraryTests?.['continue-on-error'], undefined);
+  const stackArtifact = rustJob.steps.find((step) => step.name === 'Upload Rust stack diagnostics');
+  assert.equal(stackArtifact?.if, "${{ failure() && (steps.core-library-tests.outputs.stack_overflow == 'true' || steps.full-core-library-tests.outputs.stack_overflow == 'true') }}");
+  assert.equal(stackArtifact?.uses, 'actions/upload-artifact@v6');
+  assert.equal(stackArtifact?.with?.path, '${{ runner.temp }}/rust-stack-diagnostics');
+  assert.equal(stackArtifact?.with?.['retention-days'], 7);
+  assert.equal(stackArtifact?.with?.name, 'rust-stack-diagnostics-${{ runner.os }}');
+  assert.equal(rustJob.steps.find(
+    (step) => step.name === 'Verify Rust stack diagnostic contracts',
+  )?.run, 'node --test scripts/ci/rust-stack-diagnostics.test.mjs');
   assert.deepEqual(
     coreLibraryTestSteps.map((step) => ({ if: step.if, run: step.run })),
     [
       {
         if: "runner.os != 'Linux'",
-        run: 'cargo test --locked -p openbitfun-core --lib',
+        run: otherCoreCommand,
       },
       {
         if: "runner.os == 'Linux'",
-        run: 'cargo test --locked -p openbitfun-core --features product-full --lib',
+        run: linuxCoreCommand,
       },
     ],
     'Core library validation must contain exactly the reviewed complementary steps',
@@ -690,7 +718,7 @@ test('gates fast checks and PR packaging behind one fail-closed build decision',
     );
   }
   const impactJob = workflow.jobs['build-impact'];
-  const cliJob = workflow.jobs['cli-test'];
+  const runtimeJob = workflow.jobs['runtime-test'];
   const rustJob = workflow.jobs['rust-build-check'];
   const buildJob = workflow.jobs['package-impact-contract'];
   const resultJob = workflow.jobs['rust-validation-result'];
@@ -789,7 +817,7 @@ test('gates fast checks and PR packaging behind one fail-closed build decision',
   );
   assert.match(classify?.run ?? '', /--range-mode "\$RANGE_MODE"/);
 
-  for (const job of [cliJob, rustJob]) {
+  for (const job of [runtimeJob, rustJob]) {
     assert.equal(job.needs, 'build-impact');
     assert.match(job.if, /!cancelled\(\)/);
     assert.doesNotMatch(job.if, /always\(\)/);
@@ -817,9 +845,9 @@ test('gates fast checks and PR packaging behind one fail-closed build decision',
   assert.equal(resultJob.if, '${{ always() }}');
   assert.deepEqual(
     [...resultJob.needs].sort(),
-    ['build-impact', 'cli-test', 'package-impact-contract', 'rust-build-check'],
+    ['build-impact', 'package-impact-contract', 'runtime-test', 'rust-build-check'],
   );
-  const verify = resultJob.steps.find((step) => step.name === 'Verify Rust and CLI result');
+  const verify = resultJob.steps.find((step) => step.name === 'Verify Rust build and runtime test results');
   assert.equal(verify?.env?.RUST_REQUIRED, '${{ needs.build-impact.outputs.rust_required }}');
   assert.equal(
     verify?.env?.PR_PRODUCER_REQUIRED,
@@ -827,7 +855,7 @@ test('gates fast checks and PR packaging behind one fail-closed build decision',
   );
   assert.equal(verify?.env?.EVENT_NAME, '${{ github.event_name }}');
   assert.equal(verify?.env?.IMPACT_RESULT, '${{ needs.build-impact.result }}');
-  assert.equal(verify?.env?.CLI_RESULT, '${{ needs.cli-test.result }}');
+  assert.equal(verify?.env?.RUNTIME_RESULT, '${{ needs.runtime-test.result }}');
   assert.equal(verify?.env?.RUST_RESULT, '${{ needs.rust-build-check.result }}');
   assert.equal(
     verify?.env?.BUILD_RESULT,
@@ -835,7 +863,7 @@ test('gates fast checks and PR packaging behind one fail-closed build decision',
   );
   assert.equal(verify?.shell, 'pwsh');
   assert.match(verify?.run ?? '', /successful impact-selected producer jobs/i);
-  assert.match(verify?.run ?? '', /successful Rust and CLI jobs/i);
+  assert.match(verify?.run ?? '', /successful Rust build and runtime jobs/i);
 
   const dshJob = workflow.jobs['dsh-profile-windows'];
   assert.equal(dshJob.needs, 'build-impact');
@@ -849,7 +877,7 @@ test('gates fast checks and PR packaging behind one fail-closed build decision',
       producerRequired: 'true',
       eventName: 'pull_request',
       impactResult,
-      cliResult: 'success',
+      runtimeResult: 'success',
       rustResult: 'success',
       buildResult: 'success',
       expectedSuccess: false,
@@ -858,7 +886,7 @@ test('gates fast checks and PR packaging behind one fail-closed build decision',
   for (const rustRequired of ['false', 'true']) {
     for (const producerRequired of ['false', 'true']) {
       for (const eventName of ['pull_request', 'push']) {
-        for (const cliResult of statuses) {
+        for (const runtimeResult of statuses) {
           for (const rustResult of statuses) {
             for (const buildResult of statuses) {
               const packageExpected = eventName === 'pull_request'
@@ -868,14 +896,14 @@ test('gates fast checks and PR packaging behind one fail-closed build decision',
                 producerRequired,
                 eventName,
                 impactResult: 'success',
-                cliResult,
+                runtimeResult,
                 rustResult,
                 buildResult,
                 expectedSuccess: (packageExpected
                   ? buildResult === 'success'
                   : buildResult === 'skipped') && (rustRequired === 'false'
-                  ? cliResult === 'skipped' && rustResult === 'skipped'
-                  : cliResult === 'success' && rustResult === 'success'),
+                  ? runtimeResult === 'skipped' && rustResult === 'skipped'
+                  : runtimeResult === 'success' && rustResult === 'success'),
               });
             }
           }
@@ -888,7 +916,7 @@ test('gates fast checks and PR packaging behind one fail-closed build decision',
     producerRequired: 'false',
     eventName: 'push',
     impactResult: 'success',
-    cliResult: 'skipped',
+    runtimeResult: 'skipped',
     rustResult: 'skipped',
     buildResult: 'success',
     expectedSuccess: false,
@@ -908,7 +936,7 @@ foreach ($case in $cases) {
   $env:PR_PRODUCER_REQUIRED = [string]$case.producerRequired
   $env:EVENT_NAME = [string]$case.eventName
   $env:IMPACT_RESULT = [string]$case.impactResult
-  $env:CLI_RESULT = [string]$case.cliResult
+  $env:RUNTIME_RESULT = [string]$case.runtimeResult
   $env:RUST_RESULT = [string]$case.rustResult
   $env:BUILD_RESULT = [string]$case.buildResult
   $succeeded = $true
@@ -1047,10 +1075,6 @@ test('nightly validates generated inputs and projected lockfiles before packagin
     false,
     'nightly must not hide stale committed lockfiles by regenerating them ad hoc',
   );
-  assert.equal(
-    steps.find((step) => step.name === 'Run Windows CLI terminal contracts')?.run,
-    'cargo test --locked -p openbitfun-cli --test terminal_process_contracts -- --test-threads=1',
-  );
 });
 
 test('nightly orchestrates the shared build before the separately privileged publish', () => {
@@ -1079,7 +1103,7 @@ test('nightly orchestrates the shared build before the separately privileged pub
     build_linux_binaries: true,
     build_relay_image: true,
     upload_artifacts: true,
-    cache_write: "${{ github.repository_owner == 'GCWing' }}",
+    cache_write: "${{ github.repository_id == '1147866277' }}",
   });
   assert.deepEqual(publish.needs, ['check-changes', 'build-artifacts']);
   assert.match(publish.if, /inputs\.build_only != true/);
@@ -1368,6 +1392,7 @@ test('nightly publishes and verifies the Relay image in the current repository o
     publish?.with?.tags,
     `${image}:${'${{ env.NIGHTLY_TAG }}'}\n${image}:${'${{ steps.nightly-image-meta.outputs.asset_version }}'}\n`,
   );
+  assert.match(publish?.with?.labels ?? '', /org\.opencontainers\.image\.source=\$\{\{ github\.server_url \}\}\/\$\{\{ github\.repository \}\}/);
   assert.equal(
     smoke?.run,
     `bash scripts/relay/smoke-image.sh \\\n  "${image}@\${IMAGE_DIGEST}"\n`,
@@ -1436,7 +1461,7 @@ test('stages unique release asset names before publishing', () => {
   assert.match(steps[uploadIndex].run, /--clobber release-upload-assets\/\*/);
 });
 
-test('Desktop release notes link the separately published Android prerelease', () => {
+test('Desktop release notes link the migrated native mobile repository', () => {
   const workflow = yaml.parse(
     readFileSync(
       path.join(repoRoot, '.github/workflows/desktop-package.yml'),
@@ -1446,26 +1471,11 @@ test('Desktop release notes link the separately published Android prerelease', (
   const uploadStep = workflow.jobs['upload-release-assets'].steps.find(
     (step) => step.name === 'Upload to release',
   );
-  assert.match(uploadStep.run, /mobile-v\$\{MOBILE_VERSION\}/);
-  assert.match(uploadStep.run, /runner-generated debug signing key/);
+  assert.match(uploadStep.run, /github\.com\/openBitFun\/OpenBitFun-Mobile\/releases/);
+  assert.doesNotMatch(uploadStep.run, /src\/apps\/mobile\//);
   assert.match(uploadStep.run, /--notes-file release-notes\.md/);
 });
 
-test('Mobile Package publishes Android assets from mobile-v tags', () => {
-  const workflow = yaml.parse(
-    readFileSync(path.join(repoRoot, '.github/workflows/mobile-package.yml'), 'utf8'),
-  );
-  assert.ok(workflow.on.push.tags.includes('mobile-v*'));
-  assert.match(
-    workflow.jobs.android.steps.find((step) => step.name === 'Build signed Android package').run,
-    /:app:assembleRelease/,
-  );
-  assert.equal(workflow.jobs.publish.needs.includes('android'), true);
-  assert.match(
-    workflow.jobs.publish.steps.find((step) => step.name === 'Create mobile release').run,
-    /gh release create/,
-  );
-});
 
 test('Desktop packaging preserves old-tag source bytes before Windows checkout', () => {
   const workflow = yaml.parse(
@@ -1506,7 +1516,7 @@ test('Desktop packaging keeps beta identity explicit and stable-safe', () => {
   const prepareStep = workflow.jobs.prepare.steps.find(
     (step) => step.name === 'Resolve version metadata',
   );
-  assert.match(prepareStep.run, /GITHUB_REPOSITORY.*GCWing\/OpenBitFun/);
+  assert.match(prepareStep.run, /GITHUB_REPOSITORY_ID.*1147866277/);
   assert.match(prepareStep.run, /merge-base --is-ancestor/);
   assert.match(prepareStep.run, /rev-parse --verify --quiet/);
 
@@ -1515,7 +1525,7 @@ test('Desktop packaging keeps beta identity explicit and stable-safe', () => {
     packageJob.env.OPENBITFUN_RELEASE_CHANNEL,
     '${{ needs.prepare.outputs.release_channel }}',
   );
-  assert.match(packageJob.env.TAURI_UPDATER_ENDPOINT, /github\.repository/);
+  assert.match(packageJob.env.TAURI_UPDATER_ENDPOINT, /github\.repository_id != '1147866277'/);
   assert.match(packageJob.env.TAURI_UPDATER_ENDPOINT, /channel-v1-beta/);
   assert.ok(packageJob.env.TAURI_UPDATER_ENDPOINT.includes("format('https://github.com/{0}/releases/latest/download/latest-v1.json', github.repository)"));
   assert.equal(packageJob.env.TAURI_UPDATER_ENDPOINT, packageJob.env.TAURI_UPDATER_FALLBACK_ENDPOINT);
@@ -1554,6 +1564,8 @@ test('Desktop packaging keeps beta identity explicit and stable-safe', () => {
   );
 
   const uploadSteps = workflow.jobs['upload-release-assets'].steps;
+  assert.equal(uploadSteps.find((step) => step.name === 'Request openbitfun mirror sync').if,
+    "github.repository_id == '1147866277'");
   const release = uploadSteps.find((step) => step.name === 'Upload to release');
   assert.equal(
     release.env.RELEASE_PRERELEASE,
@@ -1670,7 +1682,7 @@ test('stable and beta publication require every producer, while artifact-only ru
   const steps = jobs['upload-release-assets'].steps;
   for (const name of [
     'Download Linux binary artifacts', 'Download Relay image descriptor',
-    'Generate Linux binaries manifest', 'Stage release assets',
+    'Generate Linux binaries manifest', 'Verify staged Relay image descriptor', 'Stage release assets',
     'Verify published Linux binaries manifest', 'Verify published Relay image descriptor',
   ]) {
     assert.equal(steps.find((step) => step.name === name)?.if, name.startsWith('Download') ? '${{ !inputs.artifact_run_ids }}' : undefined, name);
@@ -1692,12 +1704,44 @@ test('stable and beta publication require every producer, while artifact-only ru
 });
 
 
-test('Desktop recovery selects only one Mac target and cannot publish an incomplete release', (t) => {
+test('Desktop release and nightly package Linux on Ubuntu 22.04 and verify before upload', () => {
+  const readPackageJob = (file) =>
+    yaml.parse(readFileSync(path.join(repoRoot, '.github/workflows', file), 'utf8')).jobs.package;
+  const release = readPackageJob('desktop-package.yml');
+  const nightly = readPackageJob('nightly-artifacts.yml');
+  const dependencies = (job) => job.steps.find((step) => step.name === 'Install Linux desktop build dependencies');
+
+  assert.equal(release.container, "${{ startsWith(matrix.platform.name, 'linux-') && 'ubuntu:22.04' || '' }}");
+  assert.equal(nightly.container, "${{ startsWith(matrix.platform, 'linux-') && 'ubuntu:22.04' || '' }}");
+  assert.equal(dependencies(release).run, dependencies(nightly).run);
+
+  for (const job of [release, nightly]) {
+    const checkout = job.steps.find((step) => step.uses === 'actions/checkout@v5');
+    const trust = job.steps.find((step) => step.name === 'Trust the Linux build checkout');
+    const verify = job.steps.find((step) => step.name === 'Verify Linux desktop package');
+    const buildIndex = job.steps.findIndex((step) => step.name === 'Build desktop app');
+    const uploadIndex = job.steps.findIndex((step) => step.name === 'Upload bundles');
+    assert.equal(trust.if, "runner.os == 'Linux'");
+    assert.equal(trust.run, 'git config --global --add safe.directory "$GITHUB_WORKSPACE"');
+    assert.ok(job.steps.indexOf(checkout) < job.steps.indexOf(trust));
+    assert.ok(job.steps.indexOf(trust) < buildIndex);
+    assert.equal(verify.if, "runner.os == 'Linux'");
+    assert.match(verify.run, /verify-linux-desktop-package\.sh/);
+    assert.match(verify.run, /linux-appimage-tray-libraries\.json/);
+    assert.ok(buildIndex >= 0 && buildIndex < job.steps.indexOf(verify));
+    assert.ok(job.steps.indexOf(verify) < uploadIndex);
+  }
+});
+
+test('Desktop recovery selects one platform and cannot publish an incomplete release', (t) => {
   const workflow = yaml.parse(readFileSync(path.join(repoRoot, '.github/workflows/desktop-package.yml'), 'utf8'));
   const step = workflow.jobs.prepare.steps.find((entry) => entry.name === 'Select Desktop package platforms');
+  const windows = workflow.jobs.package.steps.find((entry) => entry.name === 'Build and sign custom Windows installer');
+  assert.match(windows.run, /git show '\$\{\{ github\.workflow_sha \}\}:scripts\/windows\/stage-desktop-runtime\.mjs'/);
+  assert.ok(windows.run.indexOf('node $stagingScript') < windows.run.indexOf('pnpm run installer:build:only'));
   const root = mkdtempSync(path.join(tmpdir(), 'openbitfun-platform-recovery-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
-  for (const target of ['all', 'macos-arm64', 'macos-x64', 'unknown']) {
+  for (const target of ['all', 'macos-arm64', 'macos-x64', 'windows-x64', 'unknown']) {
     for (const relay of ['true', 'false']) {
       const output = path.join(root, `${target}-${relay}`);
       const result = spawnSync('bash', ['-c', step.run], {
@@ -1721,7 +1765,8 @@ test('Desktop recovery selects only one Mac target and cannot publish an incompl
   }
   for (const [target, relay, runs, success] of [
     ['all', 'false', '123,456', true], ['all', 'false', 'not-a-run', false],
-    ['macos-arm64', 'false', '123', false], ['all', 'true', '123', false],
+    ['macos-arm64', 'false', '123', false], ['windows-x64', 'false', '123', false],
+    ['all', 'true', '123', false],
   ]) {
     const result = spawnSync('bash', ['-c', step.run], {
       cwd: repoRoot, encoding: 'utf8', windowsHide: true,
@@ -1739,7 +1784,8 @@ test('Desktop recovery selects only one Mac target and cannot publish an incompl
   assert.equal(workflow.concurrency['cancel-in-progress'], false);
   for (const [target, upload, run, artifacts, success] of [
     ['macos-x64', 'true', '123', '', true], ['macos-arm64', 'true', '123', '', true],
-    ['all', 'true', '123', '', false], ['macos-x64', 'false', '123', '', false],
+    ['all', 'true', '123', '', false], ['windows-x64', 'true', '123', '', false],
+    ['macos-x64', 'false', '123', '', false],
     ['macos-x64', 'true', 'invalid', '', false], ['macos-x64', 'true', '123', '456', false],
   ]) {
     const result = spawnSync('bash', ['-c', step.run], {
@@ -2022,12 +2068,16 @@ test('Relay image rebuild resolves the release tag instead of the newer workflow
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const tagSha = 'a'.repeat(40);
   const headSha = 'b'.repeat(40);
-  for (const checkoutRef of ['', 'newer-branch']) {
-    const output = path.join(root, `output-${checkoutRef || 'tag'}`);
+  for (const [checkoutRef, protectedHistory, failure] of [
+    ['', 'yes', null], ['newer-branch', 'yes', /not requested commit/],
+    ['', 'no', /not part of the protected main history/],
+  ]) {
+    const output = path.join(root, `output-${checkoutRef || 'tag'}-${protectedHistory}`);
     const result = spawnSync('bash', ['-c', `
       git() {
         case "$1" in
-          fetch|merge-base) return 0 ;;
+          fetch) return 0 ;;
+          merge-base) [[ "$PROTECTED_HISTORY" == yes ]] ;;
           rev-parse)
             case "\${!#}" in
               'v1.0.0^{commit}') echo "$TAG_SHA" ;;
@@ -2041,19 +2091,98 @@ test('Relay image rebuild resolves the release tag instead of the newer workflow
       env: {
         ...process.env,
         GITHUB_EVENT_NAME: 'workflow_dispatch', GITHUB_SHA: headSha,
-        GITHUB_REPOSITORY: 'GCWing/OpenBitFun', GITHUB_OUTPUT: output,
+        GITHUB_REPOSITORY: 'openBitFun/OpenBitFun', GITHUB_REPOSITORY_ID: '1147866277', GITHUB_OUTPUT: output,
         INPUT_TAG_NAME: 'v1.0.0', INPUT_CHECKOUT_REF: checkoutRef,
         INPUT_RELEASE_CHANNEL: 'stable', INPUT_UPLOAD_TO_RELEASE: 'true',
-        INPUT_RELAY_IMAGE_ONLY: 'true', TAG_SHA: tagSha,
+        INPUT_RELAY_IMAGE_ONLY: 'true', TAG_SHA: tagSha, PROTECTED_HISTORY: protectedHistory,
       },
     });
-    if (checkoutRef) {
+    if (failure) {
       assert.notEqual(result.status, 0);
-      assert.match(result.stderr, /not requested commit/);
+      assert.match(result.stderr, failure);
     } else {
       assert.equal(result.status, 0, result.stderr);
       assert.match(readFileSync(output, 'utf8'), new RegExp(`checkout_ref=${tagSha}`));
     }
+  }
+});
+
+test('Desktop finalization selects the Windows updater format from the release source', {
+  skip: process.platform === 'win32',
+}, () => {
+  const workflow = yaml.parse(readFileSync(path.join(repoRoot, '.github/workflows/desktop-package.yml'), 'utf8'));
+  const step = workflow.jobs['upload-release-assets'].steps.find((entry) => entry.name === 'Collect updater assets');
+  assert.equal(step.env.RELEASE_SOURCE, '${{ needs.prepare.outputs.checkout_ref }}');
+  for (const [ref, grepStatus, modern] of [['old-tag', '1', false], ['new-tag', '0', true], ['unknown', '128', false]]) {
+    const result = spawnSync('bash', ['-c', `
+      git() {
+        [[ "$*" == "grep -q OPENBITFUN_MAINTENANCE_V1 $RELEASE_SOURCE -- OpenBitFun-Installer/src-tauri/src/installer/commands.rs" ]] || return 128
+        return "$GREP_STATUS"
+      }
+      node() { printf '%s\n' "$@"; }
+      ${step.run.replaceAll('${{ needs.prepare.outputs.version }}', '1.0.10')}
+    `], {
+      cwd: repoRoot, encoding: 'utf8', windowsHide: true,
+      env: { ...process.env, RELEASE_SOURCE: ref, GREP_STATUS: grepStatus, REQUIRED_UPDATER_PLATFORMS: 'windows-x86_64' },
+    });
+    assert.equal(result.status, grepStatus === '128' ? 1 : 0, result.stderr);
+    assert.equal(result.stdout.includes('--windows-installer-dir\nrelease-manual-assets\n'), modern);
+  }
+});
+
+test('CLI dispatches only to a configured Homebrew tap or the historical token-only destination', {
+  skip: process.platform === 'win32' || spawnSync('jq', ['--version'], { windowsHide: true }).status !== 0,
+}, () => {
+  const workflow = yaml.parse(readFileSync(path.join(repoRoot, '.github/workflows/cli-package.yml'), 'utf8'));
+  const step = workflow.jobs['upload-release-assets'].steps.find((entry) => entry.name === 'Notify homebrew-tap (post-publication)');
+  assert.equal(step.env.TAP_REPOSITORY, '${{ vars.HOMEBREW_TAP_REPOSITORY }}');
+  for (const [tap, token, status, destination] of [
+    ['', '', 0, ''], ['openBitFun/homebrew-tap', '', 1, ''],
+    ['openBitFun/homebrew-tap', 'fixture', 0, 'openBitFun/homebrew-tap'],
+    ['', 'fixture', 0, 'GCWing/homebrew-tap'], ['../bad!tap', 'fixture', 1, ''],
+  ]) {
+    const result = spawnSync('bash', ['-c', `curl() { printf 'request %s\n' "$@"; }\n${step.run}`], {
+      cwd: repoRoot, encoding: 'utf8', windowsHide: true,
+      env: { ...process.env, TAP_REPOSITORY: tap, GH_TOKEN: token,
+        GITHUB_API_URL: 'https://api.github.com', RELEASE_TAG: 'v1.0.10' },
+    });
+    assert.equal(result.status, status, result.stderr);
+    const url = result.stdout.split('\n').find((line) => line.startsWith('request https://'));
+    assert.equal(url, destination ? `request https://api.github.com/repos/${destination}/dispatches` : undefined);
+  }
+});
+
+test('Relay descriptor validation allows pre-transfer images only for official artifact recovery', {
+  skip: process.platform === 'win32' || spawnSync('jq', ['--version'], { windowsHide: true }).status !== 0,
+}, (t) => {
+  const workflow = yaml.parse(readFileSync(path.join(repoRoot, '.github/workflows/desktop-package.yml'), 'utf8'));
+  const steps = workflow.jobs['upload-release-assets'].steps;
+  const validation = steps.find((step) => step.name === 'Verify staged Relay image descriptor');
+  assert.ok(steps.indexOf(validation) < steps.findIndex((step) => step.name === 'Upload to release'));
+  const build = workflow.jobs['publish-relay-image'].steps.find((step) => step.name === 'Build and push multi-platform image');
+  assert.match(build.with.labels, /org\.opencontainers\.image\.source=\$\{\{ github\.server_url \}\}\/\$\{\{ github\.repository \}\}/);
+  const root = mkdtempSync(path.join(tmpdir(), 'openbitfun-release-descriptor-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  mkdirSync(path.join(root, 'relay-image-assets'));
+  writeFileSync(path.join(root, 'relay-image-assets/relay-image.json.sig'), 'signature fixture');
+  for (const [owner, repoId, runIds, namespace, version, accepted] of [
+    ['openBitFun', '1147866277', '', 'openbitfun', '1.0.10', true],
+    ['openBitFun', '1147866277', '123', 'gcwing', '1.0.10', true],
+    ['openBitFun', '1147866277', '', 'gcwing', '1.0.10', false],
+    ['openBitFun', '1147866277', '123', 'gcwing', '1.0.9', false],
+    ['fork', '1234567', '123', 'gcwing', '1.0.10', false],
+    ['fork', '1234567', '', 'fork', '1.0.10', true],
+  ]) {
+    writeFileSync(path.join(root, 'relay-image-assets/relay-image.json'), JSON.stringify({
+      schema_version: 1, version, tag: `v${version}`, image: `ghcr.io/${namespace}/openbitfun-relay-server`,
+      digest: `sha256:${'a'.repeat(64)}`, platforms: ['linux/amd64', 'linux/arm64'],
+    }));
+    const result = spawnSync('bash', ['-c', validation.run], {
+      cwd: root, encoding: 'utf8', windowsHide: true,
+      env: { ...process.env, GITHUB_REPOSITORY_OWNER: owner, GITHUB_REPOSITORY_ID: repoId,
+        ARTIFACT_RUN_IDS: runIds, RELEASE_TAG: 'v1.0.10', RELEASE_VERSION: '1.0.10' },
+    });
+    assert.equal(result.status, accepted ? 0 : 1, `${owner}/${namespace} ${version} (${runIds}): ${result.stderr}`);
   }
 });
 
@@ -2162,7 +2291,7 @@ test('nightly and beta use the shared build-version projection', () => {
   assert.equal(artifacts.jobs.package.env.OPENBITFUN_RELEASE_CHANNEL, 'nightly');
   assert.equal(
     artifacts.jobs.package.env.TAURI_UPDATER_ENDPOINT,
-    'https://github.com/GCWing/OpenBitFun/releases/latest/download/latest-v1.json',
+    'https://github.com/openBitFun/OpenBitFun/releases/latest/download/latest-v1.json',
   );
   assert.equal(
     artifacts.jobs.package.env.TAURI_UPDATER_FALLBACK_ENDPOINT,

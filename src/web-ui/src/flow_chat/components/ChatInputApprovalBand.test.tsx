@@ -17,6 +17,7 @@ const TRANSLATIONS: Record<string, string> = {
   'permission.allowAlways': 'Always allow this scope',
   'permission.allowAlwaysCommand': 'Always allow this command',
   'permission.allowAlwaysCommandDescription': 'Applies only to this exact command, including its arguments, in the current project. Other commands are not authorized.',
+  'permission.allowAlwaysCommandContextDescription': 'Applies to this exact command with the same shell, working directory and terminal mode in the current project.',
   'permission.allowCurrentAndFollowing': 'Allow all',
   'permission.reject': 'Reject',
   'permission.rejectCurrentAndFollowing': 'Reject all',
@@ -47,6 +48,11 @@ vi.mock('react-i18next', async importOriginal => ({
 vi.mock('@openbitfun/ui', async importOriginal => ({
   ...await importOriginal<typeof import('@openbitfun/ui')>(),
   Tooltip: ({ children }: { children: React.ReactElement }) => <>{children}</>,
+}));
+
+const notifyInfo = vi.hoisted(() => vi.fn());
+vi.mock('@/shared/notification-system', () => ({
+  notificationService: { info: notifyInfo },
 }));
 
 vi.mock('@/shared/utils/textSelection', async importOriginal => ({
@@ -129,6 +135,17 @@ describe('ChatInputApprovalBand', () => {
     expect(resource?.querySelector('[data-openbitfun-component="overflow-text"]')).toBeNull();
   });
 
+  it.each(['process.execute', 'bash'])('does not show command analysis reasons for %s', async action => {
+    await act(async () => {
+      root.render(<ChatInputApprovalBand requests={[request({ action,
+        displayMetadata: { riskDescription: 'Unsupported shell analysis', risk: 'Needs review', commandAnalysisReason: 'Dynamic expansion' },
+      })]} onRespond={vi.fn(async () => undefined)} onRespondBatch={vi.fn(async () => undefined)} />);
+    });
+    expect(container.querySelector('[data-openbitfun-part="risk"]')).toBeNull();
+    expect(container.textContent).not.toContain('Unsupported shell analysis');
+    expect(container.textContent).not.toContain('Dynamic expansion');
+  });
+
   it('keeps the risk on its own line so it cannot be answered unread', async () => {
     await act(async () => {
       root.render(
@@ -152,6 +169,29 @@ describe('ChatInputApprovalBand', () => {
     );
   });
 
+  it('shows a confirming note while a lost answer is read back from the device', async () => {
+    let finish!: () => void;
+    const onRespond = vi.fn((_id: string, _reply: string, _feedback?: string, hooks?: { onConfirming?: () => void }) => {
+      hooks?.onConfirming?.();
+      return new Promise<void>(resolve => { finish = resolve; });
+    });
+    await act(async () => {
+      root.render(
+        <ChatInputApprovalBand
+          requests={[request()]}
+          onRespond={onRespond}
+          onRespondBatch={vi.fn(async () => undefined)}
+        />
+      );
+    });
+    await click('chat-input-approval-allow');
+    expect(container.querySelector('[data-openbitfun-part="confirming"]')).not.toBeNull();
+    expect(container.querySelector('[data-openbitfun-part="error"]')).toBeNull();
+    await act(async () => { finish(); });
+    expect(container.querySelector('[data-openbitfun-part="confirming"]')).toBeNull();
+    expect(container.querySelector('[data-openbitfun-part="error"]')).toBeNull();
+  });
+
   it('answers only the request in front of the reader by default', async () => {
     const onRespond = vi.fn(async () => undefined);
     const onRespondBatch = vi.fn(async () => undefined);
@@ -170,7 +210,7 @@ describe('ChatInputApprovalBand', () => {
     expect(container.querySelector('[data-testid="chat-input-approval-pending-count"]')).toBeNull();
 
     await click('chat-input-approval-allow');
-    expect(onRespond).toHaveBeenCalledWith('request-1', 'once', undefined);
+    expect(onRespond).toHaveBeenCalledWith('request-1', 'once', undefined, expect.any(Object));
     expect(onRespondBatch).not.toHaveBeenCalled();
   });
 
@@ -222,7 +262,7 @@ describe('ChatInputApprovalBand', () => {
     expect(container.querySelector('[data-testid="chat-input-approval-allow-always"]')).toBeNull();
 
     await click('chat-input-approval-reject');
-    expect(onRespondBatch).toHaveBeenCalledWith('request-1', 'reject', undefined);
+    expect(onRespondBatch).toHaveBeenCalledWith('request-1', 'reject', undefined, expect.any(Object));
     expect(onRespond).not.toHaveBeenCalled();
   });
 
@@ -267,12 +307,37 @@ describe('ChatInputApprovalBand', () => {
     ).toBe(false);
 
     await click('chat-input-approval-reject');
-    expect(onRespond).toHaveBeenLastCalledWith('request-1', 'reject', undefined);
+    expect(onRespond).toHaveBeenLastCalledWith('request-1', 'reject', undefined, expect.any(Object));
     expect(onRejectReasonConsumed).not.toHaveBeenCalled();
 
     await click('chat-input-approval-reject-with-reason');
-    expect(onRespond).toHaveBeenLastCalledWith('request-1', 'reject', 'use rg instead');
+    expect(onRespond).toHaveBeenLastCalledWith('request-1', 'reject', 'use rg instead', expect.any(Object));
     expect(onRejectReasonConsumed).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['accepted', 1, false],
+    ['unknown', 1, false],
+    ['already_resolved', 0, true],
+  ] as const)('consumes the rejection reason only when it may have been delivered (%s)', async (outcome, consumed, notified) => {
+    notifyInfo.mockClear();
+    const onRejectReasonConsumed = vi.fn();
+    await act(async () => {
+      root.render(
+        <ChatInputApprovalBand
+          requests={[request()]}
+          rejectReason="use rg instead"
+          onRejectReasonConsumed={onRejectReasonConsumed}
+          onRespond={vi.fn(async () => outcome)}
+          onRespondBatch={vi.fn(async () => outcome)}
+        />
+      );
+    });
+    await click('chat-input-approval-reject-with-reason');
+    expect(onRejectReasonConsumed).toHaveBeenCalledTimes(consumed);
+    expect(notifyInfo).toHaveBeenCalledTimes(notified ? 1 : 0);
+    if (notified) expect(notifyInfo).toHaveBeenCalledWith('permission.alreadyResolved', expect.anything());
+    expect(container.querySelector('[data-openbitfun-part="error"]')).toBeNull();
   });
 
   it('reports a reply that never landed and leaves the request answerable', async () => {
@@ -328,8 +393,22 @@ describe('ChatInputApprovalBand', () => {
     );
 
     await click('chat-input-approval-allow-always');
-    expect(onRespond).toHaveBeenCalledWith('request-1', 'always', undefined);
+    expect(onRespond).toHaveBeenCalledWith('request-1', 'always', undefined, expect.any(Object));
     expect(onRespondBatch).not.toHaveBeenCalled();
+  });
+
+  it('describes a context-bound command grant without exposing its internal hash', async () => {
+    await act(async () => {
+      root.render(<ChatInputApprovalBand requests={[request({
+        action: 'process.execute', resources: ['git clone repo'],
+        saveResources: [`exec-plan:${'a'.repeat(64)}`],
+        displayMetadata: { shellPath: '/bin/zsh', workdir: '/repo' },
+      })]} onRespond={vi.fn(async () => undefined)} onRespondBatch={vi.fn(async () => undefined)} />);
+    });
+    expect(container.querySelector('[data-openbitfun-part="request"]')?.textContent).toBe('Run command');
+    expect(container.querySelector('[data-testid="chat-input-approval-allow-always"]')?.textContent).toBe('Always allow this command');
+    expect(container.querySelector('[data-openbitfun-part="grantScope"]')?.textContent).toContain('same shell, working directory and terminal mode');
+    expect(container.textContent).not.toContain('exec-plan:');
   });
 
   it.each([

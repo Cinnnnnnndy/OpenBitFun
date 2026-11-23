@@ -41,10 +41,6 @@ pub(super) const BUILTIN_SKILL_SPECS: &[BuiltinSkillSpec] = &[
         group: BuiltinSkillGroup::Meta,
     },
     BuiltinSkillSpec {
-        dir_name: "create-openbitfun-skin",
-        group: BuiltinSkillGroup::Meta,
-    },
-    BuiltinSkillSpec {
         dir_name: "commit-push-pr",
         group: BuiltinSkillGroup::Meta,
     },
@@ -69,11 +65,19 @@ pub(super) const BUILTIN_SKILL_SPECS: &[BuiltinSkillSpec] = &[
         group: BuiltinSkillGroup::MiniApp,
     },
     BuiltinSkillSpec {
+        dir_name: "visualize",
+        group: BuiltinSkillGroup::Creation,
+    },
+    BuiltinSkillSpec {
         dir_name: "openbitfun-frontend-dev",
         group: BuiltinSkillGroup::Creation,
     },
     BuiltinSkillSpec {
         dir_name: "generate-image",
+        group: BuiltinSkillGroup::Creation,
+    },
+    BuiltinSkillSpec {
+        dir_name: "openbitfun-skin-designer",
         group: BuiltinSkillGroup::Creation,
     },
     BuiltinSkillSpec {

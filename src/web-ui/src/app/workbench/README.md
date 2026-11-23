@@ -77,7 +77,11 @@ remembered per session on that device: entering a session restores the pane stat
 it was left with, and a session that never opened the pane stays collapsed, so
 changing sessions cannot inherit a neighbour's pane or hide a moved page. The legacy sessionPaneLayoutStore path re-exports the shell owner and
 retains old preference keys/legacy layout projection.
-The `session.auxiliary` Appearance address stays on the shell wrapper for skins.
+The `session.auxiliary` Appearance address stays on the shell wrapper for legacy appearance customization.
+
+When Settings replaces a conversation beside its canvas, it fills the workbench
+and temporarily hides that canvas. The session keeps its tabs and remembered
+pane mode. Settings can share the workbench with a scene selected in the other pane.
 
 SceneTopBar owns both tab regions and the short separator. SplitView supplies the
 header's live column geometry, including clamping, resizing and overlay placement;

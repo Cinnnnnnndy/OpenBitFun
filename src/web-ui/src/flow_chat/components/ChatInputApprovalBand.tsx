@@ -35,6 +35,9 @@ import type {
 } from '@/infrastructure/api/service-api/AgentAPI';
 import { useCopyTextAction } from '../hooks/useCopyTextAction';
 import { CopyableTextPreview } from './CopyableTextPreview';
+import type { PermissionAnswerHooks } from './modern/usePermissionRequests';
+import type { InteractionAnswerOutcome } from '../utils/interactionAnswerOutcome';
+import { notificationService } from '@/shared/notification-system';
 import './ChatInputApprovalBand.scss';
 
 export interface ChatInputApprovalBandProps {
@@ -49,14 +52,26 @@ export interface ChatInputApprovalBandProps {
   rejectReason?: string;
   /** Clears the composer once its text has been spent as a reason. */
   onRejectReasonConsumed?: () => void;
-  onRespond: (requestId: string, reply: PermissionReplyKind, feedback?: string) => Promise<void>;
-  onRespondBatch: (requestId: string, reply: PermissionReplyKind, feedback?: string) => Promise<void>;
+  /** Resolves to how the answer ended; `void` is treated as accepted. */
+  onRespond: (
+    requestId: string,
+    reply: PermissionReplyKind,
+    feedback?: string,
+    hooks?: PermissionAnswerHooks,
+  ) => Promise<InteractionAnswerOutcome | void>;
+  onRespondBatch: (
+    requestId: string,
+    reply: PermissionReplyKind,
+    feedback?: string,
+    hooks?: PermissionAnswerHooks,
+  ) => Promise<InteractionAnswerOutcome | void>;
 }
 
 const PERMISSION_ACTION_LABEL_KEYS: Record<string, string> = {
   read: 'permission.actions.read',
   edit: 'permission.actions.edit',
   bash: 'permission.actions.bash',
+  'process.execute': 'permission.actions.bash',
   git: 'permission.actions.git',
   computer_use: 'permission.actions.computerUse',
   websearch: 'permission.actions.webSearch',
@@ -96,7 +111,7 @@ function permissionRisk(
   request: PermissionRequest | undefined,
   t: (key: string, values?: Record<string, string>) => string,
 ): string | undefined {
-  if (!request) return undefined;
+  if (!request || request.action === 'process.execute' || request.action === 'bash') return undefined;
   const metadata = request.displayMetadata;
   const operation = metadataString(metadata, 'pageOperation');
   const slug = metadataString(metadata, 'pageSlug');
@@ -137,6 +152,7 @@ export const ChatInputApprovalBand: React.FC<ChatInputApprovalBandProps> = ({
   const [scope, setScope] = useState<ApprovalScope>('this');
   const [pendingAnswer, setPendingAnswer] = useState<ApprovalAnswer | null>(null);
   const [error, setError] = useState(false);
+  const [confirming, setConfirming] = useState(false);
   const responding = pendingAnswer !== null;
 
   const request = requests[0];
@@ -168,14 +184,21 @@ export const ChatInputApprovalBand: React.FC<ChatInputApprovalBandProps> = ({
     ? t('permission.subagentOwner', { subagent: request.delegation.subagentType })
     : showSourceIdentity ? request.source.identity : undefined;
   const saveResources = request.saveResources ?? [];
-  const isExactCommandGrant = request.action === 'bash'
+  const isContextCommandGrant = request.action === 'process.execute'
     && request.resources.length === 1
     && saveResources.length === 1
-    && saveResources[0] === request.resources[0];
+    && /^exec-plan:[a-f0-9]{64}$/.test(saveResources[0]);
+  const isExactCommandGrant = isContextCommandGrant || (request.action === 'bash'
+    && request.resources.length === 1
+    && saveResources.length === 1
+    && saveResources[0] === request.resources[0]);
   const alwaysAllowLabel = isExactCommandGrant
     ? t('permission.allowAlwaysCommand')
     : t('permission.allowAlways');
-  const savedResourceSummary = saveResources.join('\n');
+  const savedResourceSummary = isContextCommandGrant
+    ? [resourceSummary, metadataString(request.displayMetadata, 'shellPath'), metadataString(request.displayMetadata, 'workdir')]
+      .filter(Boolean).join('\n')
+    : saveResources.join('\n');
   const alwaysAllowTooltip = saveResources.length
     ? request.projectPath?.trim()
       ? t('permission.allowAlwaysTooltip', {
@@ -189,12 +212,17 @@ export const ChatInputApprovalBand: React.FC<ChatInputApprovalBandProps> = ({
     setPendingAnswer(withReason ? 'rejectWithReason' : reply);
     setError(false);
     const feedback = reply === 'reject' && withReason && reason ? reason : undefined;
+    const hooks: PermissionAnswerHooks = { onConfirming: () => setConfirming(true) };
     try {
       // 'always' is deliberately never batched: see the button's comment.
-      if (effectiveScope === 'all' && reply !== 'always') {
-        await onRespondBatch(request.requestId, reply, feedback);
-      } else {
-        await onRespond(request.requestId, reply, feedback);
+      const outcome = effectiveScope === 'all' && reply !== 'always'
+        ? await onRespondBatch(request.requestId, reply, feedback, hooks)
+        : await onRespond(request.requestId, reply, feedback, hooks);
+      if (outcome === 'already_resolved') {
+        // The host refused this answer: the request had already settled. The
+        // reason was never delivered, so it stays in the composer.
+        notificationService.info(t('permission.alreadyResolved'), { duration: 5000 });
+        return;
       }
       if (feedback) {
         onRejectReasonConsumed?.();
@@ -203,6 +231,7 @@ export const ChatInputApprovalBand: React.FC<ChatInputApprovalBandProps> = ({
       setError(true);
     } finally {
       setPendingAnswer(null);
+      setConfirming(false);
     }
   };
 
@@ -299,6 +328,16 @@ export const ChatInputApprovalBand: React.FC<ChatInputApprovalBandProps> = ({
             <Alert tone="warning" message={risk} />
           </div>
         ) : null}
+        {confirming ? (
+          <div
+            data-openbitfun-component="permission-request-panel"
+            data-openbitfun-part="confirming"
+            className="openbitfun-chat-input-approval__note"
+            role="status"
+          >
+            <Alert tone="info" message={t('permission.responseConfirming')} />
+          </div>
+        ) : null}
         {error ? (
           <div
             data-openbitfun-component="permission-request-panel"
@@ -316,7 +355,9 @@ export const ChatInputApprovalBand: React.FC<ChatInputApprovalBandProps> = ({
             data-openbitfun-part="grantScope"
             className="openbitfun-chat-input-approval__grant-note"
           >
-            {t('permission.allowAlwaysCommandDescription')}
+            {t(isContextCommandGrant
+              ? 'permission.allowAlwaysCommandContextDescription'
+              : 'permission.allowAlwaysCommandDescription')}
           </p>
         ) : null}
 

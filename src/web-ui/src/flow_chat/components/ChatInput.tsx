@@ -11,7 +11,7 @@ import { expandLargePastes, pickReferencedLargePastes } from '../utils/largePast
  */
 
 import React, { useRef, useCallback, useEffect, useReducer, useState, useMemo, useSyncExternalStore } from 'react';
-import type { UsageContextBreakdown } from '@/infrastructure/api/service-api/SessionAPI';
+import type { UsageContextEstimate } from '@/infrastructure/api/service-api/SessionAPI';
 import type { UsageReportUiParams } from '../session-drivers/types';
 import path from 'path-browserify';
 import { useTranslation } from 'react-i18next';
@@ -1352,6 +1352,8 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     getSessionContextUsageDisplay()
   );
   const [isModelSwitching, setIsModelSwitching] = useState(false);
+  /** Bumped to ask the model selector to open itself, e.g. from `/model`. */
+  const [modelMenuOpenRequest, setModelMenuOpenRequest] = useState(0);
   const [modelAvailability, setModelAvailability] = useState<ModelSelectorAvailability>({
     status: 'loading',
     canSend: false,
@@ -2434,13 +2436,14 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 
   React.useEffect(() => {
     const handleFillInput = (event: Event) => {
-      const customEvent = event as CustomEvent<{ message: string; sessionId?: string }>;
+      const customEvent = event as CustomEvent<{ message: string; sessionId?: string; append?: boolean }>;
       if (customEvent.detail?.sessionId ? customEvent.detail.sessionId !== effectiveTargetSessionIdRef.current : Boolean(conversationScope)) return;
       const message = customEvent.detail?.message;
       
       if (message) {
-        clearPendingLargePastes();
-        dispatchInput({ type: 'SET_VALUE', payload: message });
+        const previous = customEvent.detail.append ? inputValueRef.current : '';
+        if (!customEvent.detail.append) clearPendingLargePastes();
+        dispatchInput({ type: 'SET_VALUE', payload: previous ? previous + '\n' + message : message });
         
         if (richTextInputRef.current) {
           richTextInputRef.current.focus();
@@ -3464,6 +3467,12 @@ export const ChatInput: React.FC<ChatInputProps> = ({
         : []),
       {
         kind: 'action',
+        id: 'model' as const,
+        command: '/model',
+        label: t('chatInput.modelAction'),
+      },
+      {
+        kind: 'action',
         id: 'usage' as const,
         command: '/usage',
         label: t('chatInput.usageAction'),
@@ -3834,7 +3843,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     }
   }, [admitComposerImages, clearPendingLargePastes, currentSessionId, derivedState, dispatchInput, expandComposerSpecialTokens, imageContexts, inputState.value, isBtwSession, removeContext, replacePendingLargePastes, sessionBoundWorkspacePath, selectTargetSession, setQueuedInput, t]);
 
-  const submitCompactFromInput = useCallback(async () => {
+  const submitManualCompaction = useCallback(async (clearComposer: boolean) => {
     if (!effectiveTargetSessionId || !effectiveTargetSession) {
       notificationService.error(
         t('chatInput.compactNoSession')
@@ -3854,8 +3863,8 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       return;
     }
 
-    const message = inputState.value.trim();
-    if (!/^\/compact\s*$/i.test(message)) {
+    const message = clearComposer ? inputState.value.trim() : '';
+    if (clearComposer && !/^\/compact\s*$/i.test(message)) {
       notificationService.warning(
         t('chatInput.compactUsage')
       );
@@ -3864,9 +3873,11 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 
     const requestedTurnId = manualCompactionTurnId();
     markManualCompactionPending(effectiveTargetSessionId, requestedTurnId);
-    dispatchInput({ type: 'CLEAR_VALUE' });
-    setQueuedInput(null);
-    setSlashCommandState({ isActive: false, kind: 'all', query: '', selectedIndex: 0 });
+    if (clearComposer) {
+      dispatchInput({ type: 'CLEAR_VALUE' });
+      setQueuedInput(null);
+      setSlashCommandState({ isActive: false, kind: 'all', query: '', selectedIndex: 0 });
+    }
 
     try {
       const result = await FlowChatManager.getInstance().compactSession(
@@ -3877,7 +3888,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
         throw new Error(t('chatInput.compactFailed'));
       }
     } catch (error) {
-      log.error('Failed to trigger /compact', {
+      log.error('Failed to trigger manual context compaction', {
         error,
         sessionId: effectiveTargetSessionId,
       });
@@ -3886,7 +3897,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
         return;
       }
       settleManualCompaction(effectiveTargetSessionId, requestedTurnId);
-      dispatchInput({ type: 'SET_VALUE', payload: message });
+      if (clearComposer) dispatchInput({ type: 'SET_VALUE', payload: message });
       notificationService.error(
         error instanceof Error ? error.message : t('error.unknown'),
         {
@@ -3904,6 +3915,11 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     setQueuedInput,
     t,
   ]);
+
+  const submitCompactFromInput = useCallback(
+    () => submitManualCompaction(true),
+    [submitManualCompaction],
+  );
 
   const runEffectiveSessionUsageReport = useCallback(async (presentReport?: UsageReportUiParams['presentReport']) => {
     if (!effectiveTargetSessionId || !effectiveTargetSession) {
@@ -3982,9 +3998,9 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   }, [runEffectiveSessionUsageReport]);
 
   const loadContextUsageOverview = useCallback(async () => {
-    let context: UsageContextBreakdown | undefined;
+    let context: UsageContextEstimate | undefined;
     await runEffectiveSessionUsageReport(report => {
-      context = report.context;
+      context = report.contextEstimate;
       return true;
     });
     return context;
@@ -4986,6 +5002,16 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   );
   const isInterruptedTurnRecoveryInFlight =
     interruptedTurnRecoveryGate.isSessionInFlight(effectiveTargetSessionId);
+  /**
+   * One availability contract for the model selector, shared by the control
+   * itself and by commands that open it (`/model`), so a request cannot look
+   * accepted while the selector is refusing input.
+   */
+  const modelSelectorDisabled =
+    isInterruptedTurnRecoveryInFlight
+    || btwDraftSettingsInherited
+    || isWorkspaceSubmitting
+    || (!!effectiveTargetSession?.draft && effectiveTargetSession.draft.phase !== 'editing');
 
   const externalFileAvailability = resolveExternalFileIntakeAvailability({
     desktopRuntime: isTauriRuntime(),
@@ -5564,6 +5590,43 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     t,
   ]);
 
+  /**
+   * `/model` is a pointer to the selector beside the composer, not a turn. It
+   * only removes its own text and asks the selector to open, so the choice
+   * still comes from the single model surface.
+   */
+  const submitModelFromInput = useCallback(() => {
+    const message = inputState.value.trim();
+    if (!/^\/model\s*$/i.test(message)) {
+      notificationService.warning(t('chatInput.modelUsage'));
+      return;
+    }
+
+    if (modelSelectorDisabled || caps.submissionOptionsLocked) {
+      // Keep the command in the composer so the user can retry once the
+      // selector accepts changes again.
+      notificationService.warning(t('chatInput.modelPickerUnavailable'));
+      return;
+    }
+
+    dispatchInput({ type: 'CLEAR_VALUE' });
+    setQueuedInput(null);
+    setSlashCommandState({ isActive: false, kind: 'all', query: '', selectedIndex: 0 });
+    setModelMenuOpenRequest(request => request + 1);
+  }, [
+    caps.submissionOptionsLocked,
+    dispatchInput,
+    inputState.value,
+    modelSelectorDisabled,
+    setQueuedInput,
+    t,
+  ]);
+
+  /** The model menu was only a detour; the next keystroke belongs in the composer. */
+  const returnFocusToComposerAfterModelMenu = useCallback(() => {
+    window.setTimeout(() => richTextInputRef.current?.focus(), 0);
+  }, []);
+
   const handleSendOrCancel = useCallback(async (messageOverride?: string) => {
     if (workspaceSubmittingRef.current) return;
     if (!derivedState) return;
@@ -5635,6 +5698,11 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       return;
     }
     if (!submissionScope.isCurrent()) return;
+
+    if (promptSlashCommandsEnabled && caps.ops.has('model') && isSlashCommand(message, '/model')) {
+      submitModelFromInput();
+      return;
+    }
 
     if (promptSlashCommandsEnabled && caps.ops.has('btw') && isSlashCommand(message, '/btw')) {
       // When idle, /btw can be sent via the normal send button.
@@ -5860,6 +5928,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     submitReviewFromInput,
     submitMcpPromptFromInput,
     submitReloadFromInput,
+    submitModelFromInput,
     reloadContextSupported,
     confirmPromptCacheGuardIfNeeded,
     t,
@@ -6716,9 +6785,14 @@ export const ChatInput: React.FC<ChatInputProps> = ({
               anchorRef: composerRef,
               previewSession: {
                 sessionId: effectiveTargetSessionId,
+                canvasSessionId: currentSessionId ?? effectiveTargetSessionId,
                 workspaceId: effectiveTargetSession.workspaceId ?? effectiveTargetSession.config.workspaceId,
               },
               loadContext: loadContextUsageOverview,
+              compactDisabled: !!derivedState?.isProcessing,
+              onCompact: caps.ops.has('compact')
+                ? () => { void submitManualCompaction(false); }
+                : undefined,
               onOpen: handleToolbarUsageReport,
             }
           : undefined
@@ -7464,9 +7538,10 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                     externalSelection={dispatchModelSelection}
                     modeDefaultModelId={targetModeInfo?.model}
                     persistSharedModeDefault={!isBtwDraftTarget && Boolean(targetModeInfo && targetModeInfo.source !== 'external')}
-                    disabled={isInterruptedTurnRecoveryInFlight || btwDraftSettingsInherited || isWorkspaceSubmitting
-                      || !!effectiveTargetSession?.draft && effectiveTargetSession.draft.phase !== 'editing'}
+                    disabled={modelSelectorDisabled}
                     disabledReason={btwDraftSettingsInherited ? t('selection.inheritedSettings') : undefined}
+                    openRequest={modelMenuOpenRequest}
+                    onRequestMenuClosed={returnFocusToComposerAfterModelMenu}
                     reasoningTriggerPresentation="label"
                   />
                   </div>

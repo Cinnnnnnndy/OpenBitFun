@@ -28,6 +28,8 @@ import { beginDeviceOpen, endDeviceOpen } from '@/infrastructure/peer-device/dev
 import DeviceWorkspaceSections from './DeviceWorkspaceSections';
 import { useDeviceVisibilityPreferences } from '@/app/navigation/deviceVisibilityPreferences';
 import { activateSurface } from '@/infrastructure/peer-device/deviceSurface';
+import { requestWorkspaceReveal, resetWorkspaceDisplayOrdersForTest } from '@/infrastructure/services/business/workspaceDisplayOrder';
+import { useDeviceSectionDisclosure } from './useSidebarDevices';
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -50,6 +52,22 @@ describe('DeviceWorkspaceSections hand-over', () => {
     live.loading = false;
   });
   afterEach(() => { act(() => root.unmount()); host.remove(); });
+
+  it('shows the weak-link state of every device section, rendered or not', () => {
+    slots.value = [
+      slot('local', true),
+      { ...slot('peer-b', false), linkState: 'reconnecting' },
+      { ...slot('peer-c', false), linkState: 'starting' },
+      slot('peer-d', false),
+    ];
+    render();
+    const badge = (surfaceId: string) => host.querySelector(`[data-device-surface="${surfaceId}"] [data-testid="nav-device-link-state"]`);
+    expect(badge('peer-b')?.getAttribute('data-link-state')).toBe('reconnecting');
+    expect(badge('peer-b')?.textContent).toBe('nav.devices.linkReconnecting');
+    expect(badge('peer-c')?.getAttribute('data-link-state')).toBe('starting');
+    expect(badge('peer-d')).toBeNull();
+    expect(badge('local')).toBeNull();
+  });
 
   it('keeps every device on its background rows until the open settles, then hands over once', () => {
     const intent = beginDeviceOpen({ surfaceId: 'peer-b', key: 'session:s', sessionId: 's' });
@@ -135,5 +153,18 @@ describe('DeviceWorkspaceSections hand-over', () => {
     expect(host.querySelector('[data-testid="live-list"]')).not.toBeNull();
     act(() => useDeviceVisibilityPreferences.getState().setVisible('local', false));
     expect(host.children).toHaveLength(0);
+  });
+
+  it('re-expands a collapsed current device section when a workspace open reveals a row on it', () => {
+    resetWorkspaceDisplayOrdersForTest();
+    useDeviceSectionDisclosure.setState({ expanded: {} });
+    slots.value = [slot('local', true), slot('peer-b', false)];
+    render();
+
+    act(() => host.querySelector<HTMLButtonElement>('[data-device-surface="local"] [data-testid="nav-device-section-toggle"]')!.click());
+    expect(body('local')).toBeUndefined();
+
+    act(() => { requestWorkspaceReveal('local', 'ws-1', true); });
+    expect(body('local')).toBe('live-list');
   });
 });

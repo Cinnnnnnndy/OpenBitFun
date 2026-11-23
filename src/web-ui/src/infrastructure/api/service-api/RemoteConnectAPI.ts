@@ -105,6 +105,7 @@ export interface ConnectionResult {
 }
 
 export interface RemoteConnectStatus {
+  remote_control_allowed?: boolean;
   /** Present only when the host supports independently managed Relay routes. */
   connections?: Array<{
     method: 'lan' | 'openbitfun_server';
@@ -258,6 +259,10 @@ class RemoteConnectAPIService {
       log.error('getStatus failed', e);
       throw e;
     }
+  }
+
+  async setRemoteControlAllowed(allowed: boolean): Promise<void> {
+    await this.adapter.request<void>('remote_connect_set_allowed', { request: { allowed } });
   }
 
   async getFormState(): Promise<RemoteConnectFormState> {
@@ -501,11 +506,11 @@ class RemoteConnectAPIService {
     return api.listen('session-interaction-changed', callback);
   }
 
-  onSessionReady(callback: (event: { sessionId: string; hasMore: boolean; oldestSeq: number; cursor: number; historyBatches?: boolean }) => void): () => void {
+  onSessionReady(callback: (event: { sessionId: string; hasMore: boolean; oldestSeq: number; cursor: number; historyBatches?: boolean; live?: boolean; subscriptionId?: string }) => void): () => void {
     return api.listen('relay://session-ready', callback);
   }
 
-  onSessionSyncError(callback: (event: { sessionId: string; targetDeviceId: string; message: string }) => void): () => void {
+  onSessionSyncError(callback: (event: { sessionId: string; targetDeviceId: string; message: string; retrying?: boolean; subscriptionId?: string }) => void): () => void {
     return api.listen('account://session-sync-error', callback);
   }
 

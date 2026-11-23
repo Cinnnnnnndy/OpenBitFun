@@ -14,6 +14,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock as StdRwLock};
 use tokio::sync::{broadcast, oneshot, Mutex};
 
+mod command;
+
 const PERMISSION_EVENT_CAPACITY: usize = 128;
 
 /// Per-submission override for the interactive ask handling policy.
@@ -33,6 +35,11 @@ pub const AUTO_APPROVE_ASK_CONTEXT_KEY: &str = "auto_approve_ask";
 /// delegated subagents, reads this single value instead of re-resolving the
 /// layers with partial context.
 pub const PERMISSION_MODE_CONTEXT_KEY: &str = "permission_mode";
+
+/// Invocation-scoped approval strategy override. This is separate from the
+/// permission mode because `auto_approve` means immediate allow while model
+/// approval still evaluates every request.
+pub const PERMISSION_APPROVAL_STRATEGY_CONTEXT_KEY: &str = "permission_approval_strategy";
 
 /// Provider-neutral result of applying resolved policy and remembered grants.
 ///
@@ -78,6 +85,20 @@ fn permission_intent_effect(
     grants: &[PermissionGrant],
     case_sensitivity: PermissionResourceCaseSensitivity,
 ) -> PermissionEffect {
+    if intent.action == "process.execute" {
+        let effect = command::command_effect(intent, policy, grants, case_sensitivity);
+        return if effect != PermissionEffect::Deny
+            && intent
+                .display_metadata
+                .get("requiresFreshApproval")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false)
+        {
+            PermissionEffect::Ask
+        } else {
+            effect
+        };
+    }
     let evaluator = PermissionEvaluator::new(case_sensitivity);
     let mut aggregate = PermissionEffect::Allow;
 

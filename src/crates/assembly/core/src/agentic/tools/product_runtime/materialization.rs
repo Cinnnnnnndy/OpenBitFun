@@ -35,6 +35,7 @@ const PRODUCT_TOOL_REGISTRATION_ORDER: &[&str] = &[
     "ListModels",
     "Task",
     "AgentSpawn",
+    "AgentFork",
     "AgentSendInput",
     "AgentControl",
     "AgentList",
@@ -64,7 +65,6 @@ const PRODUCT_TOOL_REGISTRATION_ORDER: &[&str] = &[
     "ReadMCPResource",
     "ListMCPPrompts",
     "GetMCPPrompt",
-    "GenerativeUI",
     "Worktree",
     "ReviewPlatform",
     "InitMiniApp",
@@ -72,7 +72,6 @@ const PRODUCT_TOOL_REGISTRATION_ORDER: &[&str] = &[
     "PublishMiniApp",
     "MiniAppBrowser",
     "FrontendWorkbench",
-    "PublishAppearance",
     "PageManage",
     "PageDeploy",
     "PagePublish",
@@ -128,6 +127,7 @@ impl StaticToolProviderFactory<dyn Tool> for ProductConcreteToolFactory {
             "OpenBitFunControl" => Some(Arc::new(OpenBitFunControlTool::new())),
             "Task" => Some(Arc::new(TaskTool::new())),
             "AgentSpawn" => Some(Arc::new(AgentSpawnTool::new())),
+            "AgentFork" => Some(Arc::new(AgentForkTool::new())),
             "AgentSendInput" => Some(Arc::new(AgentSendInputTool::new())),
             "AgentControl" => Some(Arc::new(AgentControlTool::new())),
             "AgentList" => Some(Arc::new(AgentListTool::new())),
@@ -166,8 +166,6 @@ impl StaticToolProviderFactory<dyn Tool> for ProductConcreteToolFactory {
             "ListMCPPrompts" => Some(Arc::new(ListMCPPromptsTool::new())),
             #[cfg(feature = "tools-mcp")]
             "GetMCPPrompt" => Some(Arc::new(GetMCPPromptTool::new())),
-            #[cfg(feature = "tools-miniapp")]
-            "GenerativeUI" => Some(Arc::new(GenerativeUITool::new())),
             #[cfg(feature = "tools-git")]
             "Worktree" => Some(Arc::new(WorktreeTool::new())),
             #[cfg(feature = "tools-git")]
@@ -182,8 +180,6 @@ impl StaticToolProviderFactory<dyn Tool> for ProductConcreteToolFactory {
             "MiniAppBrowser" => Some(Arc::new(MiniAppBrowserTool::new())),
             #[cfg(feature = "tools-creation")]
             "FrontendWorkbench" => Some(Arc::new(FrontendWorkbenchTool::new())),
-            #[cfg(feature = "tools-miniapp")]
-            "PublishAppearance" => Some(Arc::new(PublishAppearanceTool::new())),
             #[cfg(feature = "tools-pages")]
             "PageManage" => Some(Arc::new(PageManageTool::new())),
             #[cfg(feature = "tools-pages")]

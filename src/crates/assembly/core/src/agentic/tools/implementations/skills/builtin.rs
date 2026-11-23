@@ -17,7 +17,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::fs;
 use tokio::task;
 
-static BUILTIN_SKILLS_DIR: Dir = include_dir!("$CARGO_MANIFEST_DIR/builtin_skills");
+static BUILTIN_SKILLS_DIR: Dir = include_dir!("$OPENBITFUN_EMBEDDED_SKILLS_DIR");
 static BUILTIN_SKILL_DIR_NAMES: OnceLock<HashSet<String>> = OnceLock::new();
 include!(concat!(env!("OUT_DIR"), "/embedded_builtin_skills.rs"));
 
@@ -557,28 +557,6 @@ mod tests {
             dir.dirs().next().is_none(),
             "dynamic agent-browser stub must not retain static reference/template directories"
         );
-    }
-
-    #[test]
-    fn create_openbitfun_skin_embeds_authoring_contract_and_example() {
-        let skill = embedded_skill_text("create-openbitfun-skin/SKILL.md");
-        assert!(skill.contains("name: create-openbitfun-skin"));
-
-        let registry =
-            embedded_skill_text("create-openbitfun-skin/references/appearance-registry.json");
-        assert!(registry.contains("schemaVersion"));
-
-        let example = embedded_skill_text(
-            "create-openbitfun-skin/examples/cinematic-animated-wallpaper/SKILL.md",
-        );
-        assert!(example.contains("cinematic animated-wallpaper"));
-
-        let metadata = embedded_skill_text("create-openbitfun-skin/agents/openai.yaml");
-        assert!(metadata.contains("display_name: \"OpenBitFun Appearance Manual\""));
-
-        let workflow =
-            embedded_skill_text("create-openbitfun-skin/references/authoring-workflow.md");
-        assert!(workflow.contains("Bump it whenever the manifest"));
     }
 
     #[test]

@@ -234,6 +234,71 @@ src-tauri/target/release-fast/openbitfun-installer.exe
 
 ## Customization guide
 
+### Installation, updates and recovery
+
+New installations use the current-user scope. The installer does not offer a
+scope switch or change a selected directory when editing shortcut preferences.
+An existing installation keeps its directory and scope, including legacy
+machine-wide installations. Updates to protected
+directories request elevation automatically. Canceling authorization leaves the
+existing application in place. Model and theme preferences remain with the
+original user, including when a different administrator approves maintenance.
+
+Multiple installation directories can coexist. New directories have separate
+Windows uninstall entries and shortcuts labeled with their location and a stable
+directory identifier. Updating or uninstalling one directory preserves the
+others. Legacy uninstall entries and shortcuts remain supported. Model settings
+and sessions continue to use the existing user data directory; installing another
+copy does not create an isolated user profile.
+
+Installations record their managed files in `.openbitfun-installed.json`.
+Updates and uninstallations preserve other files and user data. A running or
+locked file produces an error and restores earlier changes. Close OpenBitFun
+before retrying. Known downgrades are refused using stored and executable version
+information; reinstalling the same version is allowed.
+
+If maintenance is interrupted, rerun the installer against the same directory.
+Its `.openbitfun-maintenance` journal restores incomplete changes before a new
+operation. An unreadable journal or failed recovery is retained with an error;
+keep that directory for repair. A cleanup warning means installation completed,
+but maintenance files remain. Retry maintenance before deleting recovery data.
+
+Windows in-app updates use the same signed standalone installer. The application
+exits after the maintenance worker is ready. Installation failures after exit
+are reported by a native dialog and retained for the next application launch.
+The restarted application runs under the original user's account.
+
+Native maintenance also accepts legacy NSIS arguments: `/D=` selects an install
+directory, `/S` requests silent execution, `/P` requests passive execution, and
+`_?=` selects the uninstall directory. Uninstall entrypoints retain their operation
+when `/UPDATE` is present. `/R /ARGS ...` restarts with the original application
+arguments and user token. Native `--quiet` keeps its `0`/`1`/`2` outcome contract;
+legacy NSIS uninstall callers receive `0` after successful removal with deferred
+cleanup, with the committed journal retained for a later cleanup retry.
+
+The application and installer share Windows scope detection, including legacy
+HKLM records without a new inventory. Same-directory HKCU/HKLM duplicates are
+both backed up and removed on uninstall; records for other directories remain.
+Protected installation or maintenance-lock locations request elevation before
+publication. Cleanup removes the transaction journal last, so cleanup failures
+remain retryable.
+
+Uninstall can be entered through Windows Settings, the registered uninstall
+command, or `uninstall.exe` in the installation directory. `--quiet` selects
+non-interactive removal. Uninstall progress reflects native operations and the
+window remains open on failure. User configuration, sessions and workspaces are
+preserved. Maintenance runs without WebView2 when invoked in native mode;
+the interactive installer offers the signed Microsoft WebView2 bootstrap when
+the runtime is absent.
+
+Quiet maintenance returns exit code `0` on success, `1` on failure, and `2` when
+removal committed but backup cleanup remains. Windows can rename an executing
+uninstaller but cannot delete its image until it exits. For exit `2`, run the
+downloaded installer from outside the installation directory with
+`--uninstall "C:\path\to\OpenBitFun" --quiet` to finish cleanup. Do not delete an
+uncommitted recovery journal manually. Interactive uninstall also has a native
+fallback when WebView2 is absent and does not require downloading a runtime.
+
 ### Changing the UI Theme
 
 Shared light/dark values come from `@openbitfun/theme-openbitfun`. Installer-only named presets live in

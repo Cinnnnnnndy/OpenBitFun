@@ -94,6 +94,27 @@ pub struct DeepReviewQueueState {
     pub session_concurrency_high: bool,
 }
 
+/// Workspace binding of the session that owns a Turn. A surface that has not
+/// loaded the session (remote control, a bot, another device) uses it to
+/// attribute the Turn to its owning workspace instead of guessing one.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SessionWorkspaceBinding {
+    /// Execution root of the session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_path: Option<String>,
+    /// Main project root that owns persistence for the session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_workspace_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_target: Option<SessionExecutionTarget>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_connection_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_ssh_host: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum AgenticEvent {
@@ -182,6 +203,9 @@ pub enum AgenticEvent {
         original_user_input: Option<String>,
         /// Image metadata JSON for UI rendering (id, name, data_url, mime_type, image_path)
         user_message_metadata: Option<serde_json::Value>,
+        /// Owning workspace of the session. Absent from older hosts.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        session_binding: Option<SessionWorkspaceBinding>,
     },
 
     /// Low-frequency linking event that associates a hidden subagent session
@@ -534,10 +558,7 @@ pub enum ToolEventData {
         identity: ToolEventIdentity,
         params: String,
     },
-    /// Native OpenUI Lang source bytes emitted while a GenerativeUI call is
-    /// still being assembled. The event deliberately carries only the
-    /// decoded source delta; the provider's enclosing tool-call JSON is not
-    /// part of the rendering contract.
+    /// Decoded source delta from a historical GenerativeUI tool or an older peer.
     GenUIStream {
         #[serde(flatten)]
         identity: ToolEventIdentity,

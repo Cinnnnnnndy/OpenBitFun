@@ -52,6 +52,7 @@ const PROMINENT_TOOL_CARD_NAMES = new Set([
   'Task',
   'LaunchReviewAgent',
   'AgentSpawn',
+  'AgentFork',
   'submit_code_review',
   'ContextCompression',
   'ReviewSessionSummary',
@@ -225,6 +226,16 @@ const TOOL_CARD_DEFINITIONS: Record<string, ToolCardDefinition> = {
   },
   'AgentSpawn': {
     toolName: 'AgentSpawn',
+    displayName: 'Launch Agent',
+    icon: '',
+    requiresConfirmation: false,
+    resultDisplayType: 'detailed',
+    description: 'Launch a background agent',
+    displayMode: 'detailed',
+    primaryColor: APPEARANCE_DOMAIN_TOKENS.toolIdentity.assistantAction
+  },
+  'AgentFork': {
+    toolName: 'AgentFork',
     displayName: 'Launch Agent',
     icon: '',
     requiresConfirmation: false,
@@ -494,16 +505,6 @@ const TOOL_CARD_DEFINITIONS: Record<string, ToolCardDefinition> = {
     displayMode: 'standard',
     primaryColor: APPEARANCE_DOMAIN_TOKENS.miniApp
   },
-  'PublishAppearance': {
-    toolName: 'PublishAppearance',
-    displayName: 'Publish Skin',
-    icon: 'APP',
-    requiresConfirmation: false,
-    resultDisplayType: 'detailed',
-    description: 'Submit an Appearance package to the Skin market for review',
-    displayMode: 'standard',
-    primaryColor: 'var(--openbitfun-color-accent-hover)'
-  },
   'PageManage': {
     toolName: 'PageManage',
     displayName: 'Manage Pages',
@@ -641,7 +642,7 @@ export function getToolItemCardConfig(
     ? getOpenBitFunControlInput(effective)
     : effective.toolName === 'ControlHub' ? getControlHubInput(effective)
       : isSemanticBuiltinTool(effective.toolName) ? getBuiltinToolInput(effective) : effective.toolCall?.input);
-  // Approval is a grouping boundary, but does not change an ambient card's skin.
+  // Approval is a grouping boundary, but does not change an ambient card's appearance.
   const attention = isShellToolName(effective.toolName) && effective.status === 'rejected'
     ? 'prominent'
     : effective.toolName === 'Task' && effective.status === 'cancelled'

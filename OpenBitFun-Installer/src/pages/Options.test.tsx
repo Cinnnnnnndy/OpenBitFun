@@ -5,6 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { Options } from './Options';
 import { ThemeSetup } from './ThemeSetup';
 import { WindowControls } from '../components/WindowControls';
+import { invoke } from '@tauri-apps/api/core';
 import type { InstallOptions } from '../types/installer';
 
 const mocks = vi.hoisted(() => ({ minimize: vi.fn(), close: vi.fn() }));
@@ -96,4 +97,35 @@ it('connects launch-after-install on the theme page and preserves window control
   act(() => buttons[1].click());
   expect(mocks.minimize).toHaveBeenCalledTimes(1);
   expect(mocks.close).toHaveBeenCalledTimes(1);
+});
+
+it('keeps the theme page open and shows the error if saving preferences fails', async () => {
+  vi.mocked(invoke).mockRejectedValueOnce('Preferences are read-only');
+  const close = vi.fn(); const launch = vi.fn();
+  await act(async () => root.render(<ThemeSetup options={initial} setOptions={vi.fn()} onLaunch={launch} onClose={close} />));
+  const finish = [...container.querySelectorAll('button')].find(button => button.textContent?.includes('complete.finish'))!;
+  await act(async () => finish.click());
+  expect(container.querySelector('[role="alert"]')?.textContent).toBe('Preferences are read-only');
+  expect(close).not.toHaveBeenCalled(); expect(launch).not.toHaveBeenCalled();
+});
+
+it('offers shortcut preferences without a scope switch or changing the custom directory', async () => {
+  const changed = vi.fn(); const install = vi.fn();
+  await act(async () => root.render(<Options options={initial} setOptions={changed} diskSpace={null} error={null}
+    refreshDiskSpace={vi.fn()} existingInstall={null} onLaunchRegisteredUninstaller={vi.fn()}
+    onBack={vi.fn()} onInstall={install} isInstalling={false} clearInstallError={vi.fn()} />));
+  const labels = [...container.querySelectorAll<HTMLLabelElement>('[data-openbitfun-component="checkbox"]')];
+  expect(labels).toHaveLength(2);
+  expect(container.textContent).not.toContain('options.allUsers');
+  for (const label of labels) {
+    act(() => label.click());
+    const update = changed.mock.lastCall![0];
+    expect(update(initial).installPath).toBe(initial.installPath);
+    expect(update(initial).allUsers).toBeUndefined();
+  }
+  expect(invoke).not.toHaveBeenCalled();
+  const installButton = [...container.querySelectorAll('button')].find(button => button.textContent === 'options.install')!;
+  expect(installButton.disabled).toBe(false);
+  await act(async () => installButton.click());
+  expect(install).toHaveBeenCalledOnce();
 });

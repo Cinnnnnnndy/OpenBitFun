@@ -21,8 +21,8 @@ export function AppUpdatePanel() {
   const skipped = Boolean(target && target === state.skippedVersion);
   const busy = !state.initialized || state.checkStatus === 'checking' || downloading || state.status === 'installing';
   const versionChanged = isUpdateVersionChangedError(state.error);
-  const canDownload = !versionChanged && Boolean((candidate && candidate !== state.version) || state.error);
-  const canSkip = Boolean(target && target !== state.version);
+  const canDownload = !state.rebootRequired && !versionChanged && Boolean((candidate && candidate !== state.version) || state.error);
+  const canSkip = !state.rebootRequired && Boolean(target && target !== state.version);
   const fraction = getUpdateDownloadFraction(state.progress);
   const percent = fraction == null ? null : Math.round(fraction * 100);
   const productName = getVersionInfo().name;
@@ -30,7 +30,7 @@ export function AppUpdatePanel() {
     : state.checkStatus === 'latest' && !candidate && !state.version ? t('update.noUpdate') : null;
 
   return (
-    // Preserve the published Appearance ancestry for existing update skins.
+    // Preserve the published Appearance ancestry for existing update customizations.
     <section className="openbitfun-update-details" data-testid="app-update-panel"
       data-openbitfun-component="about-dialog" data-openbitfun-part="updateCard"
       data-openbitfun-state={state.checkStatus === 'checking' ? 'checking' : downloading ? 'downloading'
@@ -55,11 +55,12 @@ export function AppUpdatePanel() {
       </DialogHeader>
       <DialogBody className="openbitfun-update-details__body">
         <div className="openbitfun-update-panel" data-openbitfun-component="update" data-openbitfun-part="panel">
-          {(status || state.error || state.checkError) && <div className="openbitfun-update-panel__feedback"
+          {(status || state.error || state.checkError || state.rebootRequired) && <div className="openbitfun-update-panel__feedback"
             data-openbitfun-component="about-dialog" data-openbitfun-part="updateFeedback">
             {status && <p className="openbitfun-update-panel__status" role="status"
               data-openbitfun-component="update" data-openbitfun-part="panelStatus">{status}</p>}
             {state.error && <Alert tone="error" showIcon message={formatUpdateInstallError(state.error, t)} />}
+            {state.rebootRequired && <Alert tone="warning" showIcon message={t('update.systemRestartMessage')} />}
             {state.checkError && <Alert tone="error" showIcon message={formatUpdateInstallError(state.checkError, t)} />}
           </div>}
           {releaseNotes ? (
@@ -87,6 +88,7 @@ export function AppUpdatePanel() {
       <DialogFooter separator className="openbitfun-update-details__footer">
         <div className="openbitfun-update-panel__actions" data-openbitfun-component="about-dialog" data-openbitfun-part="updateActions">
           {downloading ? (
+            <>
             <div className="openbitfun-update-progress__bar openbitfun-update-panel__progress"
               role="progressbar" aria-label={t('update.downloadingTitle')}
               aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent ?? undefined}
@@ -95,6 +97,8 @@ export function AppUpdatePanel() {
                 style={fraction == null ? undefined : { transform: `scaleX(${fraction})` }}
                 data-openbitfun-component="about-dialog" data-openbitfun-part="progressFill" />
             </div>
+            <Button variant="fill" size="md" onClick={() => void state.cancelDownload()}>{t('actions.cancel')}</Button>
+            </>
           ) : (
             <>
               {canSkip && target && <Button size="md" variant="fill" disabled={busy}
@@ -110,8 +114,8 @@ export function AppUpdatePanel() {
                   onClick={() => void state.checkForUpdates()}>
                   {t(state.checkStatus === 'checking' ? 'update.checking' : 'update.checkForUpdates')}
                 </Button>}
-                {state.version && <Button size="md" variant="primary" disabled={busy} onClick={state.requestInstall}>
-                  {t(state.status === 'installing' ? 'update.installing' : 'update.installAndRestart')}
+                {state.version && <Button size="md" variant="primary" disabled={busy || state.rebootRequired} onClick={state.requestInstall}>
+                  {t(state.rebootRequired ? 'update.systemRestartRequired' : state.status === 'installing' ? 'update.installing' : 'update.installAndRestart')}
                   {candidate && candidate !== state.version && ` · v${state.version}`}
                 </Button>}
                 {!canDownload && !canSkip && !versionChanged && !state.version && <Button size="md" variant="fill" onClick={state.closeDetails}>

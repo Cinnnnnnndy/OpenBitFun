@@ -7,20 +7,27 @@ use std::time::{Duration, Instant};
 use serde_json::{json, Value};
 use tokio::sync::Mutex as AsyncMutex;
 
-use openbitfun_agent_runtime::sdk::AgentUserAnswersRequest;
+use openbitfun_agent_runtime::sdk::{AgentUserAnswersRequest, PortErrorKind, RuntimeError};
 use openbitfun_runtime_ports::{
-    AgentDialogTurnRequest, AgentInputAttachment, AgentSubmissionSource,
-    AgentTurnCancellationRequest, DialogSubmissionPolicy, DialogTriggerSource,
+    AgentDialogTurnRecoveryRequest, AgentDialogTurnRequest, AgentInputAttachment,
+    AgentSubmissionSource, AgentTurnCancellationRequest, AgentTurnInterruptionRequest,
+    DialogSubmissionPolicy, DialogTriggerSource,
 };
 
-use crate::peer_host::args::{get_string, optional_string, request_value};
+use crate::peer_host::args::{get_string, optional_bool, optional_string, request_value};
 use crate::peer_host::state::{PeerHostState, PeerTurnKey};
 
-/// How long a settled submission stays replayable. The controller's own
-/// bounded retry window is far shorter; this only has to outlive it.
-const DIALOG_SUBMISSION_TTL: Duration = Duration::from_secs(120);
+/// How long an accepted submission stays replayable.
+///
+/// It must outlive the controller's whole retry budget for one idempotent
+/// submission: five attempts of up to 120 s each plus backoff, about 10.2
+/// minutes. A shorter TTL lets a late retry miss the cache and reach the
+/// Runtime, which then refuses the already-running Turn id.
+const DIALOG_SUBMISSION_TTL: Duration = Duration::from_secs(15 * 60);
 const MAX_CACHED_DIALOG_SUBMISSIONS: usize = 128;
 
+/// The settled outcome of one submission the Runtime admitted. A refusal
+/// before admission leaves it empty, so an explicit retry runs again.
 type DialogSubmissionOutcome = Arc<AsyncMutex<Option<Result<Value, String>>>>;
 
 struct CachedDialogSubmission {
@@ -143,16 +150,105 @@ pub(crate) async fn start_dialog_turn(
         return submit_dialog_turn(state, args).await;
     };
     let outcome_slot = dialog_submission_slot(&session_id, &turn_id)?;
-    let mut outcome = outcome_slot.lock().await;
+    settle_dialog_submission(&outcome_slot, || submit_admitted_dialog_turn(state, args)).await
+}
+
+/// A dialog submission failure, and whether the Runtime had already admitted
+/// the Turn (a retry could then only meet its duplicate-id refusal).
+#[derive(Debug)]
+struct DialogSubmissionFailure {
+    message: String,
+    admitted: bool,
+}
+
+impl DialogSubmissionFailure {
+    fn before_admission(message: String) -> Self {
+        Self {
+            message,
+            admitted: false,
+        }
+    }
+
+    fn after_admission(message: String) -> Self {
+        Self {
+            message,
+            admitted: true,
+        }
+    }
+}
+
+impl From<String> for DialogSubmissionFailure {
+    fn from(message: String) -> Self {
+        Self::before_admission(message)
+    }
+}
+
+/// Run one `(sessionId, turnId)` submission at most once while it can still
+/// be admitted.
+///
+/// A replay waits for the attempt in flight and observes its settled outcome.
+/// A refusal before admission (an unavailable model, a lost event stream) is
+/// not recorded: the Turn never started, so an explicit retry after a
+/// transient failure must run again rather than replay the old error.
+async fn settle_dialog_submission<F, Fut>(
+    slot: &DialogSubmissionOutcome,
+    submit: F,
+) -> Result<Value, String>
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = Result<Value, DialogSubmissionFailure>>,
+{
+    let mut outcome = slot.lock().await;
     if let Some(settled) = outcome.as_ref() {
         return settled.clone();
     }
-    let result = submit_dialog_turn(state, args).await;
-    *outcome = Some(result.clone());
+    let (result, record) = match submit().await {
+        Ok(value) => (Ok(value), true),
+        Err(failure) => (Err(failure.message), failure.admitted),
+    };
+    let result = accept_duplicate_submission(result);
+    if record || result.is_ok() {
+        *outcome = Some(result.clone());
+    }
     result
 }
 
+/// Stable prefix of the Runtime's refusal of a Turn id it already admitted
+/// (`DIALOG_TURN_ID_ALREADY_SETTLED_MESSAGE` in the core scheduler).
+const DIALOG_TURN_ALREADY_ADMITTED: &str = "Dialog turn ID is already active or completed";
+/// This host's own tracker refusal for a Turn id it is already running.
+const PEER_TURN_ALREADY_TRACKED: &str = "Peer turn is already tracked";
+
+/// A refusal of the same `(sessionId, turnId)` means an earlier attempt of
+/// this submission was admitted, typically when a late controller retry missed
+/// the outcome cache. Report it as accepted instead of failing a running Turn.
+fn accept_duplicate_submission(result: Result<Value, String>) -> Result<Value, String> {
+    match result {
+        Err(error)
+            if error.contains(DIALOG_TURN_ALREADY_ADMITTED)
+                || error.contains(PEER_TURN_ALREADY_TRACKED) =>
+        {
+            tracing::info!("Peer dialog submission was already admitted; reporting it as accepted");
+            Ok(json!({
+                "success": true,
+                "message": "Dialog turn already accepted",
+                "duplicate": true,
+            }))
+        }
+        other => other,
+    }
+}
+
 async fn submit_dialog_turn(state: &PeerHostState, args: &Value) -> Result<Value, String> {
+    submit_admitted_dialog_turn(state, args)
+        .await
+        .map_err(|failure| failure.message)
+}
+
+async fn submit_admitted_dialog_turn(
+    state: &PeerHostState,
+    args: &Value,
+) -> Result<Value, DialogSubmissionFailure> {
     let request = request_value(args);
     let session_id = get_string(request, "sessionId")?;
     let user_input = get_string(request, "userInput")?;
@@ -184,7 +280,11 @@ async fn submit_dialog_turn(state: &PeerHostState, args: &Value) -> Result<Value
         .is_event_stream_generation_current(stream_generation)
     {
         state.turns.finish_turn(&turn);
-        return Err("Peer event stream continuity was lost before dialog submission".to_string());
+        return Err(
+            "Peer event stream continuity was lost before dialog submission"
+                .to_string()
+                .into(),
+        );
     }
 
     let policy = DialogSubmissionPolicy::for_source(DialogTriggerSource::DesktopUi);
@@ -211,10 +311,10 @@ async fn submit_dialog_turn(state: &PeerHostState, args: &Value) -> Result<Value
         .await;
     if let Err(error) = submit_result {
         state.turns.finish_turn(&turn);
-        return Err(format!(
+        return Err(DialogSubmissionFailure::before_admission(format!(
             "Failed to start dialog turn: {}",
             error.into_message()
-        ));
+        )));
     }
     if !state
         .turns
@@ -234,11 +334,13 @@ async fn submit_dialog_turn(state: &PeerHostState, args: &Value) -> Result<Value
             .await;
         if let Err(error) = cancellation {
             let error = error.into_message();
-            return Err(format!(
+            return Err(DialogSubmissionFailure::after_admission(format!(
                 "Peer continuity was lost after dialog submission and cancellation could not be confirmed: session_id={session_id}, turn_id={turn_id}, error={error}"
-            ));
+            )));
         }
-        return Err("Peer event stream lost continuity while starting the dialog turn".to_string());
+        return Err(DialogSubmissionFailure::after_admission(
+            "Peer event stream lost continuity while starting the dialog turn".to_string(),
+        ));
     }
 
     Ok(json!({ "success": true, "message": "Dialog turn started" }))
@@ -269,6 +371,163 @@ pub(crate) async fn cancel_dialog_turn(
         .await
         .map_err(|error| format!("Failed to cancel dialog turn: {}", error.into_message()))?;
     Ok(json!({ "success": true }))
+}
+
+/// Stop a Turn so it can be resumed later, like Desktop `interrupt_dialog_turn`.
+///
+/// Sessions the runtime cannot interrupt recoverably (external routes, Goal,
+/// remote, non-standard sessions) or an interruption that times out fall back
+/// to the hard cancellation `cancel_dialog_turn` performs, so Stop always works.
+pub(crate) async fn interrupt_dialog_turn(
+    state: &PeerHostState,
+    args: &Value,
+) -> Result<Value, String> {
+    let request = request_value(args);
+    let session_id = get_string(request, "sessionId")?;
+    let dialog_turn_id = get_string(request, "dialogTurnId")?;
+    let interruption = state
+        .agent_runtime
+        .interrupt_turn(AgentTurnInterruptionRequest {
+            session_id: session_id.clone(),
+            turn_id: dialog_turn_id.clone(),
+            source: Some(AgentSubmissionSource::Cli),
+            wait_timeout_ms: Some(30_000),
+        })
+        .await;
+    match interruption {
+        Ok(_) => Ok(Value::Null),
+        Err(RuntimeError::Port(error))
+            if matches!(
+                error.kind,
+                PortErrorKind::InvalidRequest | PortErrorKind::Timeout
+            ) =>
+        {
+            let reason = if error.kind == PortErrorKind::Timeout {
+                "recoverable interruption timed out"
+            } else {
+                "recoverable interruption unavailable"
+            };
+            state
+                .agent_runtime
+                .cancel_turn(AgentTurnCancellationRequest {
+                    session_id,
+                    turn_id: Some(dialog_turn_id),
+                    source: Some(AgentSubmissionSource::Cli),
+                    requester_session_id: None,
+                    reason: Some(reason.to_string()),
+                    wait_timeout_ms: None,
+                    cancel_descendants: true,
+                })
+                .await
+                .map(|_| Value::Null)
+                .map_err(|error| format!("Failed to cancel dialog turn: {}", error.into_message()))
+        }
+        Err(error) => Err(format!(
+            "Failed to interrupt dialog turn: {}",
+            error.into_message()
+        )),
+    }
+}
+
+/// Resume a Turn that `interrupt_dialog_turn` stopped, like Desktop
+/// `recover_interrupted_dialog_turn`. The runtime compares the caller's
+/// execution generation, so a stale controller cannot resume twice.
+pub(crate) async fn recover_interrupted_dialog_turn(
+    state: &PeerHostState,
+    args: &Value,
+) -> Result<Value, String> {
+    let request = request_value(args);
+    let execution_generation = request
+        .get("executionGeneration")
+        .or_else(|| request.get("execution_generation"))
+        .and_then(Value::as_u64)
+        .and_then(|value| u32::try_from(value).ok())
+        .ok_or("executionGeneration is required")?;
+    let outcome = state
+        .agent_runtime
+        .recover_interrupted_turn(AgentDialogTurnRecoveryRequest {
+            session_id: get_string(request, "sessionId")?,
+            turn_id: get_string(request, "dialogTurnId")?,
+            execution_generation,
+            workspace_path: optional_string(request, "workspacePath"),
+            workspace_id: optional_string(request, "workspaceId"),
+            remote_connection_id: optional_string(request, "remoteConnectionId"),
+            remote_ssh_host: optional_string(request, "remoteSshHost"),
+        })
+        .await
+        .map_err(|error| {
+            format!(
+                "Failed to recover interrupted dialog turn: {}",
+                error.into_message()
+            )
+        })?;
+    serde_json::to_value(outcome).map_err(|error| error.to_string())
+}
+
+/// Compact a session's context on request (`/compact`), like Desktop
+/// `compact_session`. The compaction runs as a detached Turn whose events reach
+/// the controller through the normal session stream.
+pub(crate) async fn compact_session(state: &PeerHostState, args: &Value) -> Result<Value, String> {
+    let request = request_value(args);
+    let session_id = get_string(request, "sessionId")?;
+    let session_id = session_id.trim().to_string();
+    if session_id.is_empty() {
+        return Err("session_id is required".to_string());
+    }
+    let coordinator = openbitfun_core::agentic::coordination::get_global_coordinator()
+        .ok_or("Conversation coordinator is unavailable")?;
+    if coordinator
+        .get_session_manager()
+        .get_session(&session_id)
+        .is_none()
+    {
+        let storage = super::session::resolved_session_storage_path(state, request).await?;
+        coordinator
+            .restore_session_from_storage_path(&storage, &session_id)
+            .await
+            .map_err(|error| format!("Failed to restore session before compacting: {error}"))?;
+    }
+    let turn_id = coordinator
+        .start_manual_compaction_detached(session_id, optional_string(request, "turnId"))
+        .await
+        .map_err(|error| format!("Failed to compact session: {error}"))?;
+    Ok(json!({
+        "success": true,
+        "message": "Session compaction accepted",
+        "turnId": turn_id,
+    }))
+}
+
+/// Cancel whatever Turn the Session is running, without naming it.
+///
+/// Mirrors the Desktop `cancel_session` command and its response shape. A
+/// controller needs it when it does not know the active Turn id, for example
+/// closing a `/btw` side question whose first events have not arrived yet.
+/// Like `cancel_dialog_turn`, cancellation follows visibility, not ownership.
+pub(crate) async fn cancel_session(state: &PeerHostState, args: &Value) -> Result<Value, String> {
+    let request = request_value(args);
+    let session_id = get_string(request, "sessionId")?;
+    if session_id.trim().is_empty() {
+        return Err("sessionId is required".to_string());
+    }
+    let result = state
+        .agent_runtime
+        .cancel_turn(AgentTurnCancellationRequest {
+            session_id,
+            turn_id: None,
+            source: Some(AgentSubmissionSource::Cli),
+            requester_session_id: None,
+            reason: Some("Peer controller requested cancellation".to_string()),
+            wait_timeout_ms: Some(5_000),
+            // Tree cancellation opts out so a parent does not stop its children.
+            cancel_descendants: optional_bool(request, "cancelDescendants").unwrap_or(true),
+        })
+        .await
+        .map_err(|error| format!("Failed to cancel session: {}", error.into_message()))?;
+    Ok(json!({
+        "cancelled": result.requested,
+        "dialogTurnId": result.turn_id,
+    }))
 }
 
 /// Cancel a single running tool execution on this host.
@@ -371,7 +630,39 @@ pub(crate) async fn submit_user_answers(
 mod tests {
     use serde_json::json;
 
-    use super::{dialog_submission_slot, parse_user_answer_submission, peer_dialog_metadata};
+    use super::{
+        accept_duplicate_submission, dialog_submission_slot, parse_user_answer_submission,
+        peer_dialog_metadata, settle_dialog_submission, DialogSubmissionFailure,
+        DIALOG_SUBMISSION_TTL,
+    };
+
+    #[test]
+    fn submission_cache_outlives_the_controller_retry_budget() {
+        // Five 120 s attempts plus 0.5 + 1 + 2 + 4 s of backoff.
+        let controller_budget = std::time::Duration::from_millis(5 * 120_000 + 7_500);
+        assert!(DIALOG_SUBMISSION_TTL > controller_budget);
+    }
+
+    #[test]
+    fn a_retry_of_an_admitted_turn_is_reported_as_accepted() {
+        for error in [
+            "Failed to start dialog turn: Dialog turn ID is already active or completed: session_id=s, turn_id=t",
+            "Peer turn is already tracked",
+        ] {
+            let accepted = accept_duplicate_submission(Err(error.to_string()))
+                .expect("duplicate is accepted");
+            assert_eq!(accepted["success"], json!(true));
+            assert_eq!(accepted["duplicate"], json!(true));
+        }
+        assert_eq!(
+            accept_duplicate_submission(Err("Peer event stream is closed".to_string())),
+            Err("Peer event stream is closed".to_string())
+        );
+        assert_eq!(
+            accept_duplicate_submission(Ok(json!({ "success": true }))),
+            Ok(json!({ "success": true }))
+        );
+    }
 
     #[test]
     fn user_answer_submission_accepts_legacy_and_session_scoped_payloads() {
@@ -469,6 +760,50 @@ mod tests {
         let other_session =
             dialog_submission_slot("session-2", "turn-1").expect("other session slot");
         assert!(other_session.lock().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn a_retry_after_a_refusal_before_admission_runs_again() {
+        let slot = dialog_submission_slot("retry-session", "turn-1").expect("slot");
+        let refused = settle_dialog_submission(&slot, || async {
+            Err(DialogSubmissionFailure::before_admission(
+                "Failed to start dialog turn: provider unavailable".to_string(),
+            ))
+        })
+        .await;
+        assert_eq!(
+            refused,
+            Err("Failed to start dialog turn: provider unavailable".to_string())
+        );
+        assert!(slot.lock().await.is_none(), "a refusal is not replayed");
+
+        let retried =
+            settle_dialog_submission(&slot, || async { Ok(json!({ "success": true })) }).await;
+        assert_eq!(retried, Ok(json!({ "success": true })));
+
+        // Once accepted, a further replay observes it instead of running.
+        let replay = settle_dialog_submission(&slot, || async {
+            panic!("an accepted submission must not run twice")
+        })
+        .await;
+        assert_eq!(replay, Ok(json!({ "success": true })));
+    }
+
+    #[tokio::test]
+    async fn a_failure_after_admission_is_replayed_as_it_happened() {
+        let slot = dialog_submission_slot("admitted-session", "turn-1").expect("slot");
+        let failed = settle_dialog_submission(&slot, || async {
+            Err(DialogSubmissionFailure::after_admission(
+                "Peer event stream lost continuity while starting the dialog turn".to_string(),
+            ))
+        })
+        .await;
+        let replay = settle_dialog_submission(&slot, || async {
+            panic!("an admitted submission must not run twice")
+        })
+        .await;
+        assert_eq!(replay, failed);
+        assert!(replay.is_err());
     }
 }
 

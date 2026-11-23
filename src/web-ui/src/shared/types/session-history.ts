@@ -59,7 +59,6 @@ export interface SessionCustomMetadata extends Record<string, unknown> {
   titleUserEdited?: boolean;
   titleKey?: string | null;
   titleParams?: Record<string, unknown> | null;
-  workspaceSessionNumber?: number;
 }
 
 export type SessionContextUsageSource = 'model_request' | 'context_compression';
@@ -239,7 +238,11 @@ export interface SessionTurnCatalog {
   entries: SessionTurnCatalogEntry[];
 }
 
+export type FigureBindingSnapshot = Record<string, { kind: 'json' | 'file' | 'image'; value: unknown }>;
+export type PublishedFigures = Record<string, { source: string; contentBytes: number; inspectionDeferred?: boolean; bindings?: FigureBindingSnapshot } | null>;
+
 export interface DialogTurnData {
+  publishedFigures?: PublishedFigures;
   turnId: string;
   turnIndex: number;
   sessionId: string;

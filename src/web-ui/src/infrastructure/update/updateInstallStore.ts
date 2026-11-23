@@ -22,6 +22,7 @@ export interface UpdateInstallState {
   status: UpdateInstallStatus;
   progress: UpdateDownloadProgressPayload;
   error: string | null;
+  rebootRequired: boolean;
   startedAt: number | null;
   /** The host's persisted package, which can survive a failed replacement download. */
   version: string | null;
@@ -49,6 +50,7 @@ export interface UpdateInstallState {
   getReminderAt: (stage: AppUpdateReminderStage, version: string) => number | null;
   deferReminder: (stage: AppUpdateReminderStage, version: string) => void;
   startInstall: (replacePending?: boolean, expectedVersion?: string) => Promise<void>;
+  cancelDownload: () => Promise<void>;
   requestInstall: () => void;
   confirmInstall: () => Promise<void>;
   deferInstall: () => void;
@@ -80,7 +82,7 @@ export function selectHasUpdateAttention(state: UpdateInstallState): boolean {
 }
 
 export const useUpdateInstallStore = create<UpdateInstallState>((set, get) => ({
-  status: 'idle', progress: initialProgress, error: null, startedAt: null,
+  status: 'idle', progress: initialProgress, error: null, rebootRequired: false, startedAt: null,
   version: null, downloadVersion: null, promptOpen: false, initialized: false,
   currentVersion: null, availableUpdate: null, checkStatus: 'idle', checkError: null,
   lastCheckedAt: null, lastCheckAttemptAt: null, skippedVersion: getSkippedVersion(),
@@ -108,7 +110,9 @@ export const useUpdateInstallStore = create<UpdateInstallState>((set, get) => ({
         log.warn('Failed to read the controller application version', current.reason);
       }
       if (pending.status === 'fulfilled') {
-        if (pending.value) set({ status: 'ready', version: pending.value.version });
+        if (pending.value) set({ status: 'ready', version: pending.value.version,
+          rebootRequired: pending.value.rebootRequired === true,
+          error: pending.value.rebootRequired ? null : pending.value.installError ?? null });
       } else {
         log.error('Failed to restore pending update', pending.reason);
         set({ status: 'error', error: errorText(pending.reason) });
@@ -196,7 +200,7 @@ export const useUpdateInstallStore = create<UpdateInstallState>((set, get) => ({
   // The shell calls this only when foreground presentation is available.
   presentPendingInstall: () => {
     const state = get();
-    if (state.status !== 'ready' || !state.version || state.error || state.downloadVersion || state.promptOpen || state.detailsOpen) return;
+    if (state.status !== 'ready' || state.rebootRequired || !state.version || state.error || state.downloadVersion || state.promptOpen || state.detailsOpen) return;
     const due = state.getReminderAt('ready', state.version);
     if (due !== null && due <= Date.now()) {
       set({ promptOpen: true, notice: null });
@@ -220,7 +224,9 @@ export const useUpdateInstallStore = create<UpdateInstallState>((set, get) => ({
 
   // Prepare a signed package only. No download outcome can authorize installation.
   startInstall: async (replacePending = false, expectedVersion) => {
+    if (get().rebootRequired) return;
     await get().initialize();
+    if (get().rebootRequired) return;
     if (['downloading', 'installing'].includes(get().status)) return;
     if (get().status === 'ready' && !replacePending) return;
     if (expectedVersion && get().currentVersion && !isNewerAppVersion(expectedVersion, get().currentVersion)) return;
@@ -239,6 +245,10 @@ export const useUpdateInstallStore = create<UpdateInstallState>((set, get) => ({
         promptOpen: false, notice: null, noticeRevision: state.noticeRevision + 1,
       }));
     } catch (error) {
+      if (/update download cancel(?:l)?ed/i.test(errorText(error))) {
+        set(state => ({ status: state.version ? 'ready' : 'idle', downloadVersion: null, error: null, notice: null, progress: initialProgress }));
+        return;
+      }
       log.error('Update download failed', error);
       set(state => ({ status: state.version ? 'ready' : 'error', error: errorText(error),
         notice: state.detailsOpen ? null : 'error', noticeRevision: state.noticeRevision + 1,
@@ -246,7 +256,14 @@ export const useUpdateInstallStore = create<UpdateInstallState>((set, get) => ({
     }
   },
 
+  cancelDownload: async () => {
+    if (get().status !== 'downloading') return;
+    try { await systemAPI.cancelUpdateDownload(); }
+    catch (error) { set({ error: errorText(error) }); }
+  },
+
   requestInstall: () => {
+    if (get().rebootRequired) { set({ detailsOpen: true, promptOpen: false }); return; }
     const { status, version, downloadVersion } = get();
     if (status !== 'ready' || !version) return;
     get().restoreReminder(version);
@@ -255,6 +272,7 @@ export const useUpdateInstallStore = create<UpdateInstallState>((set, get) => ({
     });
   },
   confirmInstall: async () => {
+    if (get().rebootRequired) return;
     const { status, version, promptOpen } = get();
     if (status !== 'ready' || !version || !promptOpen) return;
     set({ status: 'installing', error: null });
