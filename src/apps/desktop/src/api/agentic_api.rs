@@ -2679,7 +2679,7 @@ fn desktop_dialog_turn_request(
     })
 }
 
-fn desktop_user_message_metadata(
+pub(super) fn desktop_user_message_metadata(
     metadata: Option<serde_json::Value>,
 ) -> serde_json::Map<String, serde_json::Value> {
     match metadata {
