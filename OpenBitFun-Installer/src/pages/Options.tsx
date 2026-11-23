@@ -1,14 +1,12 @@
 import { Button, Checkbox, Disclosure, Field, Input, PageHeader } from '@openbitfun/ui';
 import { ArrowRight } from 'lucide-react';
-import { useEffect } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { invoke } from '@tauri-apps/api/core';
-import { open } from '@tauri-apps/plugin-dialog';
+import { installPathApi } from '../infrastructure/installPathApi';
 import { InstallErrorPanel } from '../components/InstallErrorPanel';
 import type {
   InstallOptions,
   DiskSpaceInfo,
-  InstallPathValidation,
   ExistingInstallation,
 } from '../types/installer';
 
@@ -42,28 +40,30 @@ export function Options({
   previewOnly = false,
 }: OptionsProps) {
   const { t } = useTranslation();
+  const pathOperation = useRef(false);
+  const [isSelectingPath, setIsSelectingPath] = useState(false);
+  const [pathError, setPathError] = useState<string | null>(null);
+  const shownError = error ?? pathError;
+  const busy = isInstalling || isSelectingPath;
 
   useEffect(() => {
     if (options.installPath) refreshDiskSpace(options.installPath);
   }, [options.installPath, refreshDiskSpace]);
 
   const handleBrowse = async () => {
-    const selected = await open({
-      directory: true,
-      defaultPath: options.installPath,
-      title: t('options.pathLabel'),
-    });
-    if (selected && typeof selected === 'string') {
-      try {
-        const validated = await invoke<InstallPathValidation>('validate_install_path', {
-          path: selected,
-        });
+    if (pathOperation.current) return;
+    pathOperation.current = true;
+    setIsSelectingPath(true);
+    setPathError(null);
+    try {
+      const selected = await installPathApi.chooseDirectory(options.installPath, t('options.pathLabel'));
+      if (selected && typeof selected === 'string') {
+        const validated = await installPathApi.validate(selected);
         setOptions((prev) => ({ ...prev, installPath: validated.installPath }));
-      } catch {
-        setOptions((prev) => ({ ...prev, installPath: selected }));
+        clearInstallError();
       }
-      clearInstallError();
-    }
+    } catch (error) { setPathError(String(error)); }
+    finally { pathOperation.current = false; setIsSelectingPath(false); }
   };
 
   const formatBytes = (bytes: number): string => {
@@ -93,7 +93,7 @@ export function Options({
                   <p className="selectable-path">{t('options.existingInstallLocation', { path: existingInstall.installLocation })}</p>
                 )}
                 {existingInstall.uninstallString && (
-                  <Button variant="text" size="sm" disabled={isInstalling || previewOnly} onClick={() => { void onLaunchRegisteredUninstaller(); }}>
+                  <Button variant="text" size="sm" disabled={busy || previewOnly} onClick={() => { void onLaunchRegisteredUninstaller(); }}>
                     {t('options.existingInstallRunUninstaller')}
                   </Button>
                 )}
@@ -106,19 +106,20 @@ export function Options({
               label={t('options.pathLabel')}
               controlWidth="fill"
               controlTrailing={
-                <Button variant="fill" disabled={isInstalling || previewOnly} onClick={handleBrowse}>{t('options.browse')}</Button>
+                <Button variant="fill" disabled={busy || previewOnly} onClick={handleBrowse}>{t('options.browse')}</Button>
               }
             >
               <Input
                 size="md"
                 className="path-input"
                 value={options.installPath}
-                disabled={isInstalling}
-                invalid={!!error}
+                disabled={busy}
+                invalid={!!shownError}
                 aria-describedby={diskSpace ? 'install-disk-space' : undefined}
                 onChange={(event) => {
                   setOptions((prev) => ({ ...prev, installPath: event.target.value }));
                   clearInstallError();
+                  setPathError(null);
                 }}
                 placeholder={t('options.pathPlaceholder')}
                 spellCheck={false}
@@ -133,7 +134,7 @@ export function Options({
                 {!diskSpace.sufficient && <span className="status-danger">{t('options.insufficientSpace')}</span>}
               </div>
             )}
-            {error && <InstallErrorPanel message={error} variant="options" />}
+            {shownError && <InstallErrorPanel message={shownError} variant="options" />}
           </section>
 
           <fieldset className="install-options">
@@ -155,15 +156,15 @@ export function Options({
       </div>
 
       <div className="page-footer page-footer--split">
-        <Button variant="text" disabled={isInstalling} onClick={onBack}>
+        <Button variant="text" disabled={busy} onClick={onBack}>
           {t('options.changeLanguage')}
         </Button>
         <Button
           variant="primary"
           trailingIcon={<ArrowRight />}
           loading={isInstalling}
-          onClick={() => { void onInstall(); }}
-          disabled={previewOnly || !options.installPath || (diskSpace !== null && !diskSpace.sufficient)}
+          onClick={() => { if (!pathOperation.current) void onInstall(); }}
+          disabled={busy || previewOnly || !options.installPath || (diskSpace !== null && !diskSpace.sufficient)}
         >
           {isInstalling ? t('options.installing') : t('options.install')}
         </Button>

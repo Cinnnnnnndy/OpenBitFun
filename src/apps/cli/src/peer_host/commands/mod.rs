@@ -6,6 +6,7 @@ mod dialog;
 mod external_sources;
 mod filesystem;
 mod git;
+mod goal;
 mod model_pools;
 mod models;
 mod permission;
@@ -63,6 +64,7 @@ pub(crate) fn dispatch<'a>(
             Box::pin(workspace::get_current_workspace(state))
         }
         "set_active_workspace" => Box::pin(workspace::set_active_workspace(state, args)),
+        "reorder_opened_workspaces" => Box::pin(workspace::reorder_opened_workspaces(state, args)),
         "open_workspace" => Box::pin(workspace::open_workspace(state, args)),
         "ssh_list_saved_connections" => Box::pin(workspace::ssh_list_saved_connections()),
         "open_remote_workspace" => Box::pin(workspace::open_remote_workspace(state, args)),
@@ -74,6 +76,9 @@ pub(crate) fn dispatch<'a>(
         "get_web_search_credential_status" => Box::pin(config::get_web_search_credential_status(args)),
         "save_web_search_credential" => Box::pin(config::save_web_search_credential(args)),
         "clear_web_search_credential" => Box::pin(config::clear_web_search_credential(args)),
+        "get_decision_model_credential_status" => Box::pin(config::get_decision_model_credential_status(args)),
+        "save_decision_model_credential" => Box::pin(config::save_decision_model_credential(args)),
+        "clear_decision_model_credential" => Box::pin(config::clear_decision_model_credential(args)),
         "product_control_invoke" => Box::pin(product_control::invoke(state, args)),
         "get_agent_profile_config" => Box::pin(config::get_agent_profile_config(args)),
         "get_agent_profile_configs" => Box::pin(config::get_agent_profile_configs()),
@@ -155,6 +160,9 @@ pub(crate) fn dispatch<'a>(
         "list_persisted_sessions" => Box::pin(session::list_persisted_sessions(state, args)),
         "list_persisted_sessions_page" => Box::pin(session::list_persisted_sessions_page(state, args)),
         "save_session_metadata" => Box::pin(session::save_session_metadata(state, args)),
+        "load_persisted_session_metadata" => {
+            Box::pin(session::load_persisted_session_metadata(state, args))
+        }
         "list_persisted_sessions_count" => {
             Box::pin(session::list_persisted_sessions_count(state, args))
         }
@@ -171,10 +179,28 @@ pub(crate) fn dispatch<'a>(
         "record_voice_exchange" => Box::pin(session::record_voice_exchange(state, args)),
         "create_session" => Box::pin(session::create_session(state, args)),
         "delete_session" => Box::pin(session::delete_session(state, args)),
+        // Desktop answers both names through the same session deletion.
+        "delete_persisted_session" => Box::pin(session::delete_session(state, args)),
+        "delete_all_archived_sessions" => {
+            Box::pin(session::delete_all_archived_sessions(state, args))
+        }
         "rename_session" => Box::pin(session::rename_session(state, args)),
         "archive_session" => Box::pin(session::archive_session(state, args)),
+        "unarchive_session" => Box::pin(session::unarchive_session(state, args)),
+        "list_archived_sessions" => Box::pin(session::list_archived_sessions(state, args)),
+        "get_session_lineage" => Box::pin(session::get_session_lineage(state, args)),
+        "fork_session" => Box::pin(session::fork_session(state, args)),
+        "copy_session" => Box::pin(session::copy_session(state, args)),
         "touch_session_activity" => Box::pin(session::touch_session_activity(state, args)),
         "get_session_thread_goal" => Box::pin(session::get_session_thread_goal(state, args)),
+        "activate_session_goal" => Box::pin(goal::activate_session_goal(state, args)),
+        "set_session_thread_goal_status" => {
+            Box::pin(goal::set_session_thread_goal_status(state, args))
+        }
+        "update_session_thread_goal_objective" => {
+            Box::pin(goal::update_session_thread_goal_objective(state, args))
+        }
+        "clear_session_thread_goal" => Box::pin(goal::clear_session_thread_goal(state, args)),
         "update_session_mode" => Box::pin(session::update_session_mode(state, args)),
         "update_session_model" => Box::pin(session::update_session_model(state, args)),
         "ensure_coordinator_session" => Box::pin(session::ensure_coordinator_session(state, args)),
@@ -186,11 +212,20 @@ pub(crate) fn dispatch<'a>(
         // Snapshot / rollback
         "rollback_session_to_turn" => Box::pin(snapshot::rollback_session_to_turn(state, args)),
         "get_session_files" => Box::pin(snapshot::get_session_files(state, args)),
+        "get_session_file_diff_stats" => {
+            Box::pin(snapshot::get_session_file_diff_stats(state, args))
+        }
 
         // Dialog / tools
         "manage_dialog_queue" => Box::pin(dialog::manage_dialog_queue(state, args)),
         "start_dialog_turn" => Box::pin(dialog::start_dialog_turn(state, args)),
         "cancel_dialog_turn" => Box::pin(dialog::cancel_dialog_turn(state, args)),
+        "cancel_session" => Box::pin(dialog::cancel_session(state, args)),
+        "compact_session" => Box::pin(dialog::compact_session(state, args)),
+        "interrupt_dialog_turn" => Box::pin(dialog::interrupt_dialog_turn(state, args)),
+        "recover_interrupted_dialog_turn" => {
+            Box::pin(dialog::recover_interrupted_dialog_turn(state, args))
+        }
         "start_user_question_interaction" => Box::pin(dialog::start_user_question_interaction(state, args)),
         "submit_user_answers" => Box::pin(dialog::submit_user_answers(state, args)),
         // Per-tool interrupt. The controller renders Terminal cards for Turns
@@ -327,6 +362,23 @@ pub(crate) const HANDLED_COMMANDS: &[&str] = &[
     "apply_external_source_control_action_command",
     "archive_session",
     "cancel_dialog_turn",
+    "cancel_session",
+    "fork_session",
+    "delete_persisted_session",
+    "delete_all_archived_sessions",
+    "activate_session_goal",
+    "set_session_thread_goal_status",
+    "update_session_thread_goal_objective",
+    "clear_session_thread_goal",
+    "compact_session",
+    "unarchive_session",
+    "list_archived_sessions",
+    "get_session_lineage",
+    "interrupt_dialog_turn",
+    "recover_interrupted_dialog_turn",
+    "get_session_file_diff_stats",
+    "load_persisted_session_metadata",
+    "copy_session",
     "cancel_tool",
     "check_path_exists",
     "choose_external_mcp_conflict_command",
@@ -334,6 +386,7 @@ pub(crate) const HANDLED_COMMANDS: &[&str] = &[
     "cleanup_invalid_workspaces",
     "clear_project_permission_grants",
     "clear_web_search_credential",
+    "clear_decision_model_credential",
     "create_directory",
     "create_session",
     "ensure_control_conversation",
@@ -371,6 +424,7 @@ pub(crate) const HANDLED_COMMANDS: &[&str] = &[
     "get_system_info",
     "get_token_usage_statistics",
     "get_web_search_credential_status",
+    "get_decision_model_credential_status",
     "get_workspace_info",
     "git_get_repository_trust",
     "git_is_repository",
@@ -402,6 +456,7 @@ pub(crate) const HANDLED_COMMANDS: &[&str] = &[
     "reload_config",
     "remove_project_permission_grant",
     "rename_session",
+    "reorder_opened_workspaces",
     "respond_permission",
     "respond_permission_batch",
     "restore_session",
@@ -412,6 +467,7 @@ pub(crate) const HANDLED_COMMANDS: &[&str] = &[
     "save_session_metadata",
     "save_session_turn",
     "save_web_search_credential",
+    "save_decision_model_credential",
     "search_session_content",
     "set_config",
     "set_external_mcp_server_decision_command",

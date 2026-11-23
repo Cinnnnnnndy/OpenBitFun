@@ -19,6 +19,12 @@ so the updated `PATH` is visible.
 
 Official release archives contain the same `openbitfun` executable.
 
+Installation and self-update share an OS-backed lock. On macOS/Linux without
+the `flock` command, the installer uses available Perl, Python, or the packaged
+CLI lock helper. A PID-file-only `shlock` is not sufficient. Installing an older
+release without the helper requires `flock`, Perl, or Python; a missing compatible
+lock stops installation before replacing existing files.
+
 Prerequisites for a source install are a Rust toolchain and this repository.
 See the repository [contribution guide](../../../CONTRIBUTING.md) for development
 setup and build commands.
@@ -382,10 +388,26 @@ openbitfun daemon install
 openbitfun daemon status
 ```
 
+Run `openbitfun daemon remote-control` to show this device’s setting (default
+`on`). Use `openbitfun daemon remote-control off` to appear offline and stop
+accepting remote control, or `openbitfun daemon remote-control on` to allow it
+again. The setting is shared with Desktop and persists across restarts. An
+offline device can still control online devices on the same account.
+
 Linux uses a systemd user service and macOS uses a LaunchAgent. Windows does not
 currently install an auto-start service; use `openbitfun daemon run` under a
 supervisor instead. Run `openbitfun daemon --help` for lifecycle commands and
 platform diagnostics.
+
+The CLI and Desktop check the 30-day Relay device credential on startup and
+then every seven days. When fewer than 15 days remain, the host uses its
+signed-in OpenBitFun account to request a fresh credential. It retries a
+failed check after an hour. If the Relay rejects the device credential or the
+host has lost its account login, sign in on that host again (`/login` in the CLI).
+
+Bot chats share their 24-hour delegation with their running remote turns and
+renew it on use after 12 hours. A device-list request rejected with HTTP 401
+gets one retry with a fresh delegation.
 
 ### Bots and Mobile Web from Claw
 

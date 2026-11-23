@@ -25,6 +25,7 @@ impl CoworkMode {
                 "create_goal".to_string(),
                 "update_goal".to_string(),
                 "AgentSpawn".to_string(),
+                "AgentFork".to_string(),
                 "AgentSendInput".to_string(),
                 "AgentControl".to_string(),
                 "AgentList".to_string(),
@@ -53,7 +54,6 @@ impl CoworkMode {
                 "PortForward".to_string(),
                 "WebSearch".to_string(),
                 "WebFetch".to_string(),
-                "GenerativeUI".to_string(),
                 "ControlHub".to_string(),
                 "ComputerUse".to_string(),
                 // Recurring office work ("check these channels every 30
@@ -61,7 +61,6 @@ impl CoworkMode {
                 // `wait` sends schedules here rather than pinning a turn open
                 // for the interval.
                 "Cron".to_string(),
-                "PublishAppearance".to_string(),
             ],
         }
     }

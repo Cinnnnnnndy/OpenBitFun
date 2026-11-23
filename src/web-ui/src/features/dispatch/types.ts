@@ -36,7 +36,13 @@ export interface DispatchWorkspaceDelivery {
   remoteUrl?: string;
   includeUncommitted: boolean;
 }
-export type DispatchReachability = 'unknown' | 'reachable' | 'unreachable';
+/**
+ * Controller-to-target transport health for one job. `notFound` means the
+ * target answered but has no record of the job: the transport works, the job
+ * was never delivered (or the target lost it), so it is distinct from
+ * `unreachable`.
+ */
+export type DispatchReachability = 'unknown' | 'reachable' | 'unreachable' | 'notFound';
 export type DispatchJobState =
   | 'submitting'
   | 'submission_unknown'
@@ -136,25 +142,6 @@ export interface DispatchSyncResult {
   /** Controller worktree the branch was fast-forwarded into. */
   baselineWorktreePath?: string;
   syncedHeadCommit?: string;
-}
-
-export interface DispatchInstallStart {
-  scriptPath: string;
-  version: string;
-  target: string;
-  url: string;
-  sha256: string;
-}
-
-export interface DispatchInstallPoll {
-  cursor: number;
-  output: string;
-  status: 'running' | 'succeeded' | 'failed';
-}
-
-export interface DispatchProvisionTargetResult {
-  accountStatus: 'synced' | 'skipped_not_logged_in';
-  daemonInstalled: boolean;
 }
 
 export type DispatchEvent =

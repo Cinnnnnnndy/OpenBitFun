@@ -15,6 +15,7 @@ pub use definitions::custom::{CustomMode, CustomSubagent, CustomSubagentKind};
 #[cfg(feature = "external-sources")]
 pub(crate) use definitions::external::ExternalProvidedAgent;
 pub use definitions::hidden::{CodeReviewAgent, DeepReviewAgent, OpenBitFunAgent};
+use definitions::modes::PaperWritingAgent;
 pub use definitions::modes::{
     ClawMode, CoworkMode, CreativeHarness, DeepResearchMode, MinimalHarness, StandardHarness,
     UltimateHarness,
@@ -86,6 +87,7 @@ static EMPTY_PERMISSION_CONSTRAINTS: std::sync::LazyLock<PermissionConstraintLay
 pub fn standard_harness_tools() -> Vec<String> {
     vec![
         "AgentSpawn".to_string(),
+        "AgentFork".to_string(),
         "AgentSendInput".to_string(),
         "AgentControl".to_string(),
         "AgentList".to_string(),
@@ -113,7 +115,6 @@ pub fn standard_harness_tools() -> Vec<String> {
         "get_goal".to_string(),
         "create_goal".to_string(),
         "update_goal".to_string(),
-        "GenerativeUI".to_string(),
         "Skill".to_string(),
         "AskUserQuestion".to_string(),
         "ReviewPlatform".to_string(),
@@ -128,7 +129,6 @@ pub fn standard_harness_tools() -> Vec<String> {
         // further out than an hour, to Cron rather than holding the turn open
         // for the interval.
         "Cron".to_string(),
-        "PublishAppearance".to_string(),
         "PageManage".to_string(),
     ]
 }
@@ -288,6 +288,7 @@ mod tests {
 
         for collaboration_tool in [
             "AgentSpawn",
+            "AgentFork",
             "AgentSendInput",
             "AgentControl",
             "AgentList",

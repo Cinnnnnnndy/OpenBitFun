@@ -16,9 +16,11 @@ use openbitfun_core::util::errors::OpenBitFunError;
 use openbitfun_events::{project_agentic_frontend_event, AgenticEvent};
 use openbitfun_product_domains::product_search::SessionContentSearchRequest;
 use openbitfun_runtime_ports::{
-    AgentSessionArchiveRequest, AgentSessionCreateRequest, AgentSessionDeleteRequest,
-    AgentSessionModeUpdateRequest, AgentSessionRenameRequest, AgentSessionUsageRequest,
-    AgentThreadGoalGetRequest, SessionStoragePathRequest, SessionTurnWindowRequest,
+    AgentSessionArchiveRequest, AgentSessionArchiveStateRequest, AgentSessionCreateRequest,
+    AgentSessionDeleteRequest, AgentSessionForkAtTurnRequest, AgentSessionForkRequest,
+    AgentSessionLineageRequest, AgentSessionModeUpdateRequest, AgentSessionRenameRequest,
+    AgentSessionUsageRequest, AgentThreadGoalGetRequest, SessionStoragePathRequest,
+    SessionTurnWindowRequest,
 };
 
 use crate::diagnostics::{OUTCOME_UNKNOWN_ERROR_CODE, SESSION_IN_USE_ERROR_CODE};
@@ -374,6 +376,26 @@ pub(crate) async fn list_persisted_sessions_count(
 
 /// CLI Peer observers can acknowledge results and persist title presentation
 /// without projecting Session history back into the Runtime.
+/// Read one session's persisted metadata, like Desktop
+/// `load_persisted_session_metadata`. Direct lookups also reach hidden child
+/// sessions, which list-level visibility filtering would drop. A controller
+/// uses it to adopt a freshly created or forked session and to seed title
+/// metadata; `null` means the host has no such session.
+pub(crate) async fn load_persisted_session_metadata(
+    state: &PeerHostState,
+    args: &Value,
+) -> Result<Value, String> {
+    let request = request_value(args);
+    let session_id = validated_session_id(request)?;
+    let workspace_path = resolved_session_storage_path(state, request).await?;
+    let metadata = state
+        .compatibility
+        .load_persisted_session_metadata(&workspace_path, &session_id)
+        .await
+        .map_err(|error| format!("Failed to load persisted session metadata: {error}"))?;
+    serde_json::to_value(metadata).map_err(|error| error.to_string())
+}
+
 pub(crate) async fn save_session_metadata(
     state: &PeerHostState,
     args: &Value,
@@ -761,6 +783,178 @@ pub(crate) async fn rename_session(state: &PeerHostState, args: &Value) -> Resul
     Ok(Value::Null)
 }
 
+/// Fork a session through the selected persisted turn, like Desktop
+/// `fork_session`. A controller uses it to branch from a turn and to save a
+/// temporary `/btw` side question as an independent session.
+pub(crate) async fn fork_session(state: &PeerHostState, args: &Value) -> Result<Value, String> {
+    let request = request_value(args);
+    let source_turn_id = get_string(request, "sourceTurnId")?;
+    if source_turn_id.trim().is_empty() {
+        return Err("source_turn_id is required".to_string());
+    }
+    branch_session(state, request, Some(source_turn_id)).await
+}
+
+/// Copy the whole session through its latest persisted turn, like Desktop
+/// `copy_session` (advertised as `whole_session_copy_v1`).
+pub(crate) async fn copy_session(state: &PeerHostState, args: &Value) -> Result<Value, String> {
+    branch_session(state, request_value(args), None).await
+}
+
+/// The Agent Runtime owns session copy semantics; this only resolves the
+/// owning workspace and projects the result in Desktop's `SessionBranchResult`
+/// wire shape.
+async fn branch_session(
+    state: &PeerHostState,
+    request: &Value,
+    source_turn_id: Option<String>,
+) -> Result<Value, String> {
+    let source_session_id = get_string(request, "sourceSessionId")?;
+    openbitfun_agent_runtime::session_control::validate_session_id(&source_session_id)?;
+    let scope = ensure_session_workspace_runtime_ownership(state, request).await?;
+    let workspace_id = optional_string(request, "workspaceId");
+    // The runtime resolves an owning workspace ID itself; the path is only the
+    // pre-ID upgrade input for controllers that cannot send one.
+    let workspace_path = if workspace_id.is_some() {
+        String::new()
+    } else {
+        scope.workspace_path.to_string_lossy().to_string()
+    };
+    let result = match source_turn_id {
+        Some(source_turn_id) => {
+            state
+                .agent_runtime
+                .fork_session_at_turn(AgentSessionForkAtTurnRequest {
+                    workspace_id,
+                    workspace_path,
+                    source_session_id,
+                    source_turn_id,
+                    remote_connection_id: scope.remote_connection_id,
+                    remote_ssh_host: scope.remote_ssh_host,
+                })
+                .await
+        }
+        None => {
+            state
+                .agent_runtime
+                .fork_session(AgentSessionForkRequest {
+                    workspace_id,
+                    workspace_path,
+                    source_session_id,
+                    remote_connection_id: scope.remote_connection_id,
+                    remote_ssh_host: scope.remote_ssh_host,
+                })
+                .await
+        }
+    }
+    .map_err(|error| format!("Failed to fork session: {}", error.into_message()))?;
+    Ok(json!({
+        "sessionId": result.session_id,
+        "sessionName": result.session_name,
+        "agentType": result.agent_type,
+    }))
+}
+
+/// Restore an archived session, like Desktop `unarchive_session`. Without it a
+/// session archived from a controller could never come back on this host.
+pub(crate) async fn unarchive_session(
+    state: &PeerHostState,
+    args: &Value,
+) -> Result<Value, String> {
+    let request = request_value(args);
+    let session_id = validated_session_id(request)?;
+    let scope = ensure_session_workspace_runtime_ownership(state, request).await?;
+    state
+        .agent_runtime
+        .set_session_archived(AgentSessionArchiveStateRequest {
+            workspace_id: optional_string(request, "workspaceId"),
+            workspace_path: scope.workspace_path.to_string_lossy().to_string(),
+            session_id,
+            archived: false,
+            remote_connection_id: scope.remote_connection_id,
+            remote_ssh_host: scope.remote_ssh_host,
+        })
+        .await
+        .map_err(|error| format!("Failed to save session metadata: {}", error.into_message()))?;
+    Ok(Value::Null)
+}
+
+/// The workspace's archived sessions, like Desktop `list_archived_sessions`.
+pub(crate) async fn list_archived_sessions(
+    state: &PeerHostState,
+    args: &Value,
+) -> Result<Value, String> {
+    use openbitfun_core::service::session::SessionStatus;
+    let request = request_value(args);
+    let workspace_path = resolved_session_storage_path(state, request).await?;
+    let archived: Vec<_> = state
+        .compatibility
+        .list_persisted_sessions(&workspace_path)
+        .await
+        .map_err(|error| format!("Failed to list sessions: {error}"))?
+        .into_iter()
+        .filter(|session| session.status == SessionStatus::Archived)
+        .collect();
+    serde_json::to_value(archived).map_err(|error| error.to_string())
+}
+
+/// Permanently delete every archived session in the workspace, like Desktop
+/// `delete_all_archived_sessions`; answers how many were deleted. Each
+/// deletion goes through the same runtime path as `delete_session`.
+pub(crate) async fn delete_all_archived_sessions(
+    state: &PeerHostState,
+    args: &Value,
+) -> Result<Value, String> {
+    use openbitfun_core::service::session::SessionStatus;
+    let request = request_value(args);
+    let workspace_path = resolved_session_storage_path(state, request).await?;
+    let archived = state
+        .compatibility
+        .list_persisted_sessions(&workspace_path)
+        .await
+        .map_err(|error| format!("Failed to list sessions: {error}"))?
+        .into_iter()
+        .filter(|session| session.status == SessionStatus::Archived);
+    let mut deleted: u32 = 0;
+    for session in archived {
+        state
+            .agent_runtime
+            .delete_session(AgentSessionDeleteRequest {
+                workspace_id: optional_string(request, "workspaceId"),
+                workspace_path: optional_string(request, "workspacePath").unwrap_or_default(),
+                session_id: session.session_id,
+                remote_connection_id: optional_string(request, "remoteConnectionId"),
+                remote_ssh_host: optional_string(request, "remoteSshHost"),
+            })
+            .await
+            .map_err(|error| format!("Failed to delete session: {}", error.into_message()))?;
+        deleted += 1;
+    }
+    Ok(json!(deleted))
+}
+
+/// The fork/branch tree around a session, like Desktop `get_session_lineage`.
+pub(crate) async fn get_session_lineage(
+    state: &PeerHostState,
+    args: &Value,
+) -> Result<Value, String> {
+    let request = request_value(args);
+    let session_id = validated_session_id(request)?;
+    let scope = session_storage_request(state, request).await?;
+    let lineage = state
+        .agent_runtime
+        .get_session_lineage(AgentSessionLineageRequest {
+            workspace_id: optional_string(request, "workspaceId"),
+            workspace_path: scope.workspace_path.to_string_lossy().to_string(),
+            anchor_session_id: session_id,
+            remote_connection_id: scope.remote_connection_id,
+            remote_ssh_host: scope.remote_ssh_host,
+        })
+        .await
+        .map_err(|error| format!("Failed to load session lineage: {}", error.into_message()))?;
+    serde_json::to_value(lineage).map_err(|error| error.to_string())
+}
+
 pub(crate) async fn archive_session(state: &PeerHostState, args: &Value) -> Result<Value, String> {
     let request = request_value(args);
     let session_id = validated_session_id(request)?;
@@ -1128,6 +1322,7 @@ pub(crate) async fn get_session_usage_report(
             include_hidden_subagents: options.include_hidden_subagents,
             include_system_prompt_preview: options.include_system_prompt_preview,
             context_preview_category: options.context_preview_category,
+            context_estimate: options.context_estimate,
         })
         .await
         .map_err(|error| {
@@ -1147,6 +1342,7 @@ struct UsageReportOptions {
     include_hidden_subagents: bool,
     include_system_prompt_preview: bool,
     context_preview_category: Option<openbitfun_core_types::UsageContextCategory>,
+    context_estimate: Option<openbitfun_core_types::UsageContextEstimateRequest>,
 }
 
 /// Reads the Desktop `GetSessionUsageReportRequest` option fields with the
@@ -1166,6 +1362,13 @@ fn usage_report_options(request: &Value) -> Result<UsageReportOptions, String> {
         include_system_prompt_preview: optional_bool(request, "includeSystemPromptPreview")
             .unwrap_or(false),
         context_preview_category,
+        context_estimate: ["contextEstimate", "context_estimate"]
+            .iter()
+            .find_map(|key| request.get(*key))
+            .filter(|value| !value.is_null())
+            .map(|value| serde_json::from_value(value.clone()))
+            .transpose()
+            .map_err(|error| format!("Invalid context estimate options: {error}"))?,
     })
 }
 
@@ -1226,6 +1429,7 @@ mod tests {
                 include_hidden_subagents: true,
                 include_system_prompt_preview: false,
                 context_preview_category: None,
+                context_estimate: None,
             }
         );
         let snake = json!({
@@ -1239,6 +1443,7 @@ mod tests {
                 include_hidden_subagents: false,
                 include_system_prompt_preview: true,
                 context_preview_category: Some(UsageContextCategory::ToolDefinitions),
+                context_estimate: None,
             }
         );
         // A category a newer controller knows maps to Unknown instead of failing.
@@ -1249,6 +1454,19 @@ mod tests {
                 .context_preview_category,
             Some(UsageContextCategory::Unknown)
         );
+        for key in ["contextEstimate", "context_estimate"] {
+            let options = super::usage_report_options(
+                &json!({key: {"includeContents": true, "contextOnly": true}}),
+            )
+            .unwrap();
+            assert_eq!(
+                options.context_estimate,
+                Some(openbitfun_core_types::UsageContextEstimateRequest {
+                    include_contents: true,
+                    context_only: true,
+                })
+            );
+        }
         assert!(super::usage_report_options(&json!({ "context_preview_category": 3 })).is_err());
     }
 

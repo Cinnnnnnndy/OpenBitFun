@@ -3,33 +3,52 @@
 id: feature.generative-ui
 kind: feature
 category: automation
-title_zh: "Generative UI 生成式界面"
-title_en: "Generative UI"
+title_zh: "对话可视化"
+title_en: "Chat visualizations"
 ---
 
-# Generative UI 生成式界面 / Generative UI
+# 对话可视化 / Chat visualizations
 
 > 功能 / Feature
 
-由智能体按组件库及关联 UI 规范生成 OpenUI 组件应用或 HTML/CSS/SVG 自由文档，经目标视口实际渲染、宿主验收与需求复核后接受并保存。
+使用 visualize 技能在回复中生成交互图表、日历和性能分析视图。
 
-Generate OpenUI component apps or free HTML/CSS/SVG documents under a bound UI specification; accept and persist only after target-viewport rendering, host checks and requirement review.
+Use the visualize skill to explore charts, calendars, and performance traces inside an answer.
+
+## 适用场景 / When to use it
+
+- 对比接口响应时间，检查最耗时的请求。
+  - Compare latency and inspect a slow request.
+- 浏览排期并选择某个事件查看详情。
+  - Browse a schedule and select an event for details.
 
 ## 完整功能清单 / Everything included
 
-- **由专用智能体工具控制 / Delegated Agent tool** · `GenerativeUI` · 生成可交互的 GenUI 应用并由宿主渲染
-  - Generate interactive GenUI applications rendered by the host
+- **由专用智能体工具控制 / Delegated Agent tool** · `Skill` / `Write` · 生成交互图表与专用组件
+  - Create interactive charts and specialist views
+  - 说明：生成交互图表与专用组件。
+  - Why & how: Create interactive charts and specialist views.
+- **由专用智能体工具控制 / Delegated Agent tool** · `Skill` / `Write` · 生成静态 HTML 或 SVG 图解
+  - Create static HTML or SVG illustrations
+  - 说明：生成静态 HTML 或 SVG 图解。
+  - Why & how: Create static HTML or SVG illustrations.
+- **由专用智能体工具控制 / Delegated Agent tool** · `Skill` / `Write` · 在本设备恢复筛选与选择
+  - Restore filters and selections on this device
+  - 说明：在本设备恢复筛选与选择。
+  - Why & how: Restore filters and selections on this device.
+- **由专用智能体工具控制 / Delegated Agent tool** · `Skill` / `Write` · 校验组件数据并使用会话主题呈现
+  - Validate component data and render with the chat theme
+  - 说明：校验组件数据并使用会话主题呈现。
+  - Why & how: Validate component data and render with the chat theme.
 
 ## 怎么用 / How to use it
 
-1. 打开 AI 会话
-   Open an AI session
-2. 让智能体生成一个 GenUI 应用
-   Ask the agent to generate a GenUI application
-3. 在宿主中完成交互并保存，随后重开应用
-   Interact and save it in the host, then reopen the application
+1. 说明要查看的数据、单位与交互。
+   Describe the data, units, and interaction.
+2. 在回复中选择数据或切换视图。
+   Inspect data or change views in the reply.
 
-入口 / Entry: OpenBitFun 对应场景
+入口 / Entry: 在启用 visualize 的会话中描述要查看的数据与交互。 / Describe the data and interaction in a chat with visualize enabled.
 
 ## 智能体可替你做什么 / What an agent can do for you
 
@@ -45,14 +64,19 @@ Generate OpenUI component apps or free HTML/CSS/SVG documents under a bound UI s
 
 ## 可以直接对智能体说 / Try saying
 
-- “生成一个可保存的记账应用”
-  - “Generate a saveable accounting app”
-- “生成一个带预算设置和支出汇总的 dashboard 应用”
-  - “Generate a dashboard with budget settings and an expense summary”
-- “生成一个阅读目录并支持收藏”
-  - “Generate a reading catalog with favorites”
-- “生成一个带完成状态的日计划”
-  - “Generate a daily plan with completion state”
+- “用请求瀑布显示这些跨度，包括每个跨度的自身耗时。”
+  - “Show these request spans with their self time.”
+- “把这三个月的销量按产品画成百分比堆叠图。”
+  - “Compare the product mix over these three months with a normalized stacked chart.”
+
+## 实用贴士 / Good to know
+
+- 追问会填入当前会话的输入框，可编辑后发送。
+  - A follow-up fills the current composer for review.
+- 纯文本客户端显示图表摘要。
+  - Text-only clients show the authored summary.
+
+关联条目 / Related: `feature.ai-assistant`, `feature.miniapps`
 
 智能体会先查找相关功能或设置，确认目标后再替你打开、执行或修改。完整能力目录不会预先塞进对话上下文。
 

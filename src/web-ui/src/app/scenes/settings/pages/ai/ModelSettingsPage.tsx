@@ -1,3 +1,4 @@
+import { supportsBtwModelDefaults } from '@/infrastructure/config/services/btwModelDefaults';
 import { modelSelectionsConfigPath } from '@/infrastructure/config/services/modelSelections';
 import '@/app/scenes/settings/pages/ai/ModelSettingsPage.scss';
 import { ModelDiscoveryPicker, type ModelDiscoveryOption } from './ModelDiscoveryPicker';
@@ -22,7 +23,7 @@ import { SubscriptionProviderBrowser } from './SubscriptionProviderBrowser';
 import { ProductBrandIcon } from '@/shared/ui/ProductBrandIcon';
 import { getProductBrandIcon } from '@/shared/ui/productBrandIcons';
 import { SubscriptionAccountList, SubscriptionServiceGroup } from './SubscriptionServiceGroup';
-import { managedSubscriptionAccounts, modelsUsingSubscriptionAccount, groupSubscriptionServices, isRetiredSubscriptionProvider, isZcodeProvider, preferredZcodeProvider, subscriptionManagerAccounts } from './subscriptionServices';
+import { managedSubscriptionAccounts, modelsUsingSubscriptionAccount, groupSubscriptionServices, isRetiredSubscriptionProvider, isZcodeProvider, preferredZcodeProvider, subscriptionManagerAccounts, subscriptionAccountBadge, subscriptionAccountLabel, countSubscriptionServices, subscriptionLoginPlaceholder, subscriptionRemovalKeys, retainedSubscriptionAccountId } from './subscriptionServices';
 import { aiApi, systemAPI } from '@/infrastructure/api';
 import { agentAPI, type ModelRoutingStatus } from '@/infrastructure/api/service-api/AgentAPI';
 import type {
@@ -93,8 +94,10 @@ import {
   getProviderGroupKey,
   getProviderInstanceId,
   getProviderTemplateId,
+  groupModelConfigsByProvider,
   PROVIDER_INSTANCE_METADATA_KEY,
   removeProviderModelConfigs,
+  type ProviderModelGroup,
 } from '@/infrastructure/config/services/modelConfigs';
 import { normalizeProviderBaseUrl } from '@/infrastructure/config/services/providerCatalog';
 import {
@@ -116,7 +119,9 @@ import {
 } from '@/infrastructure/config/utils/reasoningPresets';
 import { i18nService, useI18n } from '@/infrastructure/i18n';
 import { getActiveSurfaceScope, onSurfaceActivated } from '@/infrastructure/peer-device/deviceSurface';
+import { ResponsesRequestSettingsFields } from '@/infrastructure/config/components/ResponsesRequestSettingsFields';
 import { usePeerDeviceModeOptional } from '@/infrastructure/peer-device/peerDeviceContextState';
+import { peerHostRefusalMessage } from '@/infrastructure/peer-device/peerHostRefusal';
 import { canEditAccountPoolsOnSurface, canEditChannelRoutingOnSurface, canQuerySubscriptionQuotaOnSurface, canQueryModelQuotaOnSurface, canQueryGrokQuotaOnSurface } from '@/infrastructure/peer-device/peerCapabilityResolution';
 import { isPeerDeviceModeActive } from '@/infrastructure/peer-device/peerModeFlag';
 import { isTauriRuntime } from '@/infrastructure/runtime';
@@ -165,6 +170,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 
 const log = createLogger('ModelSettings');
 const MODELS_DEV_DOWNLOAD_URL = 'https://models.dev/api.json';
+const NEW_MODEL_CONTEXT_WINDOW_TOKENS = 200_000;
 
 /** Rows the preset picker shows before the user searches or expands the list. */
 const COLLAPSED_PROVIDER_COUNT = 6;
@@ -197,12 +203,7 @@ interface SelectedModelDraft {
   };
 }
 
-interface ProviderGroup {
-  key: string;
-  providerName: string;
-  providerId?: string;
-  models: AIModelConfigType[];
-}
+type ProviderGroup = ProviderModelGroup<AIModelConfigType>;
 
 interface SubscriptionLoginPanelState {
   provider: SubscriptionProvider;
@@ -271,7 +272,7 @@ function createModelDraft(
     modelName: trimmedModelName,
     manualRequestFormat: overrides?.manualRequestFormat ?? baseConfig?.provider,
     category: overrides?.category ?? baseConfig?.category ?? 'general_chat',
-    contextWindow: overrides?.contextWindow ?? baseConfig?.context_window ?? 300000,
+    contextWindow: overrides?.contextWindow ?? baseConfig?.context_window ?? NEW_MODEL_CONTEXT_WINDOW_TOKENS,
     maxTokens: overrides?.maxTokens ?? baseConfig?.max_tokens,
     reasoning,
     requestSettings: overrides?.requestSettings ?? getModelEditorRequestSettings(baseConfig),
@@ -448,6 +449,28 @@ const ModelSettingsPage: React.FC = () => {
       ? `${subscriptionName(account)} · ${subscriptionRegionName(account.provider)}`
       : subscriptionName(account)
   ), [subscriptionName, subscriptionRegionName]);
+  // A slot's product name alone cannot distinguish a signed-in account from a
+  // signed-out slot that kept the same identity, so every surface that lists a
+  // slot next to a product also has to state its region, slot and state.
+  const subscriptionAccountStateText = useCallback((account: SubscriptionAccount, enabled: boolean) => {
+    switch (subscriptionAccountBadge(account, enabled)) {
+      case 'disabled': return t('subscriptionAuth.pool.disabled');
+      case 'vaultUnavailable': return t('subscriptionAuth.accountState.vaultUnavailable');
+      case 'reauthenticationRequired': return t('subscriptionAuth.accountState.reauthenticationRequired');
+      case 'notSignedIn': return t('subscriptionAuth.notSignedIn');
+      default: return undefined;
+    }
+  }, [t]);
+  const subscriptionAccountDescriptor = useCallback((
+    account: SubscriptionAccount,
+    accountId: string,
+    enabled: boolean,
+  ): string => subscriptionAccountLabel(account, accountId, {
+    region: subscriptionRegionName(account.provider),
+    identity: account.account?.trim() || t('subscriptionAuth.accountIdentityUnavailable'),
+    marker: t('subscriptionAuth.accountMarker', { marker: accountId.slice(-8) }),
+    state: subscriptionAccountStateText(account, enabled),
+  }), [subscriptionAccountStateText, subscriptionRegionName, t]);
 
   const peerDevice = usePeerDeviceModeOptional();
   const modelDiscoverySurface = peerDevice?.peerMode.active ? peerDevice.peerMode.deviceId : 'local';
@@ -472,6 +495,8 @@ const ModelSettingsPage: React.FC = () => {
   const [routerSettingsScope, setRouterSettingsScope] = useState<ReturnType<typeof getActiveSurfaceScope> | null>(null);
   const [routerAvailability, setRouterAvailability] = useState<{ surfaceKey: string; status: ModelRoutingStatus } | null>(null);
   const [subscriptionLoadError, setSubscriptionLoadError] = useState(false);
+  /** Set when the rendered peer host does not offer subscription accounts at all. */
+  const [subscriptionUnavailable, setSubscriptionUnavailable] = useState<string | null>(null);
   const [isConfigLoading, setIsConfigLoading] = useState(!modelSeed.loaded);
   const [configLoadError, setConfigLoadError] = useState(false);
   const [proxyLoadState, setProxyLoadState] = useState<'loading' | 'ready' | 'error'>(proxySeed.loaded ? 'ready' : 'loading');
@@ -652,6 +677,7 @@ const ModelSettingsPage: React.FC = () => {
     Boolean(peerDevice?.peerMode.active),
     peerDevice?.currentPeerCapabilities ?? null,
   );
+  const canEditResponses = !peerDevice?.peerMode.active || peerDevice.currentPeerCapabilities?.responsesWebsocketV1 === true;
   const canEditChannelRouting = canEditChannelRoutingOnSurface(
     Boolean(peerDevice?.peerMode.active),
     peerDevice?.currentPeerCapabilities ?? null,
@@ -906,6 +932,7 @@ const ModelSettingsPage: React.FC = () => {
     const isCurrent = () => scope.isCurrent() && requestId === subscriptionAccountsReadRef.current;
     setIsLoadingSubscriptions(true);
     setSubscriptionLoadError(false);
+    setSubscriptionUnavailable(null);
     try {
       const items = await aiApi.listSubscriptionAccounts();
       if (!isCurrent()) return;
@@ -931,12 +958,22 @@ const ModelSettingsPage: React.FC = () => {
       }
     } catch (e) {
       if (!isCurrent()) return;
+      // A host that does not offer subscription accounts is not a transient
+      // failure: say so instead of offering a retry that cannot succeed.
+      const unavailable = peerHostRefusalMessage(e, t);
+      if (unavailable) {
+        setSubscriptionAccounts([]);
+        setAccountInstances([]);
+        setSubscriptionUnavailable(unavailable);
+        log.debug('Subscription accounts are unavailable on this host', { error: String(e) });
+        return;
+      }
       setSubscriptionLoadError(true);
       log.warn('list_subscription_accounts failed', { error: String(e) });
     } finally {
       if (isCurrent()) setIsLoadingSubscriptions(false);
     }
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     const refresh = () => { void refreshSubscriptionAccounts(); };
@@ -1210,7 +1247,8 @@ const ModelSettingsPage: React.FC = () => {
     setShowModelValidation(false);
     const settings = draft.requestSettings;
     setShowAdvancedSettings(
-      !!settings.skip_ssl_verify
+      !!settings.responses || !!settings.responses_defaults
+      || !!settings.skip_ssl_verify
       || settings.custom_request_body_mode === 'trim'
       || !!settings.custom_request_body?.trim()
       || settings.max_images_per_request !== undefined
@@ -1483,7 +1521,7 @@ const ModelSettingsPage: React.FC = () => {
         api_key: '',
         model_name: '',
         enabled: true,
-        context_window: 300000,
+        context_window: NEW_MODEL_CONTEXT_WINDOW_TOKENS,
         category: 'multimodal',
         capabilities: getCapabilitiesByCategory('multimodal'),
         recommended_for: [],
@@ -1761,6 +1799,10 @@ const ModelSettingsPage: React.FC = () => {
             error: String(e),
           });
           notification.error(t('subscriptionAuth.loginFailed', { error: String(e) }));
+          // A refused second copy of an already connected account is reported as
+          // a failure, so every failed attempt has to show what the host really
+          // holds instead of keeping a placeholder slot on screen.
+          await refreshSubscriptionAccounts();
         }
       }
     } finally {
@@ -1824,6 +1866,10 @@ const ModelSettingsPage: React.FC = () => {
     const request = subscriptionLogoutRequest;
     if (!request) return;
     const scope = getActiveSurfaceScope();
+    // A slot without a credential is not signed out again: the host forgets it,
+    // which is how a leftover row from an earlier sign-out gets cleared.
+    const forgetting = !request.account.connected;
+    const removal = subscriptionRemovalKeys(forgetting);
     try {
       const result = request.accountId === request.account.provider
         ? await aiApi.logoutSubscriptionAccount(request.account.provider)
@@ -1855,12 +1901,17 @@ const ModelSettingsPage: React.FC = () => {
         });
         notification.warning(t('subscriptionAuth.logoutCleanupPending'));
       } else {
-        notification.success(t('subscriptionAuth.logoutSuccess'));
+        notification.success(t(removal.success));
       }
     } catch (e) {
       if (scope.isCurrent()) notification.error(t('subscriptionAuth.logoutFailed', { error: String(e) }));
     }
   }, [notification, refreshSubscriptionAccounts, subscriptionLogoutRequest, t]);
+
+  // The removal dialog has to describe what the confirming click will do.
+  const subscriptionRemovalCopy = subscriptionRemovalKeys(
+    !!subscriptionLogoutRequest && !subscriptionLogoutRequest.account.connected,
+  );
 
   const handleSubscriptionRefresh = useCallback(async (provider: SubscriptionProvider, accountId: string = provider) => {
     const scope = getActiveSurfaceScope();
@@ -1910,7 +1961,7 @@ const ModelSettingsPage: React.FC = () => {
       model_name: '',
       provider: template.format,
       enabled: true,
-      context_window: 300000,
+      context_window: NEW_MODEL_CONTEXT_WINDOW_TOKENS,
       category: 'multimodal',
       capabilities: getCapabilitiesByCategory('multimodal'),
       recommended_for: [],
@@ -1940,7 +1991,7 @@ const ModelSettingsPage: React.FC = () => {
       model_name: '',
       provider: 'openai',
       enabled: true,
-      context_window: 300000,
+      context_window: NEW_MODEL_CONTEXT_WINDOW_TOKENS,
       category: 'multimodal',
       capabilities: getCapabilitiesByCategory('multimodal'),
       recommended_for: [],
@@ -1983,7 +2034,7 @@ const ModelSettingsPage: React.FC = () => {
         model_name: '',
         provider: config.provider,
         enabled: true,
-        context_window: config.context_window || 300000,
+        context_window: config.context_window || NEW_MODEL_CONTEXT_WINDOW_TOKENS,
         max_tokens: config.max_tokens,
         category: config.category || 'general_chat',
         capabilities: config.capabilities || getCapabilitiesByCategory(config.category || 'general_chat'),
@@ -1995,6 +2046,7 @@ const ModelSettingsPage: React.FC = () => {
         skip_ssl_verify: config.skip_ssl_verify ?? false,
         custom_request_body: config.custom_request_body,
         custom_request_body_mode: config.custom_request_body_mode,
+        responses_defaults: config.responses_defaults,
         auth: config.auth || { type: 'api_key' },
       });
       if (subscriptionProviderOf(config.auth)) void refreshSubscriptionAccounts();
@@ -2239,6 +2291,13 @@ const ModelSettingsPage: React.FC = () => {
           channel_routing: normalizeChannelRouting(draft.channelRouting),
         };
       });
+      if (!canEditResponses && configsToSave.some(config => {
+        const existing = aiModels.find(model => model.id === config.id);
+        return stableJson([config.responses, config.responses_defaults]) !== stableJson([existing?.responses, existing?.responses_defaults]);
+      })) {
+        notification.warning(t('advancedSettings.responses.unsupported'));
+        return false;
+      }
       let previousModelsBeforeSave: AIModelConfigType[] = [];
       const updatedModels = await configManager.updateConfig<AIModelConfigType[]>('ai.models', current => {
         previousModelsBeforeSave = current;
@@ -2335,13 +2394,14 @@ const ModelSettingsPage: React.FC = () => {
   };
 
   const inspectModelReferenceCount = async (modelIds: string[]): Promise<number> => {
-    const [defaultModels, taskModels, agentModelDefaults] = await Promise.all([
+    const [defaultModels, taskModels, agentModelDefaults, btwDefaults] = await Promise.all([
       configManager.getConfig<unknown>('ai.default_models'),
       configManager.getConfig<unknown>('ai.task_models'),
       configManager.getConfig<unknown>(modelSelectionsConfigPath()),
+      supportsBtwModelDefaults() ? configManager.getConfig<unknown>('ai.btw') : undefined,
     ]);
     const ids = new Set(modelIds);
-    return [defaultModels, taskModels, agentModelDefaults]
+    return [defaultModels, taskModels, agentModelDefaults, btwDefaults]
       .reduce<number>((count, value) => count + countModelConfigReferences(value, ids), 0);
   };
 
@@ -2647,23 +2707,7 @@ const ModelSettingsPage: React.FC = () => {
     && editingModalHasUnsavedChanges;
 
   const providerGroups = useMemo<ProviderGroup[]>(() => {
-    const grouped = aiModels.reduce<Map<string, ProviderGroup>>((map, model) => {
-      const groupKey = getProviderGroupKey(model);
-      const providerName = getProviderDisplayName(model);
-      const existingGroup = map.get(groupKey);
-      if (existingGroup) {
-        existingGroup.models.push(model);
-        return map;
-      }
-
-      map.set(groupKey, {
-        key: groupKey,
-        providerName,
-        providerId: getProviderTemplateId(model),
-        models: [model],
-      });
-      return map;
-    }, new Map());
+    const grouped = groupModelConfigsByProvider(aiModels);
 
     return Array.from(grouped.values()).sort((a, b) => {
       const indexA = a.providerId ? providerOrder.indexOf(a.providerId) : -1;
@@ -2683,9 +2727,16 @@ const ModelSettingsPage: React.FC = () => {
     .map(group => {
       const accountLabels = availableSubscriptionAccounts
         .filter(({ account, accountId }) => modelsUsingSubscriptionAccount(group.models, account.provider, accountId).length > 0)
-        .map(({ account }) => account.account?.trim() || t('subscriptionAuth.accountIdentityUnavailable'));
+        .map(({ account, accountId, enabled }) => subscriptionAccountDescriptor(account, accountId, enabled));
       return { ...group, label: [group.providerName, ...accountLabels].join(' · ') };
     });
+  // One ZCode account must not read as two imported services just because both
+  // of its regions, or two of its slots, own models.
+  const subscriptionServiceCount = countSubscriptionServices(subscriptionProviderGroups.flatMap(group => (
+    group.models
+      .map(model => subscriptionProviderOf(model.auth))
+      .filter((provider): provider is SubscriptionProvider => provider !== undefined)
+  )));
   const editingProviderGroup = providerGroups.find(group => editingTargetKey === `provider:${group.key}`);
   const unconfiguredSubscriptionAccounts = availableSubscriptionAccounts.filter(({ account, accountId }) => (
     !modelsUsingSubscriptionAccount(aiModels, account.provider, accountId).length
@@ -3181,13 +3232,15 @@ const ModelSettingsPage: React.FC = () => {
         ? aiModels.filter(model => model.channel_routing?.fallback_model_ids.includes(savedModelId))
         : [];
       if (backupFor.length > 0 && fallbackIds.length === 0) {
-        return renderModelField(
-          t('channelRouting.label'),
-          <span className="openbitfun-model-settings__connection-value">
-            {t('channelRouting.isBackupOf', {
+        return (
+          <ConfigPageRow
+            label={t('channelRouting.label')}
+            description={t('channelRouting.isBackupOf', {
               names: backupFor.map(model => `${getProviderDisplayName(model)} · ${model.model_name}`).join(', '),
             })}
-          </span>,
+          >
+            {null}
+          </ConfigPageRow>
         );
       }
       const modelLabel = (id: string) => {
@@ -3214,67 +3267,109 @@ const ModelSettingsPage: React.FC = () => {
       return (
         <>
           <ConfigPageRow
+            className="openbitfun-model-settings__channel-route-row"
+            data-has-fallbacks={fallbackIds.length > 0 ? 'true' : undefined}
             label={t('channelRouting.label')}
             description={t('channelRouting.hint')}
-            align="start"
+            align="center"
           >
             <div className="openbitfun-model-settings__channel-route" data-testid="settings-model-channel-route">
+              <div className="openbitfun-model-settings__channel-route-picker">
+                {candidates.length > 0 || fallbackIds.length > 0 ? (
+                  <Select
+                    aria-label={t('channelRouting.add')}
+                    placeholder={t('channelRouting.add')}
+                    leading={<Icon name="plus" size="sm" />}
+                    popupWidth="content"
+                    disabled={isEditorSaving || candidates.length === 0}
+                    value=""
+                    onValueChange={value => {
+                      const id = String(value);
+                      if (id) updateRouting({ fallback_model_ids: [...fallbackIds, id] });
+                    }}
+                    options={candidates.map(model => ({
+                      value: model.id as string,
+                      label: `${getProviderDisplayName(model)} · ${model.model_name}`,
+                    }))}
+                    size="sm"
+                  />
+                ) : (
+                  <span className="openbitfun-model-settings__channel-route-empty">
+                    {t('channelRouting.noCandidates')}
+                  </span>
+                )}
+              </div>
               {fallbackIds.length > 0 && (
-                <FieldGroup>
-                  {fallbackIds.map((id, index) => (
-                    <div key={id} className="openbitfun-model-settings__account-pool-item">
-                      <span className="openbitfun-model-settings__channel-route-index">{index + 1}.</span>
-                      <OverflowText className="openbitfun-model-settings__subscription-account-name">
-                        {modelLabel(id)}
-                      </OverflowText>
-                      <ToolbarGroup>
-                        <IconButton
-                          size="xs"
-                          variant="quiet"
-                          aria-label={t('subscriptionAuth.pool.moveUp')}
-                          icon={<Icon name="arrow-up" size="sm" />}
-                          disabled={index === 0}
-                          onClick={() => updateRouting({ fallback_model_ids: moveItem(fallbackIds, index, -1) })}
-                        />
-                        <IconButton
-                          size="xs"
-                          variant="quiet"
-                          aria-label={t('subscriptionAuth.pool.moveDown')}
-                          icon={<Icon name="arrow-down" size="sm" />}
-                          disabled={index === fallbackIds.length - 1}
-                          onClick={() => updateRouting({ fallback_model_ids: moveItem(fallbackIds, index, 1) })}
-                        />
-                        <IconButton
-                          size="xs"
-                          variant="quiet"
-                          aria-label={t('channelRouting.remove')}
-                          icon={<Icon name="delete" size="sm" />}
-                          onClick={() => updateRouting({ fallback_model_ids: fallbackIds.filter(item => item !== id) })}
-                        />
-                      </ToolbarGroup>
-                    </div>
-                  ))}
-                </FieldGroup>
-              )}
-              {candidates.length > 0 ? (
-                <Select
-                  aria-label={t('channelRouting.add')}
-                  placeholder={t('channelRouting.add')}
-                  value=""
-                  onValueChange={value => {
-                    const id = String(value);
-                    if (id) updateRouting({ fallback_model_ids: [...fallbackIds, id] });
-                  }}
-                  options={candidates.map(model => ({
-                    value: model.id as string,
-                    label: `${getProviderDisplayName(model)} · ${model.model_name}`,
-                  }))}
-                  size="sm"
-                />
-              ) : (
-                <span className="openbitfun-model-settings__connection-value">
-                  {t('channelRouting.noCandidates')}
-                </span>
+                <ol className="openbitfun-model-settings__channel-route-list">
+                  {fallbackIds.map((id, index) => {
+                    const model = aiModels.find(item => item.id === id);
+                    const providerName = model ? getProviderDisplayName(model) : undefined;
+                    const fullLabel = model ? `${providerName} · ${model.model_name}` : id;
+                    return (
+                      <li key={id} className="openbitfun-model-settings__channel-route-item">
+                        <span className="openbitfun-model-settings__channel-route-index" aria-hidden="true">
+                          {i18nService.formatNumber(index + 1)}
+                        </span>
+                        <div className="openbitfun-model-settings__channel-route-summary">
+                          {model ? (
+                            <OverflowText
+                              behavior="marquee"
+                              title={fullLabel}
+                              className="openbitfun-model-settings__channel-route-name"
+                            >
+                              <span className="openbitfun-model-settings__channel-route-provider">{providerName}</span>
+                              <span className="openbitfun-model-settings__channel-route-separator" aria-hidden="true">·</span>
+                              <span className="openbitfun-model-settings__channel-route-model">{model.model_name}</span>
+                            </OverflowText>
+                          ) : (
+                            <>
+                              <OverflowText className="openbitfun-model-settings__channel-route-name is-missing">
+                                {id}
+                              </OverflowText>
+                              <StatusPill tone="warning">{t('channelRouting.missing')}</StatusPill>
+                            </>
+                          )}
+                        </div>
+                        <ToolbarGroup className="openbitfun-model-settings__channel-route-actions">
+                          {fallbackIds.length > 1 && (
+                            <>
+                              <Tooltip content={t('subscriptionAuth.pool.moveUp')}>
+                                <IconButton
+                                  size="xs"
+                                  variant="quiet"
+                                  aria-label={t('subscriptionAuth.pool.moveUp')}
+                                  icon={<Icon name="arrow-up" size="sm" />}
+                                  disabled={isEditorSaving || index === 0}
+                                  onClick={() => updateRouting({ fallback_model_ids: moveItem(fallbackIds, index, -1) })}
+                                />
+                              </Tooltip>
+                              <Tooltip content={t('subscriptionAuth.pool.moveDown')}>
+                                <IconButton
+                                  size="xs"
+                                  variant="quiet"
+                                  aria-label={t('subscriptionAuth.pool.moveDown')}
+                                  icon={<Icon name="arrow-down" size="sm" />}
+                                  disabled={isEditorSaving || index === fallbackIds.length - 1}
+                                  onClick={() => updateRouting({ fallback_model_ids: moveItem(fallbackIds, index, 1) })}
+                                />
+                              </Tooltip>
+                            </>
+                          )}
+                          <Tooltip content={t('channelRouting.remove')}>
+                            <IconButton
+                              size="xs"
+                              variant="quiet"
+                              aria-label={t('channelRouting.remove')}
+                              icon={<Icon name="delete" size="sm" />}
+                              disabled={isEditorSaving}
+                              onClick={() => updateRouting({ fallback_model_ids: fallbackIds.filter(item => item !== id) })}
+                            />
+                          </Tooltip>
+                        </ToolbarGroup>
+                      </li>
+                    );
+                  })}
+                </ol>
               )}
             </div>
           </ConfigPageRow>
@@ -3282,6 +3377,8 @@ const ModelSettingsPage: React.FC = () => {
             t('channelRouting.mode'),
             <Select
               aria-label={t('channelRouting.mode')}
+              popupWidth="content"
+              disabled={isEditorSaving}
               value={routing?.manual_channel || '__auto__'}
               onValueChange={value => updateRouting({ manual_channel: value === '__auto__' ? null : String(value) })}
               options={modeOptions}
@@ -3391,7 +3488,6 @@ const ModelSettingsPage: React.FC = () => {
     const authOptions: ComboboxOption[] = [
       { value: 'api_key', label: t('subscriptionAuth.options.apiKey') },
       { value: 'subscription:codex', label: t('subscriptionAuth.options.codex') },
-      { value: 'subscription:antigravity', label: t('subscriptionAuth.options.antigravity') },
       { value: 'subscription:grok', label: t('subscriptionAuth.options.grok') },
       { value: 'subscription:hermes', label: t('subscriptionAuth.options.hermes') },
       { value: 'subscription:zcode', label: t('subscriptionAuth.options.zcode') },
@@ -3738,8 +3834,14 @@ const ModelSettingsPage: React.FC = () => {
       );
     };
 
+    const selectedRequestFormat = automaticOpenCodeRouting && singleModelEditorDraft
+      ? resolveOpenCodeModelRoute(routeConfig, singleModelEditorDraft.modelName, remoteModelOptions)?.format
+        || singleModelEditorDraft.manualRequestFormat || editingConfig.provider
+      : editingConfig.provider;
+    const showResponsesSettings = ['response', 'responses'].includes(selectedRequestFormat ?? '')
+      || (isProviderScopedEditing && automaticOpenCodeRouting);
     const renderAdvancedSettings = () => (
-      !authIsSubscription && (
+      (!authIsSubscription || showResponsesSettings) && (
         <Disclosure
           data-testid="settings-model-advanced-toggle"
           summary={t('advancedSettings.title')}
@@ -3761,6 +3863,14 @@ const ModelSettingsPage: React.FC = () => {
         >
           {showAdvancedSettings && (
             <FieldGroup appearance="plain" dividers={false} fieldSurface="filled">
+              {showResponsesSettings && (
+                <ResponsesRequestSettingsFields
+                  value={isProviderScopedEditing ? requestSettings.responses_defaults : requestSettings.responses ?? requestSettings.responses_defaults}
+                  supported={canEditResponses}
+                  onChange={responses => updateRequestSettings(isProviderScopedEditing ? { responses_defaults: responses } : { responses })}
+                  onReset={!isProviderScopedEditing && requestSettings.responses ? () => updateRequestSettings({ responses: undefined }) : undefined} />
+              )}
+              {!authIsSubscription && <>
               {(editingConfig.provider === 'openai' || editingConfig.provider === 'anthropic') && (
                 <ConfigPageRow
                   label={t('advancedSettings.inlineThinkInText.label')}
@@ -3962,6 +4072,7 @@ const ModelSettingsPage: React.FC = () => {
                   })()}
                 </div>
               </ConfigPageRow>
+              </>}
             </FieldGroup>
           )}
         </Disclosure>
@@ -4240,17 +4351,30 @@ const ModelSettingsPage: React.FC = () => {
     const accounts = subscriptionManagerAccounts(subscriptionAccounts, provider, providerIdentityLocked)
       .filter(account => !importing || !isRetiredSubscriptionProvider(account.provider))
       .filter(account => filter === 'all' || (isZcodeProvider(filter) ? isZcodeProvider(account.provider) : account.provider === filter));
-    const managed = managedSubscriptionAccounts(accounts, accountInstances, subscriptionLoginPanel
-      ? { provider: subscriptionLoginPanel.provider, accountId: subscriptionLoginAccountId || subscriptionLoginPanel.provider } : null);
+    // An in-flight sign-in owns a placeholder row so the new slot is visible
+    // before the host stores it. Once that attempt has failed the placeholder
+    // must go: the retry panel still targets the same slot, but a stale
+    // "not signed in" row would sit next to the account that is signed in.
+    const managed = managedSubscriptionAccounts(
+      accounts,
+      accountInstances,
+      subscriptionLoginPlaceholder(subscriptionLoginPanel, subscriptionLoginAccountId),
+    );
     const signedInAccounts = managed.filter(item => item.account.connected);
     const startAccount = (target: SubscriptionProvider) => {
       const canAdd = canEditAccountPools && accountInstances.some(instance => instance.account.provider === target && instance.supports_multiple_accounts !== false);
       const hasAccount = managed.some(item => item.account.provider === target);
       const retrySlot = importing && subscriptionLoginPanel?.provider === target && subscriptionLoginPanel.status === 'failed'
         ? subscriptionLoginAccountId : null;
+      // A provider-card login reauthenticates a retained signed-out slot. The
+      // account manager's explicit Add account action remains the path for a
+      // genuinely new slot.
+      const retainedSlot = importing ? retainedSubscriptionAccountId(managed, target) : undefined;
       void handleSubscriptionLogin(target, retrySlot
         ? (retrySlot === target ? undefined : retrySlot)
-        : canAdd && hasAccount ? newAccountSlotId(target) : undefined);
+        : retainedSlot
+          ? (retainedSlot === target ? undefined : retainedSlot)
+          : canAdd && hasAccount ? newAccountSlotId(target) : undefined);
     };
     const renderAccount = (account: SubscriptionAccount, groupedRegion = false, slot: string = account.provider, enabled = true) => {
       const retiredAccount = isRetiredSubscriptionProvider(account.provider);
@@ -4349,17 +4473,29 @@ const ModelSettingsPage: React.FC = () => {
                   {t('subscriptionAuth.retryVault')}
                 </Button>
               ) : (
-                <Button
-                  size="sm"
-                  variant="primary"
-                  loading={isLoggingIn}
-                  disabled={anyLoginInProgress}
-                  onClick={() => void handleSubscriptionLogin(account.provider, slot === account.provider ? undefined : slot)}
-                >
-                  {t(loginPanel?.status === 'failed'
-                    ? 'subscriptionAuth.retryLogin'
-                    : 'subscriptionAuth.login')}
-                </Button>
+                <>
+                  <Button
+                    size="sm"
+                    variant="primary"
+                    loading={isLoggingIn}
+                    disabled={anyLoginInProgress}
+                    onClick={() => void handleSubscriptionLogin(account.provider, slot === account.provider ? undefined : slot)}
+                  >
+                    {t(loginPanel?.status === 'failed'
+                      ? 'subscriptionAuth.retryLogin'
+                      : 'subscriptionAuth.login')}
+                  </Button>
+                  {!retiredAccount && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={anyLoginInProgress || !modelConfigReady}
+                      onClick={() => requestSubscriptionLogout(account, slot)}
+                    >
+                      {t('subscriptionAuth.forget')}
+                    </Button>
+                  )}
+                </>
               )}
               {isLoggingIn && (
                 <Button
@@ -4394,8 +4530,11 @@ const ModelSettingsPage: React.FC = () => {
           <ConfigRetryState message={t('acquisition.loadFailed')} retryLabel={t('messages.retry')}
             loading={isLoadingSubscriptions} onRetry={() => void refreshSubscriptionAccounts()} />
         )}
+        {subscriptionUnavailable && !isLoadingSubscriptions && (
+          <ConfigEmptyState icon={<Wifi aria-hidden="true" />} description={subscriptionUnavailable} />
+        )}
         {isLoadingSubscriptions && <p className="openbitfun-model-settings__dialog-status" role="status">{t('messages.loading')}</p>}
-        {!isLoadingSubscriptions && !subscriptionLoadError && (browsingAccounts ? signedInAccounts.length === 0 : accounts.length === 0) && (
+        {!isLoadingSubscriptions && !subscriptionLoadError && !subscriptionUnavailable && (browsingAccounts ? signedInAccounts.length === 0 : accounts.length === 0) && (
           <ConfigEmptyState icon={<Wifi aria-hidden="true" />} description={t(browsingAccounts ? 'acquisition.noSignedInAccounts' : provider ? 'subscriptionAuth.serviceUnavailable' : 'acquisition.noServices')} />
         )}
         {importing ? <SubscriptionProviderPicker
@@ -4864,7 +5003,8 @@ const ModelSettingsPage: React.FC = () => {
             ) : <span className="openbitfun-model-settings__pool-caption">{t('acquisition.noneConfigured')}</span>}
           </ConfigPageRow>
           <MagpieSourceSection models={aiModels} ready={modelConfigReady} onModelsChange={setAiModels}
-            onManual={() => requestEditorOpen('new-provider:magpie', () => handleSelectProvider('magpie'))} />
+            onManual={() => requestEditorOpen('new-provider:magpie', () => handleSelectProvider('magpie'))}
+            onRemoveModel={(config, trigger) => { void requestDelete(config, trigger); }} />
           <ConfigPageRow multiline className="openbitfun-model-settings__acquisition-row"
             label={(
               <div className="openbitfun-model-settings__import-row">
@@ -4873,7 +5013,7 @@ const ModelSettingsPage: React.FC = () => {
                   {modelConfigReady && subscriptionProviderGroups.length > 0 && (
                     <span className="openbitfun-model-settings__pool-caption">
                       {t('acquisition.importedSummary', {
-                        providers: i18nService.formatNumber(subscriptionProviderGroups.length),
+                        providers: i18nService.formatNumber(subscriptionServiceCount),
                         models: i18nService.formatNumber(subscriptionModelCount),
                       })}
                     </span>
@@ -4921,12 +5061,7 @@ const ModelSettingsPage: React.FC = () => {
                   {unconfiguredSubscriptionAccounts.map(({ account, accountId, enabled }) => (
                     <li key={`${account.provider}:${accountId}`} className="openbitfun-model-settings__import-item" data-account-id={accountId}>
                       <Button size="sm" variant="outline" onClick={() => { setSubscriptionDialogMode('accounts'); setShowSubscriptionManager(true); }}>
-                        {subscriptionName(account)} · {account.account || t('subscriptionAuth.accountIdentityUnavailable')}
-                        {accountId !== account.provider ? ` · ${t('subscriptionAuth.accountMarker', { marker: accountId.slice(-8) })}` : ''}
-                        {!enabled ? ` · ${t('subscriptionAuth.pool.disabled')}`
-                          : account.vault_unavailable ? ` · ${t('subscriptionAuth.accountState.vaultUnavailable')}`
-                            : account.reauthentication_required ? ` · ${t('subscriptionAuth.accountState.reauthenticationRequired')}`
-                              : !account.connected ? ` · ${t('subscriptionAuth.notSignedIn')}` : ''}
+                        {subscriptionName(account)} · {subscriptionAccountDescriptor(account, accountId, enabled)}
                       </Button>
                     </li>
                   ))}
@@ -5426,7 +5561,7 @@ const ModelSettingsPage: React.FC = () => {
       >
         <DialogHeader>
           <DialogHeading>
-            <DialogTitle>{t('subscriptionAuth.logoutConfirmTitle')}</DialogTitle>
+            <DialogTitle>{t(subscriptionRemovalCopy.title)}</DialogTitle>
           </DialogHeading>
           <DialogClose />
         </DialogHeader>
@@ -5448,7 +5583,7 @@ const ModelSettingsPage: React.FC = () => {
                 </ul>
               </ScrollArea>
             )}
-            <p>{t('subscriptionAuth.logoutConsequence')}</p>
+            <p>{t(subscriptionRemovalCopy.consequence)}</p>
           </div>
         </DialogBody>
         <DialogFooter appearance="floating">{(
@@ -5466,7 +5601,7 @@ const ModelSettingsPage: React.FC = () => {
               tone="danger"
               onClick={() => void confirmSubscriptionLogout()}
             >
-              {t('subscriptionAuth.confirmLogout')}
+              {t(subscriptionRemovalCopy.confirm)}
             </Button>
           </>
         )}</DialogFooter>

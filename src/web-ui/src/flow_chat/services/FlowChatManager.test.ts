@@ -227,13 +227,13 @@ describe('FlowChatManager initialization', () => {
     );
   });
 
-  it('creates an ACP session with the shared default title and its host-owned number', async () => {
+  it('creates an ACP session with the shared default title', async () => {
     storeMocks.store = { registerPersistUnreadCompletionCallback: vi.fn(), createSession: vi.fn() };
     storeMocks.createAcpSession.mockImplementation(async ({ sessionName }) => ({
       sessionId: 'acp-created', sessionName, agentType: 'acp:test-client',
     }));
     storeMocks.loadSessionMetadata.mockResolvedValue({
-      sessionId: 'acp-created', customMetadata: { workspaceSessionNumber: 6 },
+      sessionId: 'acp-created', customMetadata: {},
     });
     storeMocks.saveSessionMetadata.mockResolvedValue(undefined);
     const manager = FlowChatManager.getInstance();
@@ -250,7 +250,7 @@ describe('FlowChatManager initialization', () => {
         'acp-created',
         expect.objectContaining({ agentType: 'acp:test-client', workspaceId: 'workspace-1', workspacePath: '/repo' }),
         undefined, name, 128128, 'acp:test-client', '/repo', undefined, undefined,
-        expect.objectContaining({ source: 'i18n', text: name, key: 'flow-chat:session.new', workspaceSessionNumber: 6 }),
+        expect.objectContaining({ source: 'i18n', text: name, key: 'flow-chat:session.new' }),
       );
     } finally {
       manager.destroy();
@@ -342,7 +342,7 @@ describe('FlowChatManager initialization', () => {
     }
   });
 
-  it('creates one empty Claw session when reinitializing a reset workspace', async () => {
+  it('creates one Claw draft when reinitializing a reset workspace', async () => {
     storeMocks.store = {
       registerPersistUnreadCompletionCallback: vi.fn(),
       removeSessionsForWorkspace: vi.fn(() => []),
@@ -350,13 +350,15 @@ describe('FlowChatManager initialization', () => {
     };
     const manager = FlowChatManager.getInstance();
     const initialize = vi.spyOn(manager, 'initialize').mockResolvedValue(false);
-    const create = vi.spyOn(manager, 'createChatSession').mockResolvedValue('claw-new');
+    const create = vi.spyOn(manager, 'createChatDraft').mockResolvedValue('claw-new');
+    const backendCreate = vi.spyOn(manager, 'createChatSession');
     const send = vi.spyOn(manager, 'sendMessage');
     await manager.resetWorkspaceSessions({ id: 'assistant', rootPath: '/assistants/default', workspaceKind: 'assistant' as any }, {
       reinitialize: true, preferredMode: 'Claw',
     });
     expect(initialize).toHaveBeenCalledWith(expect.objectContaining({ id: 'assistant' }), 'Claw');
     expect(create).toHaveBeenCalledExactlyOnceWith({ workspacePath: '/assistants/default', workspaceId: 'assistant' }, 'Claw');
+    expect(backendCreate).not.toHaveBeenCalled();
     expect(send).not.toHaveBeenCalled();
     manager.destroy();
   });

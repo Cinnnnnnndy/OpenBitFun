@@ -1,7 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mockCreateSession = vi.fn();
 const mockAskStream = vi.fn();
+const mockNotifyError = vi.fn();
 const mockAddExternalSession = vi.fn();
 const mockUpdateSessionRelationship = vi.fn();
 const mockUpdateSessionBtwOrigin = vi.fn();
@@ -10,6 +11,19 @@ const mockUpdateSessionModelName = vi.fn();
 const mockUpdateSessionReasoningPreset = vi.fn();
 const mockEnsureBackendSession = vi.fn();
 const mockUpdateSessionModelPool = vi.fn();
+const mockLoadRelaySessionHistory = vi.fn();
+const mockRelayHostHasTurn = vi.fn();
+
+const defaultsMocks = vi.hoisted(() => ({ supported: false, get: vi.fn(), target: vi.fn() }));
+vi.mock('@/infrastructure/config/services/btwModelDefaults', async original => ({
+  ...await original<typeof import('@/infrastructure/config/services/btwModelDefaults')>(),
+  supportsBtwModelDefaults: () => defaultsMocks.supported,
+}));
+vi.mock('@/infrastructure/config/services/ConfigManager', () => ({ configManager: { getConfig: defaultsMocks.get } }));
+vi.mock('@/infrastructure/api/service-api/ModelPoolAPI', async original => ({
+  ...await original<typeof import('@/infrastructure/api/service-api/ModelPoolAPI')>(),
+  modelPoolAPI: { target: defaultsMocks.target },
+}));
 
 const sessions = new Map<string, any>();
 
@@ -26,6 +40,8 @@ vi.mock('../store/FlowChatStore', () => ({
   flowChatStore: {
     getState: () => ({ sessions }),
     updateSessionModelPool: (...args: any[]) => mockUpdateSessionModelPool(...args),
+    loadRelaySessionHistory: (...args: any[]) => mockLoadRelaySessionHistory(...args),
+    relayHostHasTurn: (...args: any[]) => mockRelayHostHasTurn(...args),
     addExternalSession: (...args: any[]) => mockAddExternalSession(...args),
     updateSessionRelationship: (...args: any[]) => mockUpdateSessionRelationship(...args),
     updateSessionBtwOrigin: (...args: any[]) => mockUpdateSessionBtwOrigin(...args),
@@ -55,6 +71,7 @@ vi.mock('./FlowChatManager', () => ({
 vi.mock('@/shared/notification-system', () => ({
   notificationService: {
     warning: vi.fn(),
+    error: (...args: any[]) => mockNotifyError(...args),
   },
 }));
 
@@ -64,10 +81,14 @@ import {
   sendMessageToBtwSession,
   startBtwThread,
 } from './BtwThreadService';
+import { activateSurface, surfaceIdForDevice } from '@/infrastructure/peer-device/deviceSurface';
 
 describe('BtwThreadService', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    defaultsMocks.supported = false;
+    defaultsMocks.get.mockReset();
+    defaultsMocks.target.mockReset();
     sessions.clear();
     sessions.set('parent-1', {
       sessionId: 'parent-1',
@@ -87,9 +108,85 @@ describe('BtwThreadService', () => {
       ],
     });
     mockAskStream.mockResolvedValue({ ok: true });
+    mockLoadRelaySessionHistory.mockResolvedValue(undefined);
+    mockRelayHostHasTurn.mockReturnValue(false);
     mockCreateSession.mockResolvedValue({
       sessionId: 'child-1',
     });
+  });
+
+  it('previews a host default without turning it into an explicit first-message choice', async () => {
+    defaultsMocks.supported = true;
+    defaultsMocks.get.mockResolvedValue({ model_selection: { kind: 'model', model_ref: 'side-model' } });
+    mockAddExternalSession.mockImplementationOnce((id, title, mode, workspacePath, details) => {
+      sessions.set(id, { sessionId: id, title, mode, workspacePath, ...details, dialogTurns: [], config: {} });
+    });
+    const { childSessionId } = createBtwSessionPlaceholder({ parentSessionId: 'parent-1', childSessionName: 'Side' });
+    await Promise.resolve();
+    expect(mockUpdateSessionModelName).toHaveBeenLastCalledWith(childSessionId, 'side-model');
+    expect(mockUpdateSessionModelPool).toHaveBeenLastCalledWith(childSessionId, undefined);
+    expect(mockUpdateSessionReasoningPreset).toHaveBeenLastCalledWith(childSessionId, undefined);
+    expect(sessions.get(childSessionId).config.btwModelSelectionExplicit).toBeUndefined();
+  });
+
+  it('does not overwrite a user choice with a delayed default preview', async () => {
+    defaultsMocks.supported = true;
+    let resolve!: (value: unknown) => void;
+    defaultsMocks.get.mockImplementationOnce(() => new Promise(done => { resolve = done; }));
+    mockAddExternalSession.mockImplementationOnce((id, title, mode, workspacePath, details) => {
+      sessions.set(id, { sessionId: id, title, mode, workspacePath, ...details, dialogTurns: [], config: {} });
+    });
+    const { childSessionId } = createBtwSessionPlaceholder({ parentSessionId: 'parent-1', childSessionName: 'Side' });
+    sessions.get(childSessionId).config.btwModelSelectionExplicit = true;
+    mockUpdateSessionModelName.mockClear();
+    resolve({ model_selection: { kind: 'model', model_ref: 'side-model' } });
+    await Promise.resolve();
+    expect(mockUpdateSessionModelName).not.toHaveBeenCalled();
+  });
+
+  it('uses the host admission response to display the committed BTW model without a second read', async () => {
+    defaultsMocks.supported = true;
+    sessions.set('side', { sessionId: 'side', sessionKind: 'btw', parentSessionId: 'parent-1',
+      workspaceId: 'workspace-1', workspacePath: '/workspace', config: { modelName: 'parent' } });
+    mockAskStream.mockResolvedValueOnce({ ok: true, modelTarget: {
+      sessionId: 'side', selection: { kind: 'model', model_ref: 'side-model' }, reasoningPreset: null,
+    } });
+    await sendMessageToBtwSession({ parentSessionId: 'parent-1', childSessionId: 'side', question: 'Why?' });
+    expect(mockAskStream).toHaveBeenCalledOnce();
+    expect(defaultsMocks.target).not.toHaveBeenCalled();
+    expect(mockUpdateSessionModelName).toHaveBeenLastCalledWith('side', 'side-model');
+    expect(mockUpdateSessionModelPool).toHaveBeenLastCalledWith('side', undefined, undefined);
+    expect(mockUpdateSessionReasoningPreset).toHaveBeenLastCalledWith('side', null);
+  });
+
+  it('keeps a newer user choice when recovering an admitted model target', async () => {
+    defaultsMocks.supported = true;
+    const config = { modelName: 'parent', btwModelSelectionExplicit: false };
+    sessions.set('side', { sessionId: 'side', sessionKind: 'btw', parentSessionId: 'parent-1',
+      workspaceId: 'workspace-1', workspacePath: '/workspace', config });
+    let resolve!: (value: unknown) => void;
+    let started!: () => void;
+    const reading = new Promise<void>(done => { started = done; });
+    defaultsMocks.target.mockImplementationOnce(() => { started(); return new Promise(done => { resolve = done; }); });
+    const submit = sendMessageToBtwSession({ parentSessionId: 'parent-1', childSessionId: 'side', question: 'Why?' });
+    await reading;
+    config.modelName = 'new-choice'; config.btwModelSelectionExplicit = true;
+    resolve({ selection: { kind: 'model', model_ref: 'host-default' } });
+    await submit;
+    expect(mockAskStream).toHaveBeenCalledOnce();
+    expect(mockUpdateSessionModelName).not.toHaveBeenCalled();
+  });
+
+  it('shows an admission failure instead of silently falling back or replaying the question', async () => {
+    defaultsMocks.supported = true;
+    sessions.set('side', { sessionId: 'side', sessionKind: 'btw', parentSessionId: 'parent-1',
+      workspaceId: 'workspace-1', workspacePath: '/workspace', config: {} });
+    mockAskStream.mockRejectedValueOnce(new Error('BTW model is missing: removed-model'));
+    await expect(sendMessageToBtwSession({ parentSessionId: 'parent-1', childSessionId: 'side', question: 'Why?' }))
+      .rejects.toThrow('BTW model is missing: removed-model');
+    expect(mockAskStream).toHaveBeenCalledOnce();
+    expect(mockNotifyError).toHaveBeenCalledOnce();
+    expect(sessions.has('side')).toBe(true);
   });
 
   it('passes structured relationship metadata to backend-created review sessions', async () => {
@@ -336,6 +433,69 @@ describe('BtwThreadService', () => {
       }),
       'btw',
     );
+  });
+
+  it('subscribes to the side question stream once a peer host accepts it', async () => {
+    sessions.set('btw-child', { sessionId: 'btw-child', sessionKind: 'btw', config: {}, dialogTurns: [] });
+    activateSurface(surfaceIdForDevice('peer-device-1'));
+    try {
+      await sendMessageToBtwSession({ parentSessionId: 'parent-1', childSessionId: 'btw-child', question: 'Any news?' });
+    } finally {
+      activateSurface(surfaceIdForDevice(null));
+    }
+    expect(mockLoadRelaySessionHistory).toHaveBeenCalledWith('btw-child');
+    expect(mockAskStream.mock.invocationCallOrder[0])
+      .toBeLessThan(mockLoadRelaySessionHistory.mock.invocationCallOrder[0]);
+  });
+
+  it('does not open a relay subscription on the local surface or after a refused question', async () => {
+    sessions.set('btw-child', { sessionId: 'btw-child', sessionKind: 'btw', config: {}, dialogTurns: [] });
+    await sendMessageToBtwSession({ parentSessionId: 'parent-1', childSessionId: 'btw-child', question: 'Any news?' });
+    expect(mockLoadRelaySessionHistory).not.toHaveBeenCalled();
+
+    mockAskStream.mockRejectedValueOnce(new Error('host refused'));
+    activateSurface(surfaceIdForDevice('peer-device-1'));
+    try {
+      await expect(sendMessageToBtwSession({ parentSessionId: 'parent-1', childSessionId: 'btw-child', question: 'Again?' }))
+        .rejects.toThrow('host refused');
+    } finally {
+      activateSurface(surfaceIdForDevice(null));
+    }
+    expect(mockLoadRelaySessionHistory).not.toHaveBeenCalled();
+  });
+
+  describe('a lost peer reply', () => {
+    const replyLost = () => new Error('Relay connection closed before the reply arrived');
+    const send = () => sendMessageToBtwSession({
+      parentSessionId: 'parent-1', childSessionId: 'btw-child', question: 'Any news?', requestId: 'request-7',
+    });
+
+    beforeEach(() => {
+      sessions.set('btw-child', { sessionId: 'btw-child', sessionKind: 'btw', config: {}, dialogTurns: [] });
+      activateSurface(surfaceIdForDevice('peer-device-1'));
+    });
+    afterEach(() => activateSurface(surfaceIdForDevice(null)));
+
+    it('is accepted when the host records show the question was admitted', async () => {
+      mockAskStream.mockRejectedValueOnce(replyLost());
+      mockRelayHostHasTurn.mockReturnValue(true);
+      await expect(send()).resolves.toEqual({ requestId: 'request-7' });
+      expect(mockRelayHostHasTurn).toHaveBeenCalledWith('btw-child', 'btw-turn-request-7');
+      expect(mockAskStream).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps the original error when the host never admitted it', async () => {
+      mockAskStream.mockRejectedValueOnce(replyLost());
+      mockLoadRelaySessionHistory.mockRejectedValueOnce(new Error('Session not found'));
+      await expect(send()).rejects.toThrow('Relay connection closed before the reply arrived');
+      expect(mockRelayHostHasTurn).not.toHaveBeenCalled();
+    });
+
+    it('does not probe the host for an ordinary refusal', async () => {
+      mockAskStream.mockRejectedValueOnce(new Error('model unavailable'));
+      await expect(send()).rejects.toThrow('model unavailable');
+      expect(mockLoadRelaySessionHistory).not.toHaveBeenCalled();
+    });
   });
 
   it('discards the local placeholder when the first /btw request fails', async () => {

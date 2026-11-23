@@ -28,6 +28,7 @@ import {
 } from '../sessionOpenIntent';
 import type { Session } from '../../types/flow-chat';
 import type { ReviewTeamRunManifest } from '@/shared/services/reviewTeamService';
+import { WorkspaceKind, WorkspaceType, type WorkspaceInfo } from '@/shared/types';
 import { workspaceManager } from '@/infrastructure/services/business/workspaceManager';
 import { notificationService } from '../../../shared/notification-system';
 
@@ -63,6 +64,7 @@ const persistenceMocks = vi.hoisted(() => ({
 
 const stateMachineMocks = vi.hoisted(() => ({
   delete: vi.fn(),
+  getCurrentState: vi.fn(() => 'idle'),
 }));
 
 const dispatchStoreMocks = vi.hoisted(() => ({
@@ -126,6 +128,7 @@ vi.mock('./TextChunkModule', () => ({
 
 vi.mock('../../state-machine', () => ({
   stateMachineManager: stateMachineMocks,
+  SessionExecutionState: { IDLE: 'idle' },
 }));
 
 vi.mock('@/features/dispatch/dispatchJobStore', () => ({
@@ -209,6 +212,8 @@ function createContext(
       workspacePath?: string,
       remoteConnectionId?: string,
       remoteSshHost?: string,
+      _titleDescriptor?: unknown,
+      draft?: Session['draft'],
     ) => {
       const nextSession = createSession({
         sessionId,
@@ -216,8 +221,11 @@ function createContext(
         isHistorical: false,
         historyState: 'ready',
         config: {
+          ...config,
           agentType: agentType ?? (config?.agentType as string | undefined) ?? 'Standard',
         },
+        workspaceId: config?.workspaceId as string | undefined,
+        draft,
         mode: agentType ?? 'Standard',
         workspacePath: workspacePath ?? (config?.workspacePath as string | undefined) ?? session.workspacePath,
         remoteConnectionId,
@@ -404,6 +412,34 @@ describe('createChatSession', () => {
     expect(agentApiMocks.createSession).not.toHaveBeenCalled();
   });
 
+  it('creates a Claw session for a closed assistant by its catalog ID', async () => {
+    const assistant: WorkspaceInfo = {
+      id: 'closed-assistant',
+      name: 'Design assistant',
+      rootPath: '/assistants/design',
+      workspaceKind: WorkspaceKind.Assistant,
+      workspaceType: WorkspaceType.Other,
+      languages: [],
+      openedAt: '',
+      lastAccessed: '',
+      tags: [],
+    };
+    const workspaceState = vi.spyOn(workspaceManager, 'getState').mockReturnValueOnce({
+      ...workspaceManager.getState(), assistantWorkspaces: [assistant],
+    });
+    const { context } = createContext(createSession());
+    try {
+      const id = await createChatSession(context, { workspaceId: assistant.id }, 'Claw', true);
+      expect(context.flowChatStore.getState().sessions.get(id)).toMatchObject({
+        workspaceId: assistant.id, workspacePath: assistant.rootPath, mode: 'Claw',
+        draft: { workspaceId: assistant.id, phase: 'editing' },
+      });
+      expect(agentApiMocks.createSession).not.toHaveBeenCalled();
+    } finally {
+      workspaceState.mockRestore();
+    }
+  });
+
   it('dedupes concurrent creates before model config loading resolves', async () => {
     // This keeps the first create suspended in the model config path while the
     // second create enters with the same creation key.
@@ -430,6 +466,59 @@ describe('createChatSession', () => {
     ]);
 
     expect(agentApiMocks.createSession).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['Standard', 'Claw'])('reuses sequential and concurrent %s draft requests without a host create', async mode => {
+    const { context, flowChatStore } = createContext(createSession());
+    const config = { workspaceId: 'workspace-1' };
+    const ids = await Promise.all([
+      createChatSession(context, config, mode, true),
+      createChatSession(context, config, mode, true),
+    ]);
+    expect(ids[0]).toBe(ids[1]);
+    flowChatStore.switchSession('history-1');
+    expect(await createChatSession(context, config, mode, true)).toBe(ids[0]);
+    expect(flowChatStore.getState().activeSessionId).toBe(ids[0]);
+    expect(flowChatStore.createSession).toHaveBeenCalledOnce();
+    expect(agentApiMocks.createSession).not.toHaveBeenCalled();
+  });
+
+  it('resolves the configured default mode before looking for reusable drafts', async () => {
+    projectDefaults.read.mockResolvedValueOnce({ supported: true, defaults: { mode: 'Cowork' } });
+    agentApiMocks.getAvailableModes.mockResolvedValue([{ id: 'Standard' }, { id: 'Cowork' }]);
+    const { context, flowChatStore } = createContext(createSession({
+      sessionId: 'cowork-draft', mode: 'Cowork', sessionKind: 'normal',
+      isHistorical: false, historyState: 'new',
+      draft: { workspaceId: 'workspace-1', phase: 'editing', turnId: 'first' },
+    }));
+    expect(await createChatSession(context, { workspaceId: 'workspace-1' }, undefined, true)).toBe('cowork-draft');
+    expect(flowChatStore.createSession).not.toHaveBeenCalled();
+    expect(agentApiMocks.createSession).not.toHaveBeenCalled();
+  });
+
+  it('creates another draft once the existing composer has user content', async () => {
+    const { sessionComposerStore } = await import('../../store/sessionComposerStore');
+    const { context, flowChatStore } = createContext(createSession());
+    const first = await createChatSession(context, { workspaceId: 'workspace-1' }, 'Claw', true);
+    sessionComposerStore.getState().setValue(first, 'Unsent request');
+    try {
+      const second = await createChatSession(context, { workspaceId: 'workspace-1' }, 'Claw', true);
+      expect(second).not.toBe(first);
+      expect(flowChatStore.createSession).toHaveBeenCalledTimes(2);
+      expect(sessionComposerStore.getState().getDraft(first).value).toBe('Unsent request');
+      expect(agentApiMocks.createSession).not.toHaveBeenCalled();
+    } finally { sessionComposerStore.getState().removeDrafts([first]); }
+  });
+
+  it('keeps concurrent drafts with explicit different models separate', async () => {
+    const { context, flowChatStore } = createContext(createSession());
+    const [first, second] = await Promise.all([
+      createChatSession(context, { workspaceId: 'workspace-1', modelName: 'a' }, 'Standard', true),
+      createChatSession(context, { workspaceId: 'workspace-1', modelName: 'b' }, 'Standard', true),
+    ]);
+    expect(first).not.toBe(second);
+    expect(flowChatStore.getState().sessions.get(first)?.config.modelName).toBe('a');
+    expect(flowChatStore.getState().sessions.get(second)?.config.modelName).toBe('b');
   });
 
   it('does not reuse or project a session creation from a superseded device activation', async () => {
@@ -1693,6 +1782,59 @@ describe('SessionModule historical session coordination', () => {
     expect(flowChatStore.getState().sessions.get(other.sessionId)).toBe(other);
     expect(flowChatStore.getState().activeSessionId).toBe(other.sessionId);
     expect(flowChatStore.getState().sessions.has(target)).toBe(false);
+  });
+
+  it.each(['local', 'peer-archive'])('removes an empty stale ACP catalog entry after the %s host confirms it is absent', async surface => {
+    activateSurface(surface);
+    const session = createSession({ config: { agentType: 'acp:qoder' }, mode: 'acp:qoder', persistedTurnCount: 0 });
+    const { context, flowChatStore } = createContext(session, { activeSessionId: session.sessionId });
+    sessionApiMocks.archiveSession.mockRejectedValueOnce(new Error('Session metadata not found'));
+    sessionApiMocks.loadSessionMetadata.mockResolvedValueOnce(null);
+    await archiveChatSession(context, session.sessionId);
+    expect(sessionApiMocks.loadSessionMetadata).toHaveBeenCalledWith(session.sessionId, 'workspace-1');
+    expect(flowChatStore.getState().sessions.has(session.sessionId)).toBe(false);
+  });
+
+  it.each(['exists', 'offline', 'has-turns', 'unknown-count'])('retains an ACP session when the missing-record check is unsafe: %s', async scenario => {
+    const session = createSession({
+      config: { agentType: 'acp:qoder' }, mode: 'acp:qoder',
+      persistedTurnCount: scenario === 'unknown-count' ? undefined : scenario === 'has-turns' ? 1 : 0,
+    });
+    const { context, flowChatStore } = createContext(session);
+    sessionApiMocks.archiveSession.mockRejectedValueOnce(new Error('archive failed'));
+    if (scenario === 'exists') sessionApiMocks.loadSessionMetadata.mockResolvedValueOnce({ sessionId: session.sessionId });
+    if (scenario === 'offline') sessionApiMocks.loadSessionMetadata.mockRejectedValueOnce(new Error('Host offline'));
+    await expect(archiveChatSession(context, session.sessionId)).rejects.toThrow('archive failed');
+    expect(flowChatStore.getState().sessions.get(session.sessionId)).toBe(session);
+  });
+
+  it('retains an ACP session updated while the missing-record check is pending', async () => {
+    const session = createSession({ config: { agentType: 'acp:qoder' }, mode: 'acp:qoder', persistedTurnCount: 0 });
+    const { context, flowChatStore } = createContext(session);
+    const pending = createDeferred<null>();
+    sessionApiMocks.archiveSession.mockRejectedValueOnce(new Error('archive failed'));
+    sessionApiMocks.loadSessionMetadata.mockReturnValueOnce(pending.promise);
+    const archive = archiveChatSession(context, session.sessionId);
+    await vi.waitFor(() => expect(sessionApiMocks.loadSessionMetadata).toHaveBeenCalled());
+    const updated = { ...session, title: 'Updated' };
+    flowChatStore.setState((state: any) => ({ ...state, sessions: new Map(state.sessions).set(session.sessionId, updated) }));
+    pending.resolve(null);
+    await expect(archive).rejects.toThrow('archive failed');
+    expect(flowChatStore.getState().sessions.get(session.sessionId)).toBe(updated);
+  });
+
+  it('does not remove an ACP projection when the surface changes during the missing-record check', async () => {
+    const session = createSession({ config: { agentType: 'acp:qoder' }, mode: 'acp:qoder', persistedTurnCount: 0 });
+    const { context, flowChatStore } = createContext(session);
+    const pending = createDeferred<null>();
+    sessionApiMocks.archiveSession.mockRejectedValueOnce(new Error('archive failed'));
+    sessionApiMocks.loadSessionMetadata.mockReturnValueOnce(pending.promise);
+    const archive = archiveChatSession(context, session.sessionId);
+    await vi.waitFor(() => expect(sessionApiMocks.loadSessionMetadata).toHaveBeenCalled());
+    activateSurface('peer-other');
+    pending.resolve(null);
+    await expect(archive).rejects.toMatchObject({ isSurfaceChangedError: true });
+    expect(flowChatStore.removeSession).not.toHaveBeenCalled();
   });
 
   it('retains the session and its runtime state when archive fails', async () => {

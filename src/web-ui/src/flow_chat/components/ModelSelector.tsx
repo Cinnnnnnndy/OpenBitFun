@@ -148,6 +148,17 @@ interface ModelSelectorProps {
   disabledReason?: string;
   /** Compact trigger treatment supplied by the owning composer. */
   reasoningTriggerPresentation?: 'meter' | 'label';
+  /**
+   * Increments each time the owning composer asks the selector to open, e.g.
+   * from the `/model` slash command. The selector owns its menu state, so this
+   * is a request signal rather than a controlled `open` prop.
+   */
+  openRequest?: number;
+  /**
+   * Called after a menu opened by `openRequest` closes without navigating away,
+   * so the composer can take focus back for the next message.
+   */
+  onRequestMenuClosed?: () => void;
 }
 
 interface ModelInfo {
@@ -376,6 +387,8 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
   persistSharedModeDefault = true,
   disabled = false,
   disabledReason,
+  openRequest = 0,
+  onRequestMenuClosed,
 }) => {
   const { t, formatNumber } = useI18n('flow-chat');
   const deviceSurfaceScope = useSyncExternalStore(onSurfaceActivated, getActiveSurfaceScope, getActiveSurfaceScope);
@@ -454,6 +467,14 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
   const focusPanelOnOpenRef = useRef(false);
   const focusSummaryOnReturnRef = useRef<ModelSelectorPanel | null>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
+  /** Last composer `openRequest` value this selector already answered. */
+  const handledOpenRequestRef = useRef(0);
+  /** Whether the open menu belongs to a composer request rather than the trigger. */
+  const requestOwnsMenuRef = useRef(false);
+  /** Last rendered menu state, so the handoff only fires on an open-to-closed transition. */
+  const menuWasOpenRef = useRef(false);
+  const onRequestMenuClosedRef = useRef(onRequestMenuClosed);
+  onRequestMenuClosedRef.current = onRequestMenuClosed;
   const menuId = useId();
 
   useEffect(() => {
@@ -519,6 +540,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
     acpClientIdFromAgentType(activeSession?.config.agentType) ??
     acpClientIdFromAgentType(activeSession?.mode);
   const isAcpSession = Boolean(acpClientId && sessionId);
+  const persistModeDefault = persistSharedModeDefault && activeSession?.sessionKind !== 'btw';
   const targetIsSubagent = isSubagentSession || activeSession?.sessionKind === 'subagent';
 
   const sessionPoolId = useSyncExternalStore(
@@ -1131,6 +1153,8 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
   }, [availability, onAvailabilityChange]);
 
   const handleOpenModelSettings = useCallback(() => {
+    // Navigation replaces the composer's focus intent; do not pull focus back.
+    requestOwnsMenuRef.current = false;
     setDropdownOpen(false);
     setKeyboardNavigationOpen(false);
     quickActions.openSettings({ pageId: 'ai.models' });
@@ -1324,7 +1348,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
   const modelInformationLoading = availability.status === 'loading'
     || (isNativeModelSelection && configLoadState === 'ready' && catalogLoadState === 'loading')
     || (isAcpSession && !externalSelection && acpOptionsLoadState === 'loading');
-  const canConfigureNativeDefaults = isNativeModelSelection && persistSharedModeDefault && !targetIsSubagent;
+  const canConfigureNativeDefaults = isNativeModelSelection && persistModeDefault && !targetIsSubagent;
   const routing = useModelRouting({
     identity: routingIdentity, epoch: deviceSurfaceScope.epoch,
     request: { sessionId, workspaceId: activeSession?.workspaceId || activeSession?.config.workspaceId,
@@ -1544,7 +1568,8 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
       }
 
       await updateTargetSessionModel();
-      if (persistSharedModeDefault) {
+      if (sessionId && activeSession?.sessionKind === 'btw') store.markBtwModelSelectionExplicit(sessionId);
+      if (persistModeDefault) {
         const saveDefault = rememberModeSelection({ kind: 'model', model_ref: modelId });
         if (!sessionId) {
           // A selector without a draft/session has no other owner for the next
@@ -1594,6 +1619,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
   }, [
     allModels,
     loadConfigData,
+    activeSession?.sessionKind,
     activeSession?.config.workspacePath,
     activeSession?.remoteConnectionId,
     activeSession?.remoteSshHost,
@@ -1607,7 +1633,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
     isAcpSession,
     loading,
     modelSelectionScopeKey,
-    persistSharedModeDefault,
+    persistModeDefault,
     routing.pending,
     reasoningLoading,
     recentPresetForModel,
@@ -1730,7 +1756,10 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
     const session = store.getState().sessions.get(sessionId);
     if (!session) return false;
     const previousPreset = session.config.reasoningPreset;
-    if (previousPreset === normalizedPreset) return true;
+    if (previousPreset === normalizedPreset) {
+      if (session.sessionKind === 'btw') store.markBtwModelSelectionExplicit(sessionId);
+      return true;
+    }
 
     const selectionScope = getActiveSurfaceScope();
     setReasoningLoading(true);
@@ -1749,6 +1778,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
         });
       }
       selectionScope.assertCurrent('select reasoning preset');
+      if (session.sessionKind === 'btw') store.markBtwModelSelectionExplicit(sessionId);
       if (!targetIsSubagent) {
         setRecentReasoningPreset(concreteModelId, normalizedPreset);
         setPreSessionReasoningSelection({
@@ -1928,7 +1958,8 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
           store.updateSessionModelPool(sessionId, pool.id, undefined, true);
         }
       }
-      if (!targetIsSubagent && persistSharedModeDefault) {
+      if (sessionId && activeSession?.sessionKind === 'btw') store.markBtwModelSelectionExplicit(sessionId);
+      if (!targetIsSubagent && persistModeDefault) {
         const saved = rememberModeSelection({ kind: 'pool', pool_id: pool.id });
         if (!sessionId) await saved;
         else void saved.catch(error => {
@@ -2291,6 +2322,52 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
     if (disabled || loading || externalSelection?.disabled) return;
     openPanel('models', true);
   };
+  /**
+   * Open the menu the way the trigger does. Trigger activation and composer
+   * requests (`/model`) share this so both land on the same view and focus.
+   */
+  const openMenu = useCallback((): boolean => {
+    if (disabled || loading || reasoningLoading || externalSelection?.disabled || !showModelTrigger) {
+      return false;
+    }
+    if (dropdownOpen) return true;
+    resetDropdownNavigation();
+    // A command request is a keyboard interaction: focus the current choice
+    // instead of leaving focus in the composer.
+    setKeyboardNavigationOpen(true);
+    if (isAcpSelection && !modelInformationLoading) void loadAcpOptions();
+    if (!hasSettingsPanel) {
+      openPanel('models', true);
+    }
+    setDropdownOpen(true);
+    return true;
+  }, [
+    disabled,
+    dropdownOpen,
+    externalSelection?.disabled,
+    hasSettingsPanel,
+    isAcpSelection,
+    loadAcpOptions,
+    loading,
+    modelInformationLoading,
+    openPanel,
+    reasoningLoading,
+    resetDropdownNavigation,
+    showModelTrigger,
+  ]);
+  useEffect(() => {
+    if (openRequest <= 0 || openRequest === handledOpenRequestRef.current) return;
+    handledOpenRequestRef.current = openRequest;
+    // Only a request that actually opened the menu owns the close handoff.
+    requestOwnsMenuRef.current = openMenu();
+  }, [openMenu, openRequest]);
+  useEffect(() => {
+    const wasOpen = menuWasOpenRef.current;
+    menuWasOpenRef.current = dropdownOpen;
+    if (!wasOpen || dropdownOpen || !requestOwnsMenuRef.current) return;
+    requestOwnsMenuRef.current = false;
+    onRequestMenuClosedRef.current?.();
+  }, [dropdownOpen]);
   const isSelectionPanel = activePanel === 'models' || activePanel === 'providers' || activePanel === 'pool' || activePanel === 'pools';
   const isModelPicker = activePanel === 'models' && !activeProviderGroup;
   const showEmptyModeCard = !showModelLoadingState && !activeProviderGroup && (

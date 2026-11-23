@@ -17,6 +17,11 @@ export interface GlobalConfig {
   last_modified: number;
 }
 
+export interface DecisionModelConfig {
+  endpoint: string;
+  model_name: string;
+}
+
 export type PermissionEffect = 'allow' | 'ask' | 'deny';
 
 export interface PermissionRule {
@@ -34,9 +39,25 @@ export interface PermissionInteractionConfig {
   auto_approve_ask: boolean;
 }
 
+export type PermissionApprovalStrategy = 'interactive' | 'immediate_allow' | 'model';
+export type PermissionApprovalModelKind = 'chat' | 'decision';
+export type PermissionApprovalOnAsk = 'user' | 'reject';
+export type PermissionApprovalOnError = 'ask' | 'reject';
+
+export interface PermissionApprovalConfig {
+  strategy: PermissionApprovalStrategy;
+  model_kind: PermissionApprovalModelKind;
+  chat_model_id: string;
+  timeout_ms: number;
+  on_ask: PermissionApprovalOnAsk;
+  on_error: PermissionApprovalOnError;
+}
+
 export interface ToolPermissionConfig {
   policy: PermissionPolicyConfig;
   interaction: PermissionInteractionConfig;
+  /** Existing installations may not have automatic-approval settings yet. */
+  approval?: PermissionApprovalConfig;
 }
 
 export type MemoryExternalContextPolicy = 'clear_tool_results' | 'allow' | 'skip_session';
@@ -286,6 +307,8 @@ export type CustomHeadersMode = 'replace' | 'merge';
 export type CustomRequestBodyMode = 'merge' | 'trim';
 
 export interface AIModelConfig {
+  responses?: ResponsesRequestSettings;
+  responses_defaults?: ResponsesRequestSettings;
   id?: string;
   name: string;
   provider: string;
@@ -320,6 +343,11 @@ export interface AIModelConfig {
   auth?: AuthConfig;
   /** Ordered backup channels (other model configs). Absent keeps one channel. */
   channel_routing?: ModelChannelRouting;
+}
+
+export interface ResponsesRequestSettings {
+  transport: 'http' | 'websocket';
+  context: 'full' | 'incremental';
 }
 
 /** Explicit failover route; members are other model configuration IDs. */
@@ -482,14 +510,17 @@ export interface ModelRoutingConfig {
 }
 
 export interface AIConfig {
+  decision_model: DecisionModelConfig;
   generative_ui_library?: string;
   models: AIModelConfig[];
   tool_presentation_mode?: 'native' | 'ptc' | 'ptc_python';
   default_models: DefaultModelsConfig;
   model_routing?: ModelRoutingConfig;
+  allow_subagent_model_override: boolean;
   agent_model_defaults: AgentModelDefaultsConfig;
   agent_model_selections?: AgentModelSelections;
   task_models: TaskModelsConfig;
+  btw?: { model_selection: AgentModelTargetSelection; [key: string]: unknown };
   agent_profiles: Record<string, StoredAgentProfileConfigItem>;
   proxy: ProxyConfig;
   request_timeout: number;

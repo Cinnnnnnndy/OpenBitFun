@@ -509,7 +509,8 @@ fn relay_records_carry_attachment_pixels_on_the_turn_record_alone() {
 
 #[test]
 fn relay_item_records_carry_the_subagent_session_link() {
-    let turn: openbitfun_services_core::session::DialogTurnData = serde_json::from_value(
+    for tool_name in ["AgentSpawn", "AgentFork"] {
+        let turn: openbitfun_services_core::session::DialogTurnData = serde_json::from_value(
         serde_json::json!({
             "turnId": "turn-1",
             "turnIndex": 0,
@@ -533,7 +534,7 @@ fn relay_item_records_carry_the_subagent_session_link() {
                 "thinkingItems": [],
                 "toolItems": [{
                     "id": "tool-call-agent-spawn",
-                    "toolName": "AgentSpawn",
+                    "toolName": tool_name,
                     "toolCall": {"id": "tool-call-agent-spawn", "input": {"run_in_background": true}},
                     "toolResult": {"result": {"status": "started"}, "success": true},
                     "startTime": 1_700_000_000_u64,
@@ -549,32 +550,33 @@ fn relay_item_records_carry_the_subagent_session_link() {
     )
     .expect("turn fixture deserializes");
 
-    let records =
-        openbitfun_services_integrations::remote_connect::session_records::records_from_turns(
-            std::slice::from_ref(&turn),
-            &|_| None,
-        )
-        .expect("records build");
-    let item_record = records
-        .iter()
-        .find(|record| record["id"] == "item/tool-call-agent-spawn")
-        .expect("the spawning tool item is published as its own record");
+        let records =
+            openbitfun_services_integrations::remote_connect::session_records::records_from_turns(
+                std::slice::from_ref(&turn),
+                &|_| None,
+            )
+            .expect("records build");
+        let item_record = records
+            .iter()
+            .find(|record| record["id"] == "item/tool-call-agent-spawn")
+            .expect("the spawning tool item is published as its own record");
 
-    // The record keeps the persisted item shape, so the child Session link rides
-    // the wire without a protocol change and without a client-side join.
-    assert_eq!(item_record["item"]["type"], "tool");
-    assert_eq!(
-        item_record["item"]["data"]["subagentSessionId"],
-        "child-session"
-    );
-    assert_eq!(
-        item_record["item"]["data"]["subagentDialogTurnId"],
-        "child-turn"
-    );
-    assert_eq!(
-        item_record["item"]["data"]["subagentModelId"],
-        "child-model"
-    );
+        // The record keeps the persisted item shape, so the child Session link rides
+        // the wire without a protocol change and without a client-side join.
+        assert_eq!(item_record["item"]["type"], "tool");
+        assert_eq!(
+            item_record["item"]["data"]["subagentSessionId"],
+            "child-session"
+        );
+        assert_eq!(
+            item_record["item"]["data"]["subagentDialogTurnId"],
+            "child-turn"
+        );
+        assert_eq!(
+            item_record["item"]["data"]["subagentModelId"],
+            "child-model"
+        );
+    }
 }
 
 #[test]
@@ -2714,6 +2716,10 @@ fn remote_connect_agent_type_mapping_preserves_current_mobile_aliases() {
     assert_eq!(resolve_remote_agent_type(Some("Ultimate")), "Ultimate");
     assert_eq!(resolve_remote_agent_type(Some("cowork")), "Cowork");
     assert_eq!(resolve_remote_agent_type(Some("Cowork")), "Cowork");
+    assert_eq!(
+        resolve_remote_agent_type(Some("PaperWriting")),
+        "PaperWriting"
+    );
     assert_eq!(resolve_remote_agent_type(Some("plan")), "Standard");
     assert_eq!(resolve_remote_agent_type(Some("Plan")), "Standard");
     assert_eq!(resolve_remote_agent_type(Some("unknown")), "Standard");
@@ -3312,6 +3318,7 @@ fn remote_connect_tracker_preserves_streaming_snapshot_contract() {
         user_input: "hello".to_string(),
         original_user_input: None,
         user_message_metadata: None,
+        session_binding: None,
     });
     tracker.handle_agentic_event(&AgenticEvent::ModelRoundStarted {
         session_id: "session-1".to_string(),
@@ -3370,6 +3377,7 @@ fn remote_connect_tracker_keeps_steering_between_assistant_text_segments() {
         user_input: "hello".to_string(),
         original_user_input: None,
         user_message_metadata: None,
+        session_binding: None,
     });
     tracker.handle_agentic_event(&AgenticEvent::TextChunk {
         session_id: "session-1".to_string(),
@@ -3456,6 +3464,7 @@ async fn remote_connect_tracker_broadcasts_tool_and_turn_events() {
         user_input: "hello".to_string(),
         original_user_input: None,
         user_message_metadata: None,
+        session_binding: None,
     });
     tracker.handle_agentic_event(&AgenticEvent::ToolEvent {
         session_id: "session-1".to_string(),
@@ -3510,6 +3519,7 @@ fn remote_connect_tracker_keeps_finished_turn_snapshot_until_persistence_finaliz
         user_input: "hello".to_string(),
         original_user_input: None,
         user_message_metadata: None,
+        session_binding: None,
     });
     tracker.handle_agentic_event(&AgenticEvent::TextChunk {
         session_id: "session-1".to_string(),
@@ -3656,6 +3666,7 @@ fn remote_connect_poll_helpers_preserve_delta_and_completion_policy() {
         user_input: "hello".to_string(),
         original_user_input: None,
         user_message_metadata: None,
+        session_binding: None,
     });
     tracker.handle_agentic_event(&AgenticEvent::TextChunk {
         session_id: "session-1".to_string(),
@@ -3751,6 +3762,7 @@ fn remote_connect_tracker_ignores_unrelated_direct_session_events() {
         user_input: "hello".to_string(),
         original_user_input: None,
         user_message_metadata: None,
+        session_binding: None,
     });
     tracker.handle_agentic_event(&AgenticEvent::TextChunk {
         session_id: "session-2".to_string(),

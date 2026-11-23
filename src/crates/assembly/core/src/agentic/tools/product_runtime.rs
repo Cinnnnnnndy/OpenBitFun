@@ -26,6 +26,8 @@ use snapshot::ProductSnapshotToolWrapper;
 use std::sync::Arc;
 
 pub use call_deferred_tool::CallDeferredTool;
+#[cfg(feature = "ptc-runtime")]
+pub(crate) use catalog::resolve_product_deferred_tool_detail;
 pub use catalog::{build_all_tools_info, build_tool_info, ToolInfoDto};
 pub(crate) use catalog::{
     product_get_tool_spec_runtime, resolve_product_get_tool_spec_results,
@@ -299,6 +301,7 @@ mod baseline_tests {
             "Read",
             "Task",
             "AgentSpawn",
+            "AgentFork",
             "ListWorkspaces",
             "SessionControl",
             "Cron",

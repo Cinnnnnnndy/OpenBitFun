@@ -10,7 +10,6 @@
     feature = "miniapp-runtime",
     feature = "models-dev",
     feature = "remote-connect",
-    feature = "remote-ssh-concrete",
     feature = "review-platform",
     feature = "speech",
     feature = "skillhub",
@@ -30,9 +29,6 @@ pub(crate) fn reqwest_client() -> reqwest::Client {
     openbitfun_services_core::tls_provider::ensure_ring_crypto_provider();
     reqwest::Client::new()
 }
-
-#[cfg(feature = "miniapp-market")]
-pub mod appearance_market;
 
 #[cfg(feature = "browser-control")]
 pub mod browser_control;

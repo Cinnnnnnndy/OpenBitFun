@@ -177,6 +177,9 @@ impl TryFrom<AIModelConfig> for AIConfig {
             skip_ssl_verify: other.skip_ssl_verify,
             custom_request_body,
             custom_request_body_mode: other.custom_request_body_mode,
+            responses: matches!(other.provider.as_str(), "response" | "responses")
+                .then_some(other.responses.or(other.responses_defaults))
+                .flatten(),
         })
     }
 }
@@ -185,6 +188,39 @@ impl TryFrom<AIModelConfig> for AIConfig {
 mod tests {
     use super::{resolve_request_url, AIConfig};
     use crate::types::{AIModelConfig, ModelCapability, ModelCategory};
+
+    #[test]
+    fn responses_settings_preserve_legacy_defaults_and_model_overrides() {
+        use openbitfun_core_types::responses::{
+            ResponsesContextMode, ResponsesRequestSettings, ResponsesTransport,
+        };
+        let legacy = AIModelConfig::default();
+        let old = serde_json::to_value(&legacy).unwrap();
+        assert!(old.get("responses").is_none());
+        assert!(old.get("responses_defaults").is_none());
+        let restored: AIModelConfig = serde_json::from_value(old.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&restored).unwrap(), old);
+        assert!(AIConfig::try_from(restored).unwrap().responses.is_none());
+        let mut model = legacy;
+        model.provider = "responses".into();
+        let provider = ResponsesRequestSettings {
+            transport: ResponsesTransport::Websocket,
+            context: ResponsesContextMode::Incremental,
+        };
+        model.responses_defaults = Some(provider);
+        assert_eq!(
+            AIConfig::try_from(model.clone()).unwrap().responses,
+            Some(provider)
+        );
+        model.responses = Some(ResponsesRequestSettings::default());
+        assert_eq!(
+            AIConfig::try_from(model.clone()).unwrap().responses,
+            model.responses
+        );
+        model.responses = Some(provider);
+        model.provider = "anthropic".into();
+        assert!(AIConfig::try_from(model).unwrap().responses.is_none());
+    }
 
     #[test]
     fn resolves_openai_request_url() {
@@ -280,6 +316,8 @@ mod tests {
             skip_ssl_verify: false,
             custom_request_body: None,
             custom_request_body_mode: None,
+            responses: None,
+            responses_defaults: None,
             auth: Default::default(),
             channel_routing: None,
         }
@@ -425,14 +463,16 @@ mod tests {
     }
 
     #[test]
-    fn derives_the_largest_output_tier_within_one_quarter_of_context() {
+    fn derives_the_largest_output_tier_within_one_quarter_of_context_with_64k_context_gate() {
         for (context_window, expected_max_tokens) in [
             (32_000, 8_000),
             (48_000, 8_000),
             (64_000, 16_000),
             (128_000, 32_000),
             (128_128, 32_000),
-            (256_000, 64_000),
+            (256_000, 32_000),
+            (399_999, 32_000),
+            (400_000, 64_000),
             (1_000_000, 64_000),
         ] {
             let mut model = base_model_config();

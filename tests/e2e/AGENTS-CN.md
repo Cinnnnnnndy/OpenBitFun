@@ -38,6 +38,33 @@ pnpm --dir tests/e2e exec wdio run ./config/wdio.conf.ts --spec "./specs/<file>.
 
 优先运行最窄的相关 spec，必要时再扩大范围。
 
+验证 ACP 队列恢复时，先完成 Desktop 和生产前端构建，再运行
+`node tests/e2e/scripts/run-acp-queue-recovery.mjs`。该 macOS 原生脚本使用隔离配置、
+真实 stdio 连接的可控 ACP 子进程、产品控件及只读单例诊断，覆盖后台刷新恢复、
+会话切换、运行中元数据读取和实时更新、模型变更快照、ACP 立即发送队列提升、
+延迟取消、提交去重、协议报错和子进程退出重连。ACP 立即发送将消息移到队首、
+等待当前请求结束后执行，不向外部 Agent 注入原生 steering。在输出的临时目录保留
+`acp-queue-recovery.json`、事件日志及截图；前端、二进制和字体配置覆盖参数与其他
+原生负载脚本一致。该测试仅覆盖本地 Desktop，不证明真实模型服务或四种远程场景。
+
+静态/流式长会话性能矩阵的负载与指标定义见 [README.zh-CN.md](README.zh-CN.md)。
+构建桌面端和生产前端后运行 `pnpm --dir tests/e2e run test:perf:long-session`，
+隔离测试首次打开、重复切换、双向连续滚轮输入及轮次栏远距离跳转。
+指标计算和本地 SSE 模型的验证命令为
+`pnpm --dir tests/e2e run test:perf:long-session:contract`。
+`--scenario multi-tool` 为每个历史轮次生成 26 个模型回合和固定 100 次工具调用记录，
+Read、Edit、Write、ExecCommand 各 25 次；上述契约测试同时验证生成文件及旧模板兼容性。
+保留失败证据，仅比较负载与桌面构建类型相同的结果，测量时不要并行构建。
+RAF 不等于合成帧率；此测试只覆盖本地桌面，不覆盖四种远程场景。
+
+验证主会话与 BTW 同时流式、分别滚动时，运行
+`node tests/e2e/scripts/run-long-session-performance.mjs --suite btw-scroll --scenario multi-tool --repeats 2`。
+用例从 200 轮、每轮 100 次工具调用的主会话通过真实 `/btw` 创建临时侧会话，
+两路响应均预填 512 段文本，再测试主会话流式区、历史区和 BTW 流式区的双向滚动。
+侧会话是新建临时会话，并非另一份持久化的 200 轮历史。每个阶段要求两路输出均推进，
+后续输出保持阅读锚点，两栏 DOM 窗口有界，返回最新能够看到最后一段文本。
+普通验收运行与 CDP 诊断运行分开比较。
+
 验证内置 WebDriver 的滚动、聚焦与外层布局时，先构建 Desktop 和当前前端资源，再运行：
 
 ```bash

@@ -24,9 +24,9 @@ use openbitfun_events::AgenticEvent;
 use openbitfun_runtime_ports::{
     AgentDialogSteerRequest, AgentInputAttachment, AgentSessionComposerUpdate,
     AgentSubmissionSource, AgentTurnCancellationRequest, DialogSteerOutcome,
-    PermissionPolicyPreset, RemoteControlStatePort, RemoteControlStateRequest,
-    RemoteControlStateSnapshot, RemoteSessionWorkspaceIdentity, RuntimeServiceCapability,
-    RuntimeServicePort, ToolPermissionConfig,
+    PermissionApprovalStrategy, PermissionPolicyPreset, RemoteControlStatePort,
+    RemoteControlStateRequest, RemoteControlStateSnapshot, RemoteSessionWorkspaceIdentity,
+    RuntimeServiceCapability, RuntimeServicePort, ToolPermissionConfig,
 };
 use openbitfun_runtime_ports::{
     AgentDialogTurnPort, AgentDialogTurnRequest, AgentLifecycleDeliveryPort,
@@ -3340,7 +3340,7 @@ impl RemoteDialogRuntimeHost for CoreRemoteDialogRuntimeHost<'_> {
                 return;
             }
             let workspace = binding_workspace_for_terminal;
-            let name = format!("Chat-{}", &sid[..8.min(sid.len())]);
+            let name = format!("Chat-{}", sid.chars().take(8).collect::<String>());
             match binding
                 .get_or_create(
                     &sid,
@@ -3995,7 +3995,12 @@ impl RemoteInteractionRuntimeHost for CoreRemoteInteractionRuntimeHost {
             .map_err(|error| error.to_string())?;
         Ok(match config.policy.preset {
             PermissionPolicyPreset::FullAccess => RemotePermissionMode::FullAccess,
-            PermissionPolicyPreset::Ask if config.interaction.auto_approve_ask => {
+            PermissionPolicyPreset::Ask
+                if matches!(
+                    config.approval.strategy,
+                    PermissionApprovalStrategy::Model | PermissionApprovalStrategy::ImmediateAllow
+                ) || config.interaction.auto_approve_ask =>
+            {
                 RemotePermissionMode::Auto
             }
             PermissionPolicyPreset::Ask => RemotePermissionMode::Ask,
@@ -4017,14 +4022,17 @@ impl RemoteInteractionRuntimeHost for CoreRemoteInteractionRuntimeHost {
             RemotePermissionMode::Ask => {
                 config.policy.preset = PermissionPolicyPreset::Ask;
                 config.interaction.auto_approve_ask = false;
+                config.approval.strategy = PermissionApprovalStrategy::Interactive;
             }
             RemotePermissionMode::Auto => {
                 config.policy.preset = PermissionPolicyPreset::Ask;
                 config.interaction.auto_approve_ask = true;
+                config.approval.strategy = PermissionApprovalStrategy::Model;
             }
             RemotePermissionMode::FullAccess => {
                 config.policy.preset = PermissionPolicyPreset::FullAccess;
                 config.interaction.auto_approve_ask = false;
+                config.approval.strategy = PermissionApprovalStrategy::Interactive;
             }
         }
         service
@@ -5269,6 +5277,7 @@ mod tests {
         metadata: Option<serde_json::Value>,
     ) -> DialogTurnData {
         DialogTurnData {
+            published_figures: Default::default(),
             turn_id: "turn-1".to_string(),
             turn_index: 0,
             session_id: "session-1".to_string(),

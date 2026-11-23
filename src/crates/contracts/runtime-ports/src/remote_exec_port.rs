@@ -8,6 +8,8 @@ pub struct RemoteExecCommandRequest {
     pub tty: bool,
     pub yield_time_ms: Option<u64>,
     pub max_output_chars: Option<usize>,
+    /// End only the initial output wait; the launched process remains active.
+    pub wait_interrupt: Option<tokio_util::sync::CancellationToken>,
     pub lifecycle_sink: Option<RemoteExecLifecycleSink>,
     pub output_sink: Option<RemoteExecOutputSink>,
 }
@@ -35,6 +37,8 @@ pub struct RemoteWriteStdinRequest {
     pub append_enter: bool,
     pub yield_time_ms: Option<u64>,
     pub max_output_chars: Option<usize>,
+    /// End only this output wait; submitted input and the process remain active.
+    pub wait_interrupt: Option<tokio_util::sync::CancellationToken>,
 }
 
 #[derive(Debug, Clone)]
@@ -94,6 +98,8 @@ pub struct RemoteExecCommandResponse {
     pub exit_code: Option<i32>,
     pub original_output_chars: usize,
     pub completion: Option<RemoteExecSessionCompletion>,
+    /// The output wait yielded cooperatively, independently of process completion.
+    pub wait_interrupted: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

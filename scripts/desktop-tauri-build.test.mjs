@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -8,10 +8,12 @@ import {
   configureWindowsSigning,
   prepareMacOSFlashgrepForSigning,
   prepareTauriConfig,
+  requestsLinuxAppImage,
   requestsMacosBundle,
   shouldRetryMacDmgBuild,
 } from './desktop-tauri-build.mjs';
 import { resolveProductDefinition } from './product-customization/resolver.mjs';
+import { stageDesktopRuntime } from './windows/stage-desktop-runtime.mjs';
 import {
   APPLE_SYSTEM_FONT_PROFILE,
   HARMONY_BUNDLED_FONT_PROFILE,
@@ -21,6 +23,42 @@ import {
 const FAILED_BUILD = { status: 1 };
 const DMG_ARGS = ['--target', 'x86_64-apple-darwin', '--bundles', 'app,dmg'];
 const ROOT = join(import.meta.dirname, '..');
+
+test('Windows installer stages generated Tauri resources beside the signed executable', (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'openbitfun-windows-payload-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const desktop = join(root, 'desktop');
+  const config = join(desktop, 'gen', `tauri.${'a'.repeat(64)}.generated.conf.json`);
+  const release = join(root, 'target', 'x86_64-pc-windows-msvc', 'release');
+  const executable = join(release, 'openbitfun-desktop.exe');
+  mkdirSync(join(desktop, 'gen'), { recursive: true });
+  mkdirSync(join(root, 'dist', 'assets'), { recursive: true });
+  mkdirSync(release, { recursive: true });
+  writeFileSync(executable, 'signed desktop');
+  writeFileSync(join(root, 'dist', 'index.html'), 'desktop frontend');
+  writeFileSync(join(root, 'dist', 'assets', 'entry.js'), 'desktop assets');
+  writeFileSync(join(root, 'worker.js'), 'worker');
+  writeFileSync(config, JSON.stringify({ bundle: { resources: {
+    '../dist': 'frontend/dist', '../worker.js': 'resources/worker_host.js',
+  } } }));
+
+  stageDesktopRuntime(desktop, executable);
+  assert.equal(readFileSync(executable, 'utf8'), 'signed desktop');
+  assert.equal(readFileSync(join(release, 'frontend/dist/index.html'), 'utf8'), 'desktop frontend');
+  assert.equal(readFileSync(join(release, 'frontend/dist/assets/entry.js'), 'utf8'), 'desktop assets');
+  assert.equal(readFileSync(join(release, 'resources/worker_host.js'), 'utf8'), 'worker');
+  assert.equal(existsSync(join(release, 'frontend/dist/dist')), false);
+
+  writeFileSync(config, JSON.stringify({ bundle: { resources: { '../worker.js': '../outside.js' } } }));
+  assert.throws(() => stageDesktopRuntime(desktop, executable), /escapes the installer runtime/);
+  assert.equal(existsSync(join(release, '../outside.js')), false);
+});
+
+test('desktop startup leaves installation registration to its maintenance owner', () => {
+  const source = readFileSync(join(ROOT, 'src/apps/desktop/src/lib.rs'), 'utf8');
+  assert.doesNotMatch(source, /sync_install_location_registry|Synced Tauri install-location registry/);
+  assert.doesNotMatch(source, /HKCU\\Software\\OpenBitFun Team\\OpenBitFun/);
+});
 
 test('modern icon tooling is required only for macOS bundles, including bundle-only builds', () => {
   assert.equal(requestsMacosBundle([], 'darwin'), true);
@@ -377,6 +415,26 @@ test('Desktop packaging includes only the selected Flashgrep target', () => {
   }
 });
 
+test('Linux AppImage embeds the tray runtime under its SONAMEs', (t) => {
+  const fixture = mkdtempSync(join(tmpdir(), 'openbitfun-appimage-tray-'));
+  t.after(() => rmSync(fixture, { recursive: true, force: true }));
+  const baseConfig = join(ROOT, 'src/apps/desktop/tauri.conf.json');
+  const libraries = JSON.parse(readFileSync(join(ROOT, 'scripts/ci/linux-appimage-tray-libraries.json'), 'utf8'));
+  const options = { desktopDir: fixture, appImageLibraryDir: fixture };
+  assert.throws(() => prepareTauriConfig(baseConfig, options), /Missing AppImage tray runtime library/);
+
+  for (const soname of libraries) writeFileSync(join(fixture, soname), 'tray library');
+  const config = JSON.parse(readFileSync(prepareTauriConfig(baseConfig, options), 'utf8'));
+  assert.deepEqual(config.bundle.linux.appimage.files,
+    Object.fromEntries(libraries.map((soname) => [`/usr/lib/${soname}`, join(fixture, soname)])));
+  assert.ok(config.bundle.linux.deb.depends.includes('libayatana-appindicator3-1'));
+  assert.equal(requestsLinuxAppImage([], 'linux'), true);
+  assert.equal(requestsLinuxAppImage(['--target', 'aarch64-unknown-linux-gnu', '--bundles', 'deb,rpm,appimage'], 'linux'), true);
+  assert.equal(requestsLinuxAppImage(['--bundles=deb'], 'linux'), false);
+  assert.equal(requestsLinuxAppImage(['--no-bundle'], 'linux'), false);
+  assert.equal(requestsLinuxAppImage([], 'darwin'), false);
+});
+
 test('Windows updater installs NSIS packages without showing its progress window', () => {
   const fixture = join(tmpdir(), `openbitfun-tauri-updater-${process.pid}-${Date.now()}`);
   const baseConfig = join(fixture, 'tauri.conf.json');
@@ -447,7 +505,7 @@ test('beta Desktop artifacts compile and bundle only beta updater endpoints', ()
     const config = JSON.parse(readFileSync(generated, 'utf8'));
     assert.equal(
       config.plugins.updater.endpoints[0],
-      'https://github.com/GCWing/OpenBitFun/releases/download/channel-v1-beta/latest-v1.json',
+      'https://github.com/openBitFun/OpenBitFun/releases/download/channel-v1-beta/latest-v1.json',
     );
     assert.equal(
       config.plugins.updater.endpoints[1],

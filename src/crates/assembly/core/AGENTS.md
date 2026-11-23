@@ -89,6 +89,22 @@ SessionManager -> Session -> DialogTurn -> ModelRound
   product-domain control DTO and closed generic actions. Capability-specific
   approvals and conflict choices remain typed owner operations; do not add a
   second surface-specific lifecycle model or arbitrary control payload.
+- `native_hooks` is the product wiring for the portable hook engine in
+  `openbitfun_agent_runtime::native_hooks`. It owns `hooks.json` discovery, the
+  `app.hooks` gates, the process-wide `RuntimeHookRegistry`, and typed
+  per-event dispatch helpers; dispatch sites call those helpers instead of
+  executing hooks inline. Built-in, user, project, imported, skill, and plugin
+  hooks register through a `RuntimeHookRegistry` and run through
+  `AgentHookEngine` while keeping distinct trust, configuration, contract, and
+  execution-policy semantics. A remote workspace gets a separate registry that
+  holds only the project hooks read from the target and runs them in the target
+  workspace shell; user, imported, and skill command hooks never run there.
+  `external_hooks` is the read-only catalog of other AI
+  applications' hooks and must not enter the executable registry: inspecting it
+  must not load code, and an entry becomes executable only as the reviewed
+  snapshot written by the explicit `external_hook_import` plan/apply, never by
+  reading the source live. Contract reference and deviations:
+  `docs/features/agent-hooks.md`.
 - Remote/service changes must keep external protocol lifecycle, workspace
   projection, scheduler/session restore, terminal pre-warm, and product
   execution boundaries explicit.
@@ -195,6 +211,20 @@ Narrower local guides already exist for some subtrees:
 
 ## Verification
 
+For ExecCommand/WriteStdin steering, port routing, streaming and legacy result compatibility:
+
+```bash
+cargo test --locked -p openbitfun-core --no-default-features --features agent-runtime,git --lib agentic::tools::implementations::exec_command::
+cargo test --locked -p openbitfun-core --no-default-features --features agent-runtime,git --lib yieldable_tools_end_normally_for_every_non_none_round_injection_policy
+```
+
+ExecCommand and WriteStdin use the same round-injection yield token as AgentWait.
+Only the output wait ends; the launched command and submitted stdin are not
+replayed, and process control remains explicit. Continue with the returned
+session ID through WriteStdin. The optional `wait_end_reason: "steered"` result
+is separate from process `completion`; old results without it keep their existing meaning.
+These Core fixtures cover both runtime ports with mocks, not live remote hosts.
+
 For desktop card admission, per-turn Peer origin, recovery context and subagent
 propagation:
 
@@ -224,14 +254,28 @@ cargo test --locked -p openbitfun-core --no-default-features --features agent-ru
 This fixture verifies default report privacy and resolved host storage with a
 simulated SSH workspace identity; it does not exercise live remote connections.
 
-For Agent name references, enabled-catalog admission, and prompt catalog names:
+`Agent*` tools and the legacy `Task` entry point live in
+`agentic::tools::implementations::agent_collaboration`.
+For Agent name references, enabled-catalog admission, and collaboration tool behavior:
 
 ```bash
-cargo test --locked -p openbitfun-core --no-default-features --features agent-runtime,git --lib agentic::tools::implementations::task::tests
+cargo test --locked -p openbitfun-core --no-default-features --features agent-runtime,git --lib agentic::tools::implementations::agent_collaboration::
 ```
 
 These fixtures cover prompt name mappings and simulated workspace policies;
 they do not establish live SSH, relay, Peer, or Detached Dispatch behavior.
+
+For collaboration presentation policy scope, input-independent future size, and
+native/PTC catalog propagation:
+
+```bash
+cargo test --locked -p openbitfun-core --no-default-features --features agent-runtime,git --lib -- collaboration_policy_ subagent_model_override_policy_
+cargo test --locked -p openbitfun-core --no-default-features --features ptc-runtime --lib -- collaboration_policy_ subagent_model_override_policy_
+```
+
+The policy wrapper boxes its input before constructing its async state machine;
+keep this boundary shared by all catalog callers. These fixtures do not exercise
+live remote transports.
 
 For ordinary subagent shared concurrency, permit release, and cancelled/timed-out waits:
 
@@ -244,7 +288,7 @@ For smart routing, unchanged subagent model policy and resumed subagent choices:
 ```bash
 cargo test --locked -p openbitfun-core --no-default-features --features agent-runtime,git --lib subagent_model
 cargo test --locked -p openbitfun-core --no-default-features --features agent-runtime,git --lib round_model_routing
-cargo test --locked -p openbitfun-core --no-default-features --features agent-runtime,git --lib coordinator::tests::reused_subagent
+cargo test --locked -p openbitfun-core --no-default-features --features agent-runtime,git --lib coordinator::tests::subagent_input::reused_subagent
 ```
 
 These fixtures cover host-owned configuration, nested delegation and Router protocol
@@ -355,6 +399,16 @@ Run this filter alone with `RUST_MIN_STACK` unset so prior skill discovery canno
 warm the cold-start path. The shared coordinator keeps startup state behind one
 allocation boundary for every admission surface.
 
+For manual compaction cancellation and terminal persistence:
+
+```bash
+cargo test --locked -p openbitfun-core --no-default-features --features agent-runtime,git --lib manual_compaction_
+```
+
+Keep `RUST_MIN_STACK` unset when checking stack-overflow regressions. Linux CI's
+`product-full` suite also covers the larger assembled tool-catalog futures.
+These local fixtures do not exercise live remote scenarios.
+
 For direct user follow-ups to reusable subagent sessions, legacy route defaults,
 source binding, and FreshOnly admission:
 
@@ -370,7 +424,7 @@ listing (including reserved IDs), parent-scoped resolution, and persisted deleti
 (ordinary subagents and Swarm):
 
 ```bash
-cargo test --locked -p openbitfun-core --no-default-features --features agent-runtime,git --lib -- agent_lifecycle_ agentic::coordination::coordination_store::tests agentic::tools::implementations::agent_list_tool::tests
+cargo test --locked -p openbitfun-core --no-default-features --features agent-runtime,git --lib -- agent_lifecycle_ agentic::coordination::coordination_store::tests agentic::tools::implementations::agent_collaboration::agent_list_tool::tests
 ```
 
 These fixtures cover local execution and persistence, not live remote transports.
@@ -518,6 +572,16 @@ exercise query-time discovery fallback):
 cargo test --locked -p openbitfun-core --no-default-features --features agent-runtime,git,file-watch --lib agentic::agents::registry::
 ```
 
+For visual-skin Skill authoring helpers and canonical example packaging (Node,
+prepared Web UI dependencies; no Rust build required):
+
+```bash
+node --test src/crates/assembly/core/builtin_skills/openbitfun-skin-designer/scripts/visual-skin.test.mjs
+```
+
+These exercise the real frontend parser and authoring CLI, not native rendering
+or remote-host behavior.
+
 Skill discovery, installation provenance, and local/remote registry regressions:
 
 ```bash
@@ -582,7 +646,7 @@ cargo test -p openbitfun-core --no-default-features --features external-sources,
 cargo test -p openbitfun-core --no-default-features --features external-sources,git,product-search --lib agentic::persistence::manager::tests
 cargo test -p openbitfun-core --no-default-features --features external-sources,git,product-search --lib session_fork_
 cargo test -p openbitfun-core --no-default-features --features external-sources,git,product-search --lib agentic::persistence::session_branch::tests
-cargo test -p openbitfun-core --no-default-features --features external-sources,git,product-search --lib agentic::session::session_manager::tests::restore_session_
+cargo test -p openbitfun-core --no-default-features --features external-sources,git,product-search --lib restore_session_
 ```
 
 For installed-source acceptance, set `OPENBITFUN_TEST_SESSION_ECOSYSTEM` and

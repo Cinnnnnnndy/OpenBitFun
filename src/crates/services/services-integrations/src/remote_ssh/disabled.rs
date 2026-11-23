@@ -50,60 +50,11 @@ pub mod dispatch_ssh {
         pub protocol: Option<Value>,
     }
 
-    #[derive(Debug, Clone, Serialize, Deserialize)]
-    #[serde(rename_all = "camelCase")]
-    pub struct DispatchInstallStart {
-        pub script_path: String,
-        pub version: String,
-        pub target: String,
-        pub url: String,
-        pub sha256: String,
-    }
-
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-    #[serde(rename_all = "snake_case")]
-    pub enum DispatchInstallStatus {
-        Running,
-        Succeeded,
-        Failed,
-    }
-
-    #[derive(Debug, Clone, Serialize, Deserialize)]
-    #[serde(rename_all = "camelCase")]
-    pub struct DispatchInstallPoll {
-        pub cursor: u64,
-        pub output: String,
-        pub status: DispatchInstallStatus,
-    }
-
     pub async fn probe(
         _manager: &SSHConnectionManager,
         _connection_id: &str,
         _workspace_path: Option<&str>,
     ) -> anyhow::Result<DispatchSshProbe> {
-        Err(unsupported())
-    }
-
-    pub async fn install_cli_start(
-        _manager: &SSHConnectionManager,
-        _connection_id: &str,
-        _expected_release: &DispatchCliRelease,
-    ) -> anyhow::Result<DispatchInstallStart> {
-        Err(unsupported())
-    }
-
-    pub async fn install_cli_poll(
-        _manager: &SSHConnectionManager,
-        _connection_id: &str,
-        _cursor: u64,
-    ) -> anyhow::Result<DispatchInstallPoll> {
-        Err(unsupported())
-    }
-
-    pub async fn install_cli_cancel(
-        _manager: &SSHConnectionManager,
-        _connection_id: &str,
-    ) -> anyhow::Result<()> {
         Err(unsupported())
     }
 
@@ -156,6 +107,8 @@ pub struct RemoteExecCommandRequest {
     pub tty: bool,
     pub yield_time_ms: Option<u64>,
     pub max_output_chars: Option<usize>,
+    /// End only the initial output wait; the launched process remains active.
+    pub wait_interrupt: Option<tokio_util::sync::CancellationToken>,
     pub lifecycle_tx: Option<tokio::sync::mpsc::UnboundedSender<RemoteExecProcessLifecycleEvent>>,
     pub output_capture_tx: Option<tokio::sync::mpsc::UnboundedSender<String>>,
 }
@@ -167,6 +120,8 @@ pub struct RemoteWriteStdinRequest {
     pub append_enter: bool,
     pub yield_time_ms: Option<u64>,
     pub max_output_chars: Option<usize>,
+    /// End only this output wait; submitted input and the process remain active.
+    pub wait_interrupt: Option<tokio_util::sync::CancellationToken>,
 }
 
 #[derive(Debug, Clone)]
@@ -226,6 +181,8 @@ pub struct RemoteExecCommandResponse {
     pub exit_code: Option<i32>,
     pub original_output_chars: usize,
     pub completion: Option<RemoteExecSessionCompletion>,
+    /// The output wait yielded cooperatively, independently of process completion.
+    pub wait_interrupted: bool,
 }
 
 pub type RemoteExecResult<T> = std::result::Result<T, RemoteExecError>;

@@ -1,4 +1,4 @@
-import type { SessionLastTurn } from '@/shared/types/session-history';
+import type { PublishedFigures, SessionLastTurn } from '@/shared/types/session-history';
 /**
  * Flow Chat type definitions
  * Supports mixed streaming output.
@@ -283,6 +283,7 @@ export interface AcpContextUsage {
 
 // Dialog turn: user input + full AI response across model rounds.
 export interface DialogTurn {
+  publishedFigures?: PublishedFigures;
   id: string;
   sessionId: string; // Used for event filtering.
   kind?: DialogTurnKind;
@@ -441,7 +442,6 @@ export interface Session {
   titleI18nKey?: string;
   titleI18nParams?: Record<string, unknown>;
   /** Host-assigned display slot, occupied only while this session has its default title. */
-  workspaceSessionNumber?: number;
   titleStatus?: 'generating' | 'generated' | 'failed';
   /**
    * In-memory canonical working set for this session.
@@ -661,6 +661,13 @@ export interface Session {
 
   /** Transient UI session backed by a real agent session. */
   agentBackedTransient?: boolean;
+
+  /**
+   * Created from a remote-driven event before this surface loaded the
+   * session. It adopts the host's persisted metadata when that arrives and
+   * never writes its own placeholder title over the persisted one.
+   */
+  externalPlaceholder?: boolean;
 }
 
 export interface SessionConfig {
@@ -668,6 +675,8 @@ export interface SessionConfig {
   modelPoolId?: string;
   /** Draft-only intent, committed after the runtime session is created. */
   modelPoolSelectionPending?: boolean;
+  /** Draft-only user override; inherited/default previews never set this flag. */
+  btwModelSelectionExplicit?: boolean;
   modelPoolBinding?: import('@/infrastructure/api/service-api/ModelPoolAPI').ModelPoolBinding;
   /** Explicit reasoning preset for the next turn; omitted means model default. */
   reasoningPreset?: string;

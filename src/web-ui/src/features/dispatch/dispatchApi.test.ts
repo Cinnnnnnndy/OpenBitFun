@@ -16,12 +16,18 @@ describe('dispatchApi', () => {
     mocks.invoke.mockReset().mockResolvedValue([]);
   });
 
-  it('wraps the target list command in the structured Tauri request contract', async () => {
+  it('lists SSH targets without querying account devices', async () => {
     await dispatchApi.listTargets();
 
     expect(mocks.invoke).toHaveBeenCalledWith('dispatch_list_targets', {
-      request: {},
+      request: { sshOnly: true },
     });
+  });
+
+  it('can list targets on older hosts that reject the SSH filter', async () => {
+    mocks.invoke.mockRejectedValueOnce(new Error('unknown field `sshOnly`'));
+    await dispatchApi.listTargets();
+    expect(mocks.invoke).toHaveBeenNthCalledWith(2, 'dispatch_list_targets', { request: {} });
   });
 
   it('carries the selected reasoning preset when submitting a job', async () => {
@@ -46,7 +52,7 @@ describe('dispatchApi', () => {
         model: 'target-model',
         reasoningPreset: 'high',
       }),
-    });
+    }, { timeout: 0 });
   });
 
   it('carries Auto when continuing a job to clear the target override', async () => {

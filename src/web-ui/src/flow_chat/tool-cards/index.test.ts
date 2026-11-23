@@ -47,6 +47,7 @@ describe('tool card registry', () => {
 
   it('renders AgentSpawn and AgentSendInput with the shared agent control card', () => {
     expect(getToolCardComponent('AgentSpawn')).toBe(AgentControlToolCard);
+    expect(getToolCardComponent('AgentFork')).toBe(AgentControlToolCard);
     expect(getToolCardComponent('AgentSendInput')).toBe(AgentControlToolCard);
     expect(getToolCardComponent('AgentInterrupt')).toBe(AgentInteractionToolCard);
   });
@@ -82,6 +83,7 @@ describe('tool card registry', () => {
       'ListModels',
       'ControlHub',
       'AgentSpawn',
+      'AgentFork',
       'AgentSendInput',
       'AgentInterrupt',
       'AgentWait',
@@ -121,7 +123,6 @@ describe('tool card registry', () => {
       'FrontendWorkbench',
       'FinalizeMiniApp',
       'PublishMiniApp',
-      'PublishAppearance',
       'Playbook',
       'DesktopCard',
     ]);
@@ -150,7 +151,7 @@ describe('tool card registry', () => {
     },
   );
 
-  it.each(['FinalizeMiniApp', 'PublishMiniApp', 'PublishAppearance'])(
+  it.each(['FinalizeMiniApp', 'PublishMiniApp'])(
     'keeps consequential %s dedicated cards outside exploration',
     (toolName) => {
       expect(usesDefaultToolCard(toolName)).toBe(false);

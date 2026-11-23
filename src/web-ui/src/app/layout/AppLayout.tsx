@@ -1,3 +1,4 @@
+import { VisualSkinSurfacePaint } from '@/infrastructure/visual-skin/VisualSkinSurfacePaint';
 import { lazyWithRecovery } from '@/shared/utils/lazyWithRecovery';
 import { OverflowText } from '@openbitfun/ui';
 /**
@@ -45,9 +46,16 @@ import { AcpSessionNotifications } from './AcpSessionNotifications';
 import { api } from '@/infrastructure/api/service-api/ApiClient';
 import { AppearanceBackgroundMediaLayer, appearanceRuntime, useAppearance } from '@/infrastructure/appearance';
 import { PeerConnectionStatus } from '@/infrastructure/peer-device/PeerConnectionStatus';
-import './AppLayout.scss';
+import { useSceneStore } from '../stores/sceneStore';
+import { standaloneSettingsPane } from '../workbench/scenePaneModel';
+import { selectWorkbenchPaneHasSession, workbenchPaneLayoutStore } from '../workbench/workbenchPaneLayoutStore';
 
 type TransitionDirection = 'entering' | 'returning' | null;
+
+function isStandaloneSettingsActive(): boolean {
+  const { paneSelections } = useSceneStore.getState();
+  return standaloneSettingsPane(paneSelections, selectWorkbenchPaneHasSession(workbenchPaneLayoutStore.getState())) !== null;
+}
 
 const log = createLogger('AppLayout');
 const ToolbarMode = lazyWithRecovery(() =>
@@ -116,6 +124,9 @@ const AppLayout: React.FC<AppLayoutProps> = ({ className = '' }) => {
   const { isFullscreenChrome } = useFullscreenChrome(isFullscreen);
 
   const { state, switchLeftPanelTab, toggleLeftPanel, toggleRightPanel } = useApp();
+  const toggleAvailableRightPanel = useCallback(() => {
+    if (!isStandaloneSettingsActive()) toggleRightPanel();
+  }, [toggleRightPanel]);
   const [windowModeHint, setWindowModeHint] = useState<WindowModeHint | null>(null);
   const windowModeHintTimerRef = useRef<number | null>(null);
 
@@ -494,14 +505,14 @@ const AppLayout: React.FC<AppLayoutProps> = ({ className = '' }) => {
     const handleSwitchToFilesPanel = () => {
       switchLeftPanelTab('files');
       if (state.layout.leftPanelCollapsed) toggleLeftPanel();
-      if (state.layout.rightPanelCollapsed) {
-        setTimeout(() => toggleRightPanel(), 100);
+      if (state.layout.rightPanelCollapsed && !isStandaloneSettingsActive()) {
+        setTimeout(toggleAvailableRightPanel, 100);
       }
     };
 
     window.addEventListener('switch-to-files-panel', handleSwitchToFilesPanel);
     return () => window.removeEventListener('switch-to-files-panel', handleSwitchToFilesPanel);
-  }, [state.layout.leftPanelCollapsed, state.layout.rightPanelCollapsed, switchLeftPanelTab, toggleLeftPanel, toggleRightPanel]);
+  }, [state.layout.leftPanelCollapsed, state.layout.rightPanelCollapsed, switchLeftPanelTab, toggleLeftPanel, toggleAvailableRightPanel]);
 
   // Toolbar send message
   React.useEffect(() => {
@@ -534,13 +545,17 @@ const AppLayout: React.FC<AppLayoutProps> = ({ className = '' }) => {
     'panel.toggleBoth',
     { key: 'B', ctrl: true, shift: true, scope: 'app' },
     () => {
+      if (isStandaloneSettingsActive()) {
+        toggleLeftPanel();
+        return;
+      }
       const bothCollapsed = state.layout.leftPanelCollapsed && state.layout.rightPanelCollapsed;
       if (bothCollapsed) {
         toggleLeftPanel();
-        setTimeout(() => toggleRightPanel(), 50);
+        setTimeout(toggleAvailableRightPanel, 50);
       } else {
         if (!state.layout.leftPanelCollapsed) toggleLeftPanel();
-        if (!state.layout.rightPanelCollapsed) toggleRightPanel();
+        if (!state.layout.rightPanelCollapsed) toggleAvailableRightPanel();
       }
     },
     { priority: 5, description: 'keyboard.shortcuts.panel.toggleBoth' }
@@ -654,9 +669,12 @@ const AppLayout: React.FC<AppLayoutProps> = ({ className = '' }) => {
           data-testid="app-layout"
           data-openbitfun-component="app-layout"
           data-openbitfun-part="root"
+          data-openbitfun-surface="shell"
+          data-openbitfun-skin-slot="shell-background"
           data-openbitfun-state="toolbar"
           data-openbitfun-background-media={backgroundMedia?.url ? 'video' : undefined}
         >
+          <VisualSkinSurfacePaint />
           <AppearanceBackgroundMediaLayer
             media={backgroundMedia}
             revision={currentAppearance?.revision}
@@ -681,9 +699,12 @@ const AppLayout: React.FC<AppLayoutProps> = ({ className = '' }) => {
         data-testid="app-layout"
         data-openbitfun-component="app-layout"
         data-openbitfun-part="root"
+        data-openbitfun-surface="shell"
+        data-openbitfun-skin-slot="shell-background"
         data-openbitfun-state={isFullscreen ? 'fullscreen' : undefined}
         data-openbitfun-background-media={backgroundMedia?.url ? 'video' : undefined}
       >
+        <VisualSkinSurfacePaint />
         <AppearanceBackgroundMediaLayer
           media={backgroundMedia}
           revision={currentAppearance?.revision}

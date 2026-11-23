@@ -61,6 +61,7 @@ pub use openbitfun_agent_tools::GET_TOOL_SPEC_TOOL_NAME;
 /// Tool registry - manages all available tools (using IndexMap to maintain registration order)
 pub struct ToolRegistry {
     inner: AgentToolRegistry<dyn Tool>,
+    collaboration_model_override: bool,
 }
 
 impl Default for ToolRegistry {
@@ -95,7 +96,10 @@ impl ToolRegistry {
     }
 
     pub(in crate::agentic::tools) fn from_inner(inner: AgentToolRegistry<dyn Tool>) -> Self {
-        Self { inner }
+        Self {
+            inner,
+            collaboration_model_override: true,
+        }
     }
 
     /// Dynamically register MCP tools
@@ -243,6 +247,13 @@ impl ToolRegistry {
 
     pub fn current_snapshot_generation(&self) -> u64 {
         self.inner.current_snapshot_generation()
+    }
+
+    pub(crate) fn refresh_collaboration_model_policy(&mut self, allowed: bool) {
+        if self.collaboration_model_override != allowed {
+            self.collaboration_model_override = allowed;
+            self.inner.invalidate_tool_specs();
+        }
     }
 
     /// Get all tool names
@@ -550,6 +561,18 @@ mod tests {
         assert!(registry.get_tool("Cron").is_some());
     }
 
+    #[test]
+    fn visual_answers_use_skill_and_write_without_a_legacy_generation_entry() {
+        let registry = create_tool_registry();
+        assert!(registry.get_tool("Skill").is_some());
+        assert!(registry.get_tool("Write").is_some());
+        assert!(registry.get_tool("GenerativeUI").is_none());
+        assert!(!registry
+            .get_deferred_tool_names()
+            .iter()
+            .any(|name| name == "GenerativeUI"));
+    }
+
     #[cfg(feature = "product-full")]
     #[test]
     fn registry_preserves_builtin_tool_manifest_for_owner_migration() {
@@ -573,6 +596,7 @@ mod tests {
             "ListModels",
             "Task",
             "AgentSpawn",
+            "AgentFork",
             "AgentSendInput",
             "AgentControl",
             "AgentList",
@@ -602,7 +626,6 @@ mod tests {
             "ReadMCPResource",
             "ListMCPPrompts",
             "GetMCPPrompt",
-            "GenerativeUI",
             "Worktree",
             "ReviewPlatform",
             "InitMiniApp",
@@ -610,7 +633,6 @@ mod tests {
             "PublishMiniApp",
             "MiniAppBrowser",
             "FrontendWorkbench",
-            "PublishAppearance",
             "PageManage",
             "PageDeploy",
             "PagePublish",
@@ -783,7 +805,6 @@ mod tests {
         assert!(!registry.is_tool_deferred("InitMiniApp"));
         assert!(!registry.is_tool_deferred("FinalizeMiniApp"));
         assert!(!registry.is_tool_deferred("PublishMiniApp"));
-        assert!(!registry.is_tool_deferred("PublishAppearance"));
     }
 
     #[cfg(feature = "product-full")]
@@ -806,7 +827,6 @@ mod tests {
                 "ReadMCPResource",
                 "ListMCPPrompts",
                 "GetMCPPrompt",
-                "GenerativeUI",
                 "Worktree",
                 "ReviewPlatform",
                 "MiniAppBrowser",
@@ -1030,8 +1050,10 @@ mod tests {
             &[openbitfun_agent_tools::LoadedDeferredToolSpec {
                 tool_name: "mcp__github__search_repos".to_string(),
                 catalog_generation: loaded_generation,
+                spec_fingerprint: None,
             }],
             refreshed_generation,
+            None,
             openbitfun_agent_tools::GET_TOOL_SPEC_TOOL_NAME,
         )
         .expect_err("refresh must invalidate the previously loaded MCP spec");

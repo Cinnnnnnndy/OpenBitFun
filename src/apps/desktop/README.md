@@ -17,6 +17,11 @@ so newly exposed edges retain the page color while WebKit catches up. The sideba
 keeps its native material. Theme changes and sidebar geometry update this paint;
 translucent or image-backed scene surfaces retain their original composition.
 
+To compare WebView rendering cost without the native sidebar material on macOS
+and Windows, start the app with `OPENBITFUN_NATIVE_WINDOW_MATERIAL=0`. The main
+window then uses the opaque fallback that Windows builds before 22H2 already use;
+the default is unchanged.
+
 ## Model selection and smart routing
 
 **Release availability:** smart mode is not available in this release. The GUI
@@ -120,7 +125,8 @@ use the official Relay. Starting or stopping the LAN Relay does not switch their
 account or endpoint. LAN invitations advertise the selected network interface;
 select it again and create a new invitation after changing networks.
 
-The official device session is restored on restart. The embedded LAN connection
+Desktop restores the official device session on restart and uses the shared
+[device credential renewal schedule](../cli/README.md#always-on-account-device-host). The embedded LAN connection
 is temporary and starts when requested. Builds that previously saved a temporary
 LAN session in the account slot attempt to restore the official Relay from the
 shared identity; failed sign-in leaves the previous credential on disk. Signing
@@ -129,6 +135,56 @@ out closes both connections.
 Both modes require the online identity service for sign-in. Same-network mode
 does not provide offline login. See the [Relay FAQ](../relay-server/FAQ.md) for
 privacy, service availability, and private-deployment requirements.
+
+## Writing a LaTeX paper
+
+Choose **Other agents → Paper Writing** in the session composer and ask the
+agent to draft or revise files in your workspace. Open the main `.tex` file
+from the file tree or its chat link. The editor shows source on the left and the
+typeset PDF on the right. Use **Save & compile** or turn on **Auto compile**
+to save and recompile the main source after you pause. A failed build keeps the
+last successful preview and shows the compiler log. The source and PDF panes can
+be closed independently, restored from the header, and resized by dragging their
+divider. Hidden source views retain the document and its undo history.
+
+The source toolbar includes undo/redo, find/replace, a section outline, and
+snippets for equations, figures, tables, and references. Command, environment,
+and in-document label completions are available in Monaco. Select the main TeX
+entry when editing an included chapter, or add a `% !TeX root = ../main.tex`
+comment. Compiler diagnostics for the current file link back to their source line.
+
+PDF review supports text highlights, sticky notes, comment threads, freehand ink,
+annotation colors, resolution, deletion, and undo/redo. Reviews are automatically
+saved beside the source as `<source>.openbitfun-review.json`; include that file
+when moving or sharing the project. **Save PDF** writes an editable
+`<paper>.annotated.pdf` to the workspace. **Export annotated PDF** saves a copy
+on the viewing device. Saved PDFs embed their review state so notes and threads
+can be edited again when reopened in OpenBitFun; other PDF applications see
+standard PDF annotations. Replacing an existing output checks its current
+version and asks before overwriting an externally changed file. If the review
+file changes elsewhere while this window has unsaved notes, saving pauses until
+you choose **Replace with my notes** or **Load the file's notes**; Undo restores
+the notes replaced by loading. Encrypted PDFs can be reviewed, but **Save PDF**
+and **Export annotated PDF** are unavailable for them.
+
+Annotations retain PDF page coordinates across compilation. Check their positions
+when a revision changes the layout; after recompiling, the preview shows a
+reminder until you select **Positions checked**.
+LaTeX source remains the place to change manuscript text and figures.
+
+![LaTeX source, PDF preview, and review notes in a sample writing workspace](../../../docs/images/paper-writing-workbench.png)
+
+The image uses a sample paper in an isolated UI fixture.
+
+Install `latexmk` and the selected pdfLaTeX or XeLaTeX engine on the machine that
+owns the workspace. For SSH, Docker, and WSL workspaces, compile in that
+environment. In Peer Device Mode the selected Desktop host must advertise
+LaTeX preview support. Mobile and bot surfaces can continue an existing writing
+session and receive PDF files saved to the workspace by the agent.
+
+Preview compilation uses temporary files and accepts PDFs up to 8 MiB.
+It disables shell escape and skips `latexmk` configuration scripts.
+Enable automatic compilation for projects you trust.
 
 ## Global agent instructions
 
@@ -1024,6 +1080,21 @@ The BTW selector can explicitly choose another pool or a fixed model, including
 before the first selected-text question. Peer hosts must advertise
 `btw_model_pool_selection_v1` for these typed initial choices; older hosts retain
 the inherited path without silently replacing a pool with its current member.
+
+Settings → AI → Session & Memory → Side questions controls the default for new `/btw`
+sessions (`ai.btw.model_selection`). The default is `{ "kind": "inherit" }`, which
+retains the parent's model, reasoning and pool binding. A fixed model uses
+`{ "kind": "model", "model_ref": "<configured model id>" }`; a pool uses
+`{ "kind": "pool", "pool_id": "<pool id>" }`. An explicit choice inside a side
+question takes precedence and affects only that conversation. Changing the global
+BTW default does not change existing conversations. A different model starts with
+its own default reasoning, while inherited sessions retain the parent's reasoning.
+Unavailable saved choices remain stored and block new side questions until an
+explicit choice repairs or overrides them. Peers expose this setting only when the
+execution host advertises `btw_model_defaults_v1`; settings and model IDs belong to
+that host. SSH/Docker workspace side questions keep their parent's execution root.
+The host returns the committed model target with admission so the selector shows
+the actual choice without depending on a second request.
 
 Peer Device Mode routes pool operations to capable Desktop/CLI hosts. Standalone
 browser clients, detached dispatch, and ACP/external-agent model selection

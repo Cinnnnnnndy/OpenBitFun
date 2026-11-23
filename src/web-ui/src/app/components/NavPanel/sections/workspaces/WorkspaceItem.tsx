@@ -50,10 +50,7 @@ import {
   SESSION_LOADING_DELAY_MS,
   subscribeHistorySessionOpenTransition,
 } from '@/flow_chat/services/sessionOpenIntent';
-import {
-  findReusableEmptySessionId,
-  flowChatSessionConfigForWorkspace,
-} from '@/app/utils/projectSessionWorkspace';
+import { flowChatSessionConfigForWorkspace } from '@/app/utils/projectSessionWorkspace';
 import type { AcpClientInfo } from '@/infrastructure/api/service-api/ACPClientAPI';
 import { loadWorkspaceAcpMenuClients } from './workspaceAcpMenuClients';
 import WorkspaceAcpSessionSubmenu from './WorkspaceAcpSessionSubmenu';
@@ -286,19 +283,24 @@ const WorkspaceItem: React.FC<WorkspaceItemProps> = ({
 
   // Remote connection status — optional: safe if not inside SSHRemoteProvider
   const sshContext = useContext(SSHContext);
-  const remoteConnStatus = workspace.connectionId && sshContext
+  const reportedConnStatus = workspace.connectionId && sshContext
     ? sshContext.workspaceStatuses[workspace.connectionId]
     : undefined;
+  // A link being re-verified after a wake, a network change or a timed-out
+  // operation is not shown as connected until the probe answers.
+  const remoteConnStatus = reportedConnStatus === 'connected'
+    && workspace.connectionId && sshContext?.verifyingConnectionIds?.[workspace.connectionId]
+    ? 'connecting'
+    : reportedConnStatus;
 
   const remoteMeta = useMemo(() => {
     if (!workspaceIsRemote) {
       return null;
     }
 
-    const status = remoteConnStatus ?? 'unknown';
-    const statusLabel = t(`nav.workspaces.remote.status.${status}`, {
-      defaultValue: t('nav.workspaces.remote.status.unknown'),
-    });
+    // No status yet means the first check for this connection is still running.
+    const status = remoteConnStatus ?? 'connecting';
+    const statusLabel = t(`nav.workspaces.remote.status.${status}`);
     const badge = remoteBadge ?? remoteWorkspaceBadge(workspace);
     const connectionLabel = badge?.connection ?? '';
     const hostLabel = badge?.host || connectionLabel;
@@ -307,8 +309,6 @@ const WorkspaceItem: React.FC<WorkspaceItemProps> = ({
       status,
       statusLabel,
       badgeLabel: badge?.label ?? connectionLabel,
-      /** A green dot already reads as "fine"; spell out only the states that need attention. */
-      showStatusText: status !== 'connected',
       tooltip: t('nav.workspaces.remote.tooltip', {
         connection: connectionLabel,
         host: hostLabel,
@@ -741,10 +741,7 @@ const WorkspaceItem: React.FC<WorkspaceItemProps> = ({
     }
   }, [t, workspace.rootPath]);
 
-  // One new session per gesture: a second click while the first is being
-  // created would open a second draft. The pending state is rendered on the
-  // button (busy + disabled) so a slow create, e.g. over a peer relay, is
-  // visibly in progress instead of silently swallowing clicks.
+  // Keep slow draft preparation visible, including over a peer relay.
   const [creatingSession, setCreatingSession] = useState(false);
   const showCreatingSessionIndicator = useDelayedPendingIndicator(creatingSession);
   const handleCreateSession = useCallback(async (mode?: 'Standard' | 'Cowork' | 'Claw') => {
@@ -753,14 +750,6 @@ const WorkspaceItem: React.FC<WorkspaceItemProps> = ({
     setCreatingSession(true);
     const resolvedMode = mode ?? (workspace.workspaceKind === WorkspaceKind.Assistant ? 'Claw' : undefined);
     try {
-      const reusableId = findReusableEmptySessionId(workspace, resolvedMode);
-      if (reusableId) {
-        await openMainSession(reusableId, {
-          workspaceId: workspace.id,
-          activateWorkspace: setActiveWorkspace,
-        });
-        return;
-      }
       const newSessionId = await flowChatManager.createChatDraft(
         flowChatSessionConfigForWorkspace(workspace),
         resolvedMode
@@ -1356,14 +1345,10 @@ const WorkspaceItem: React.FC<WorkspaceItemProps> = ({
                       className={`openbitfun-nav-panel__workspace-item-status-dot is-${remoteMeta.status}`}
                       aria-hidden="true"
                     />
+                    {/* Same shape in every state: the dot and tint carry the status, the tooltip spells it out. */}
                     <span className="openbitfun-nav-panel__workspace-item-remote-host">
                       {remoteMeta.badgeLabel}
                     </span>
-                    {remoteMeta.showStatusText ? (
-                      <span className="openbitfun-nav-panel__workspace-item-remote-status">
-                        {remoteMeta.statusLabel}
-                      </span>
-                    ) : null}
                   </span>
                 </Tooltip>
               )}

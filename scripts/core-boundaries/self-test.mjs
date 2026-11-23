@@ -830,7 +830,7 @@ export function runManifestParserSelfTest({
     }
   }
   const coreTaskToolRuleText = forbiddenRuleTextForPath(
-    'src/crates/assembly/core/src/agentic/tools/implementations/task/execution.rs',
+    'src/crates/assembly/core/src/agentic/tools/implementations/agent_collaboration/execution.rs',
   );
   if (!coreTaskToolRuleText) {
     throw new Error('missing core TaskTool DeepReview boundary rule');
@@ -3305,7 +3305,9 @@ export function runManifestParserSelfTest({
         'pending_wakeup_prefers_retry_time_when_present',
         'disabled_and_config_clear_remove_pending_retry_without_touching_history',
         'enqueue_success_sets_active_turn_and_disables_one_shot_next_run',
-        'enqueue_failure_preserves_retry_and_missing_session_disable_semantics',
+        'enqueue_failure_consumes_trigger_and_preserves_missing_session_disable_semantics',
+        'failed_trigger_waits_for_the_next_schedule_instead_of_retrying',
+        'failed_one_shot_trigger_stops_until_an_explicit_manual_run',
         'restart_recovery_marks_active_turn_error',
         'serde_shape_preserves_legacy_cron_state_wire_contract',
       ],
@@ -3373,9 +3375,15 @@ export function runManifestParserSelfTest({
       contracts: [
         'clone_prompt_cache',
         'start_dialog_turn_with_existing_context',
-        'start_dialog_turn_with_existing_context_persists_turn_and_snapshot',
-        'clone_prompt_cache_copies_runtime_and_persisted_entries',
       ],
+    },
+    {
+      path: 'src/crates/assembly/core/src/agentic/session/session_manager/tests/prompt_cache.rs',
+      contracts: ['clone_prompt_cache_copies_runtime_and_persisted_entries'],
+    },
+    {
+      path: 'src/crates/assembly/core/src/agentic/session/session_manager/tests/turn_admission.rs',
+      contracts: ['start_dialog_turn_with_existing_context_persists_turn_and_snapshot'],
     },
     {
       path: 'src/crates/assembly/core/src/agentic/persistence/session_branch.rs',
@@ -4267,7 +4275,7 @@ export function runManifestParserSelfTest({
       contracts: ['builtin_agent_specs', 'runtime_agents::default_model_id_for_builtin_agent'],
     },
     {
-      path: 'src/crates/assembly/core/src/agentic/tools/implementations/task/input.rs',
+      path: 'src/crates/assembly/core/src/agentic/tools/implementations/agent_collaboration/input.rs',
       contracts: [
         'fork_context',
         'SubagentContextMode::Fork',
@@ -4275,7 +4283,7 @@ export function runManifestParserSelfTest({
       ],
     },
     {
-      path: 'src/crates/assembly/core/src/agentic/tools/implementations/task/execution.rs',
+      path: 'src/crates/assembly/core/src/agentic/tools/implementations/agent_collaboration/execution.rs',
       contracts: [
         'child_delegation_policy',
         'start_background_subagent',
@@ -4283,11 +4291,11 @@ export function runManifestParserSelfTest({
       ],
     },
     {
-      path: 'src/crates/assembly/core/src/agentic/tools/implementations/task/background.rs',
+      path: 'src/crates/assembly/core/src/agentic/tools/implementations/agent_collaboration/background.rs',
       contracts: ['Background subagent started successfully'],
     },
     {
-      path: 'src/crates/assembly/core/src/agentic/tools/implementations/task/tests.rs',
+      path: 'src/crates/assembly/core/src/agentic/tools/implementations/agent_collaboration/tests.rs',
       contracts: [
         'background_subagent_start_acknowledgement_exposes_agent_wait_task_id',
         '<background_task',
@@ -4376,7 +4384,7 @@ export function runManifestParserSelfTest({
       ],
     },
     {
-      path: 'src/crates/assembly/core/src/agentic/tools/implementations/task/deep_review.rs',
+      path: 'src/crates/assembly/core/src/agentic/tools/implementations/agent_collaboration/deep_review.rs',
       contracts: [
         'deep_review_task_adapter::should_emit_deep_review_retry_guidance',
         'deep_review_task_adapter::auto_retry_suppression_reason',
@@ -4385,7 +4393,7 @@ export function runManifestParserSelfTest({
       ],
     },
     {
-      path: 'src/crates/assembly/core/src/agentic/tools/implementations/task/execution.rs',
+      path: 'src/crates/assembly/core/src/agentic/tools/implementations/agent_collaboration/execution.rs',
       contracts: [
         'deep_review_task_adapter::deep_review_retry_guidance',
         'openbitfun_agent_runtime::subagent_task::subagent_task_completion_result',
@@ -4831,8 +4839,11 @@ export function runManifestParserSelfTest({
         'SSHConnectionManager',
         'russh::client::connect_stream',
         'SftpSession',
-        'retains_password_connection_and_workspace_without_vault_entry',
       ],
+    },
+    {
+      path: 'src/crates/services/services-integrations/src/remote_ssh/manager/tests/saved_profiles.rs',
+      contracts: ['retains_password_connection_and_workspace_without_vault_entry'],
     },
     {
       path: 'src/crates/services/services-integrations/src/remote_ssh/remote_exec.rs',

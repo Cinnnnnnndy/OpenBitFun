@@ -15,7 +15,7 @@ import { remarkCachedParse } from './markdownParseCache';
 import { remarkAutolinkBoundaries } from './remarkAutolinkBoundaries';
 import { remarkStreamingTableLinks } from './remarkStreamingTableLinks';
 import { rehypeImageThumbnails } from './rehypeImageThumbnails';
-import rehypeRaw from 'rehype-raw';
+import { rehypeRawIfNeeded } from './rehypeRawIfNeeded';
 import rehypeSanitize, { defaultSchema } from 'rehype-sanitize';
 import { visit } from 'unist-util-visit';
 import { i18nService } from '@/infrastructure/i18n';
@@ -38,7 +38,6 @@ import {
   recordReactRenderProfile,
   startupTrace,
 } from '@/shared/utils/startupTrace';
-import path from 'path-browserify';
 import { getActiveSurfaceScope, onSurfaceActivated, type SurfaceScope } from '@/infrastructure/peer-device/deviceSurface';
 import './Markdown.scss';
 import { useStreamingTextReveal } from './useStreamingTextReveal';
@@ -46,11 +45,17 @@ import { SessionMarkdownImage, type SessionImageReader } from './SessionMarkdown
 import { ImageLightbox, type ImageLightboxState } from '@/shared/ui/ImageLightbox';
 import { rehypeSourceRange, type MarkdownSourceRange } from './rehypeSourceRange';
 import { rehypeWindowsDrivePaths } from './rehypeWindowsDrivePaths';
+import {
+  COMPUTER_LINK_PREFIX,
+  FILE_LINK_PREFIX,
+  WORKSPACE_FOLDER_PLACEHOLDER,
+  isAbsoluteFilesystemPath,
+  normalizeFileLikeHref,
+  parseMarkdownLineRange,
+  resolveBaseRelativePath,
+} from './markdownFileLinks';
 
 const log = createLogger('Markdown');
-const COMPUTER_LINK_PREFIX = 'computer://';
-const FILE_LINK_PREFIX = 'file://';
-const WORKSPACE_FOLDER_PLACEHOLDER = '{{workspaceFolder}}';
 
 const MarkdownMathRenderer = lazyWithRecovery(() => import('./MarkdownMathRenderer'));
 const ThinkingMarkdown = lazyWithRecovery(() => import('./ThinkingMarkdown'));
@@ -175,16 +180,39 @@ function mayNeedWorkspacePathForMarkdownLinks(content: string): boolean {
     /<a\s+[^>]*href=["']\s*(?!https?:|mailto:|visualization:|tab:|#)[^"']+["']/i.test(content);
 }
 
+function stripMarkdownCodeForMathCheck(content: string): string {
+  let stripped = content;
+  if (stripped.includes('```') || stripped.includes('~~~')) {
+    stripped = stripped.replace(
+      /(^[ \t]{0,3}(`{3,}|~{3,})[^\n]*\n[\s\S]*?(?:^[ \t]{0,3}\2[ \t]*$|$))/gm,
+      '\n',
+    );
+  }
+  if (stripped.includes('`')) {
+    stripped = stripped.replace(/(`+)[^\n]*?\1/g, ' ');
+  }
+  return stripped;
+}
+
 function mayContainMarkdownMath(content: string): boolean {
   if (!content) {
     return false;
   }
 
-  if (content.includes('$$') || content.includes('\\(') || content.includes('\\[')) {
+  if (
+    !content.includes('$') &&
+    !content.includes('\\(') &&
+    !content.includes('\\[')
+  ) {
+    return false;
+  }
+
+  const prose = stripMarkdownCodeForMathCheck(content);
+  if (prose.includes('$$') || prose.includes('\\(') || prose.includes('\\[')) {
     return true;
   }
 
-  return /(^|[^\\$])\$[^$\n]{1,240}\$(?!\d)/.test(content);
+  return /(^|[^\\$])\$[^$\n]{1,240}\$(?!\d)/.test(prose);
 }
 
 /** Catches render errors from react-markdown/remark-gfm (e.g. RegExp in transformGfmAutolinkLiterals) and shows plain text fallback. */
@@ -363,46 +391,8 @@ function remarkAutolinkInternalLinks() {
   };
 }
 
-function normalizeFileLikeHref(rawHref: string): string {
-  if (/^openbitfun:\/\/(?:runtime|current-session)\//.test(rawHref)) return rawHref;
-  let filePath = rawHref;
-
-  if (rawHref.startsWith(COMPUTER_LINK_PREFIX)) {
-    filePath = rawHref.slice(COMPUTER_LINK_PREFIX.length);
-  } else if (rawHref.startsWith(FILE_LINK_PREFIX)) {
-    filePath = rawHref.slice(FILE_LINK_PREFIX.length);
-  } else if (rawHref.startsWith('file:')) {
-    filePath = rawHref.slice('file:'.length);
-  }
-
-  if (filePath.startsWith(WORKSPACE_FOLDER_PLACEHOLDER)) {
-    filePath = filePath.slice(WORKSPACE_FOLDER_PLACEHOLDER.length);
-    if (filePath.startsWith('/')) {
-      filePath = filePath.slice(1);
-    }
-  }
-
-  // Normalize URI-style Windows drive paths to native absolute paths.
-  if (/^\/{2,}[A-Za-z]:[\\/]/.test(filePath)) {
-    filePath = filePath.replace(/^\/+/, '/');
-  }
-  if (/^\/[A-Za-z]:[\\/]/.test(filePath)) {
-    filePath = filePath.slice(1);
-  }
-
-  try {
-    return decodeURIComponent(filePath);
-  } catch {
-    return filePath;
-  }
-}
-
-function normalizePath(filePath: string): string {
-  return filePath.replace(/\\/g, '/');
-}
-
 function normalizeDisplayPath(filePath: string): string {
-  const normalized = normalizePath(filePath);
+  const normalized = filePath.replace(/\\/g, '/');
 
   if (/^[A-Za-z]:\//.test(normalized)) {
     return normalized.replace(/\//g, '\\');
@@ -413,29 +403,6 @@ function normalizeDisplayPath(filePath: string): string {
   }
 
   return normalized;
-}
-
-function isAbsoluteFilesystemPath(filePath: string): boolean {
-  const normalized = normalizePath(filePath);
-  if (/^[A-Za-z]:/.test(normalized) || /^\/[A-Za-z]:/.test(normalized)) {
-    return true;
-  }
-
-  return normalized.startsWith('/') && !normalized.startsWith('//');
-}
-
-function resolveBaseRelativePath(targetPath: string, basePath?: string): string {
-  if (/^openbitfun:\/\/(?:runtime|current-session)\//.test(targetPath)) return targetPath;
-  if (!targetPath || !basePath || isAbsoluteFilesystemPath(targetPath)) {
-    return targetPath;
-  }
-
-  const normalizedTarget = normalizePath(targetPath);
-  if (normalizedTarget.startsWith('./') || normalizedTarget.startsWith('../')) {
-    return path.normalize(path.join(basePath, normalizedTarget));
-  }
-
-  return path.normalize(path.join(basePath, normalizedTarget));
 }
 
 function resolveDisplayFilePath(targetPath: string, basePath?: string, workspacePath?: string): string {
@@ -910,6 +877,7 @@ export interface MarkdownRendererProps {
   className?: string;
   isStreaming?: boolean;
   expandDetailsByDefault?: boolean;
+  renderArtifactLink?: (href: string, label: string, wide?: boolean) => React.ReactNode;
   onOpenVisualization?: (visualization: any) => void;
   onFileViewRequest?: (filePath: string, fileName: string, lineRange?: LineRange) => void;
   /** File IO belongs to the supplied callback; host explorer/browser actions are unavailable. */
@@ -942,6 +910,7 @@ const MarkdownSurface = React.memo<MarkdownRendererProps & { thinking?: boolean;
   isStreaming = false,
   expandDetailsByDefault = false,
   onOpenVisualization,
+  renderArtifactLink,
   onFileViewRequest,
   fileActionsViaCallbackOnly = false,
   onImageRead,
@@ -967,6 +936,7 @@ const MarkdownSurface = React.memo<MarkdownRendererProps & { thinking?: boolean;
   const workspaceIdRef = useLiveValueRef(fileAccess ? fileAccess.scope.workspaceId : workspaceId);
   const currentWorkspacePathRef = useLiveValueRef(fileAccess?.scope.workspacePath ?? currentWorkspacePath);
   const expandDetailsByDefaultRef = useLiveValueRef(expandDetailsByDefault);
+  const renderArtifactLinkRef = useLiveValueRef(renderArtifactLink);
   const onOpenVisualizationRef = useLiveValueRef(onOpenVisualization);
   const onFileViewRequestRef = useLiveValueRef(onFileViewRequest);
   const fileActionsViaCallbackOnlyRef = useLiveValueRef(fileActionsViaCallbackOnly);
@@ -1055,27 +1025,6 @@ const MarkdownSurface = React.memo<MarkdownRendererProps & { thinking?: boolean;
     () => mayContainMarkdownMath(markdownContent),
     [markdownContent],
   );
-
-  // Parse line ranges like #L42 / 1-20
-  const parseLineRange = useCallback((hash: string): LineRange | undefined => {
-    const cleanHash = hash.replace(/^#/, '');
-
-    const lineMatchWithL = cleanHash.match(/^L(\d+)(?:-L?(\d+))?$/i);
-    if (lineMatchWithL) {
-      const start = parseInt(lineMatchWithL[1], 10);
-      const end = lineMatchWithL[2] ? parseInt(lineMatchWithL[2], 10) : undefined;
-      return { start, end };
-    }
-
-    const lineMatchWithoutL = cleanHash.match(/^(\d+)(?:-(\d+))?$/);
-    if (lineMatchWithoutL) {
-      const start = parseInt(lineMatchWithoutL[1], 10);
-      const end = lineMatchWithoutL[2] ? parseInt(lineMatchWithoutL[2], 10) : undefined;
-      return { start, end };
-    }
-
-    return undefined;
-  }, []);
 
   const handleFileViewRequest = useCallback((filePath: string, fileName: string, lineRange?: LineRange) => {
     if (onFileViewRequestRef.current) onFileViewRequestRef.current(filePath, fileName, lineRange);
@@ -1438,7 +1387,7 @@ const MarkdownSurface = React.memo<MarkdownRendererProps & { thinking?: boolean;
         if (hashIndex !== -1) {
           const hash = filePath.substring(hashIndex);
           filePath = filePath.substring(0, hashIndex);
-          lineRange = parseLineRange(hash);
+          lineRange = parseMarkdownLineRange(hash);
         } else {
           // Note: exclude Windows drive letters (e.g. C:)
           const colonMatch = filePath.match(/^(.+?):(\d+)(?:-(\d+))?$/);
@@ -1620,7 +1569,7 @@ const MarkdownSurface = React.memo<MarkdownRendererProps & { thinking?: boolean;
     table({ children }: any) {
       return (
         <div className="table-wrapper" data-openbitfun-component="markdown" data-openbitfun-part="table">
-          <table>{children}</table>
+          <table data-openbitfun-component="markdown" data-openbitfun-part="tableSurface">{children}</table>
         </div>
       );
     },
@@ -1685,6 +1634,7 @@ const MarkdownSurface = React.memo<MarkdownRendererProps & { thinking?: boolean;
     th({ node: _node, children, className, align, style, ...props }: any) {
       return (
         <th {...props} className={['markdown-header-cell', className].filter(Boolean).join(' ')}
+          data-openbitfun-component="markdown" data-openbitfun-part="tableHeadingCell"
           style={align ? { ...style, textAlign: align } : style}>
           <div className="markdown-table-cell-content">
             <div className="markdown-table-cell-body">{children}</div>
@@ -1704,7 +1654,13 @@ const MarkdownSurface = React.memo<MarkdownRendererProps & { thinking?: boolean;
       );
     },
     
-    p({ node: _node, children, align, style, className, ...props }: any) {
+    p({ node, children, align, style, className, ...props }: any) {
+      const only = node?.children?.length === 1 ? node.children[0] : undefined;
+      if (renderArtifactLinkRef.current && only?.tagName === 'a'
+        && only.children?.length === 1 && only.children[0].type === 'text') {
+        const artifact = renderArtifactLinkRef.current(only.properties?.href, only.children[0].value);
+        if (artifact) return artifact;
+      }
       return (
         <p
           {...props}
@@ -1717,6 +1673,7 @@ const MarkdownSurface = React.memo<MarkdownRendererProps & { thinking?: boolean;
     }
   }), [
     thinking,
+    renderArtifactLinkRef,
     onFileDownloadRef,
     onImageReadRef,
     onImagePreviewRef,
@@ -1728,7 +1685,6 @@ const MarkdownSurface = React.memo<MarkdownRendererProps & { thinking?: boolean;
     handleOpenBuiltInBrowserLink,
     handleOpenVisualization,
     handleTabOpen,
-    parseLineRange,
     basePathRef,
     currentWorkspacePathRef,
     expandDetailsByDefaultRef,
@@ -1764,7 +1720,7 @@ const MarkdownSurface = React.memo<MarkdownRendererProps & { thinking?: boolean;
     const basicFragment = (
       <ReactMarkdown
         remarkPlugins={[[remarkGfm, markdownGfmOptions], remarkAutolinkBoundaries, remarkAutolinkInternalLinks]}
-        rehypePlugins={[rehypeRaw, [rehypeWindowsDrivePaths, { markdownSource: fragment }], [rehypeSanitize, sanitizeSchema]]}
+        rehypePlugins={[rehypeRawIfNeeded, [rehypeWindowsDrivePaths, { markdownSource: fragment }], [rehypeSanitize, sanitizeSchema]]}
         urlTransform={markdownUrlTransform}
         components={fragmentComponents}
       >{fragment}</ReactMarkdown>
@@ -1786,7 +1742,7 @@ const MarkdownSurface = React.memo<MarkdownRendererProps & { thinking?: boolean;
   const basicMarkdownRenderer = (
     <ReactMarkdown
       remarkPlugins={[[remarkGfm, markdownGfmOptions], ...(!isStreaming ? [remarkCachedParse] : []), [remarkStreamingTableLinks, { isStreaming }], remarkAutolinkBoundaries, remarkAutolinkInternalLinks]}
-      rehypePlugins={[rehypeRaw, [rehypeWindowsDrivePaths, { markdownSource: markdownContent }], [rehypeSanitize, sanitizeSchema], [rehypeSourceRange, sourceRange], [rehypeImageThumbnails, { enabled: imageThumbnails }]]}
+      rehypePlugins={[rehypeRawIfNeeded, [rehypeWindowsDrivePaths, { markdownSource: markdownContent }], [rehypeSanitize, sanitizeSchema], [rehypeSourceRange, sourceRange], [rehypeImageThumbnails, { enabled: imageThumbnails }]]}
       urlTransform={markdownUrlTransform}
       components={components}
     >
