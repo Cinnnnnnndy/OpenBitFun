@@ -20,7 +20,9 @@ function DefaultChevron() {
       width="12"
       fill="none"
       stroke="currentColor"
-      strokeWidth="2"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
     >
       <path d="M9 6l6 6-6 6" />
     </svg>

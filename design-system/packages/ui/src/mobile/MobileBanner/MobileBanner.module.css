@@ -8,5 +8,7 @@
   .root[data-tone="warning"] .icon { color: var(--openbitfun-color-status-warning-emphasis); }
   .root[data-tone="danger"] .icon { color: var(--openbitfun-color-status-danger-emphasis); }
   .content { min-inline-size: 0; flex: 1; }
-  .action { flex: 0 0 auto; }
+  /* The action keeps its 48px touch target but must not stretch a one-line banner past its
+     44px minimum: negative block margins let the target overlap the banner padding instead. */
+  .action { display: flex; flex: 0 0 auto; align-items: center; margin-block: calc(-1 * var(--openbitfun-space-3)); }
 }

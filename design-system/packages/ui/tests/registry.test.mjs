@@ -83,6 +83,7 @@ test("registry exposes only the formal stable components", () => {
       "MobileLink",
       "MobileListRow",
       "MobileMessage",
+      "MobileMiniAppCard",
       "MobilePageHeader",
       "MobileRadioGroup",
       "MobileScrim",

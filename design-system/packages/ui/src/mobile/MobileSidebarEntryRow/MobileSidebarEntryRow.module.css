@@ -4,18 +4,18 @@
     box-sizing: border-box;
     inline-size: 100%;
     min-inline-size: 0;
-    block-size: 36px;
+    block-size: var(--openbitfun-layout-mobile-sidebar-entry-row-height);
     align-items: center;
-    gap: var(--openbitfun-space-2);
+    gap: var(--openbitfun-layout-mobile-sidebar-entry-row-gap);
     margin: 0;
     padding: 0 var(--openbitfun-space-2);
     border: 0;
-    border-radius: var(--openbitfun-radius-sm);
+    border-radius: var(--openbitfun-layout-mobile-sidebar-control-radius);
     background: transparent;
-    color: var(--openbitfun-color-sidebar-muted);
-    font-size: var(--openbitfun-type-body-md-font-size);
-    font-weight: var(--openbitfun-type-body-md-font-weight);
-    line-height: var(--openbitfun-type-body-md-line-height);
+    color: var(--openbitfun-color-sidebar-ink);
+    font-size: var(--openbitfun-font-size-xl);
+    font-weight: var(--openbitfun-font-weight-regular);
+    line-height: var(--openbitfun-line-height-base);
     text-align: start;
     cursor: pointer;
     touch-action: manipulation;
@@ -33,8 +33,13 @@
   }
 
   .root:focus-visible {
-    outline: var(--openbitfun-focus-width) solid var(--openbitfun-color-focus-ring);
-    outline-offset: var(--openbitfun-focus-offset);
+    /* Clipped-item ring: the sidebar scroll clips an outset outline, so the ring sits inside. */
+    outline: none;
+    box-shadow: inset 0 0 0 var(--openbitfun-focus-width) var(--openbitfun-color-focus-ring);
+  }
+
+  @media (forced-colors: active) {
+    .root:focus-visible { box-shadow: inset 0 0 0 var(--openbitfun-focus-width) Highlight; }
   }
 
   .icon {

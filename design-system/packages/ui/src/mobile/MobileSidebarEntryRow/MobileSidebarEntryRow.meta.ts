@@ -11,6 +11,12 @@ export const mobileSidebarEntryRowMeta = {
   ],
   states: ["default", "hover", "focus-visible"],
   tokens: [
+    "layout.mobileSidebar.entryRowHeight",
+    "layout.mobileSidebar.entryRowGap",
+    "layout.mobileSidebar.controlRadius",
+    "font.size.xl",
+    "font.weight.regular",
+    "lineHeight.base",
     "color.sidebar.bg",
     "color.sidebar.hover",
     "color.sidebar.ink",

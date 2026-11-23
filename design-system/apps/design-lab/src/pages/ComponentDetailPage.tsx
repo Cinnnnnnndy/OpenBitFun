@@ -123,6 +123,7 @@ import {
   MobileLink,
   MobileListRow,
   MobileMessage,
+  MobileMiniAppCard,
   MobilePageHeader,
   MobileRadioGroup,
   MobileScrim,
@@ -445,6 +446,13 @@ function SearchFieldStatePreview({ state }: { state: string }) {
     </div>
   );
 }
+
+/* States that open a modal sheet with a page-wide scrim. They only render in the single preview,
+   where the sheet is contained by the phone screen; in the overview grid the sheet would cover
+   the whole Lab. */
+const modalOpenStates: Readonly<Record<string, readonly string[]>> = {
+  MobileSelect: ["open"],
+};
 
 export function ComponentDetailPage({
   colorScheme,
@@ -1031,6 +1039,17 @@ export function ComponentDetailPage({
       return <MobileConversationExample name={component.name} key={state} state={state} />;
     }
 
+    if (component.name === "MobileMiniAppCard") {
+      return (
+        <MobileMiniAppCard
+          data-openbitfun-preview-state={state === "hover" || state === "active" || state === "focus-visible" ? state : undefined}
+          description={t("scenes.mobile.miniApp.gomokuDesc")}
+          media={<img src="/assets/gomoku.webp" alt="" draggable={false} />}
+          title={t("scenes.mobile.miniApp.gomoku")}
+        />
+      );
+    }
+
     if (component.name === "MobileBadge") {
       const tone = state === "info" || state === "success" || state === "warning" || state === "danger" ? state : "neutral";
       return <MobileBadge dot tone={tone}>{t("components.preview.notifications")}</MobileBadge>;
@@ -1239,7 +1258,7 @@ export function ComponentDetailPage({
       return (
         <MobileSelect
           data-openbitfun-preview-state={state === "hover" || state === "active" || state === "focus-visible" ? state : undefined}
-          defaultOpen={state === "open"}
+          defaultOpen={state === "open" && applyInspectorControls}
           description={state === "invalid" ? t("components.preview.inputError") : undefined}
           disabled={state === "disabled"}
           invalid={state === "invalid"}
@@ -2489,6 +2508,7 @@ export function ComponentDetailPage({
             </div>}
             {hasOverview && previewMode === "overview" ? (isButtonComponent ? renderStateComparison() :
               <ComponentOverview component={component} presentation={presentation} states={states} stateLabel={stateLabel} renderPreview={state => renderPreview(state)}
+                hiddenStates={modalOpenStates[component.name]}
                 extraExamples={component.name === "ActivityItem" ? <section className="design-mobile-appearances"><h3>{t("preview.styles")}</h3><div className="design-example-grid">{(["inline", "surface"] as const).map(appearance => <section key={appearance}><h3>{stateLabel(appearance)}</h3>{renderPreview("default", variant, false, appearance)}</section>)}</div><h3>{t("preview.states")}</h3></section> : undefined}
                 onInspect={state => { setPreviewState(state); setPreviewMode("single"); }} iconName={iconName} onSelectIcon={setIconName}
                 colorScheme={colorScheme} contrast={contrast} density={density} tokenOverrides={tokenOverrides} />
@@ -2502,7 +2522,7 @@ export function ComponentDetailPage({
               </div>
               <div className="design-selected-component" data-component-name={component.name}>
                 {isMobileCategory ? (
-                  <PhoneScreenPreview withThread={component.name === "MobileMessage" || component.name === "MobileComposer" || component.name === "MobileFloatingActions"}>
+                  <PhoneScreenPreview shell={component.name === "MobileComposer" || component.name === "MobileFloatingActions" ? "home" : "page"} title={component.name}>
                     {/* The provider routes the kit's overlay portal into the screen, so a demo
                         sheet slides over the phone instead of the Lab. ThemeRoot draws the theme. */}
                     <DesignSystemProvider portalHost={() => phoneScreenRef.current}>

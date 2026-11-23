@@ -4,13 +4,13 @@
     box-sizing: border-box;
     inline-size: 100%;
     min-inline-size: 0;
-    block-size: 36px;
+    block-size: var(--openbitfun-layout-mobile-sidebar-row-height);
     align-items: center;
     gap: var(--openbitfun-space-2);
     margin: 0;
-    padding: 0 var(--openbitfun-space-2) 0 28px;
+    padding: 0 var(--openbitfun-space-2) 0 var(--openbitfun-layout-mobile-sidebar-child-indent);
     border: 0;
-    border-radius: var(--openbitfun-radius-sm);
+    border-radius: var(--openbitfun-layout-mobile-sidebar-row-radius);
     background: transparent;
     color: var(--openbitfun-color-sidebar-muted);
     font-size: var(--openbitfun-type-body-sm-font-size);
@@ -33,8 +33,13 @@
   }
 
   .root:focus-visible {
-    outline: var(--openbitfun-focus-width) solid var(--openbitfun-color-focus-ring);
-    outline-offset: var(--openbitfun-focus-offset);
+    /* Clipped-item ring: the sidebar scroll clips an outset outline, so the ring sits inside. */
+    outline: none;
+    box-shadow: inset 0 0 0 var(--openbitfun-focus-width) var(--openbitfun-color-focus-ring);
+  }
+
+  @media (forced-colors: active) {
+    .root:focus-visible { box-shadow: inset 0 0 0 var(--openbitfun-focus-width) Highlight; }
   }
 
   .dot {

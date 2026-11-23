@@ -13,6 +13,11 @@ export const mobileSidebarWorkspaceRowMeta = {
   ],
   states: ["default", "hover", "focus-visible", "expanded", "collapsed"],
   tokens: [
+    "layout.mobileSidebar.rowHeight",
+    "layout.mobileSidebar.rowRadius",
+    "layout.mobileSidebar.workspaceRowGap",
+    "color.icon.subtle",
+    "control.mobileIcon.strokeWidth",
     "color.sidebar.bg",
     "color.sidebar.hover",
     "color.sidebar.ink",

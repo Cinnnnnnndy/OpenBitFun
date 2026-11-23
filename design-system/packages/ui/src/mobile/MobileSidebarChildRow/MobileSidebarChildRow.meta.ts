@@ -11,6 +11,9 @@ export const mobileSidebarChildRowMeta = {
   ],
   states: ["default", "hover", "focus-visible", "selected"],
   tokens: [
+    "layout.mobileSidebar.rowHeight",
+    "layout.mobileSidebar.rowRadius",
+    "layout.mobileSidebar.childIndent",
     "color.sidebar.bg",
     "color.sidebar.hover",
     "color.sidebar.ink",

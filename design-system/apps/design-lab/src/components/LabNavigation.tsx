@@ -11,11 +11,11 @@ import {
 import { LabComponentIndex } from "./LabComponentIndex";
 import { componentRegistry } from "@openbitfun/ui/registry";
 
-type Page = "components" | "foundations" | "brand" | "colors" | "tokens" | "getting-started" | "resources" | "patterns" | "mobile-patterns" | "flow-chat" | "flow-chat-mock" | "mobile" | "subagent-ip";
+type Page = "components" | "foundations" | "brand" | "colors" | "icons" | "skill" | "tokens" | "getting-started" | "resources" | "patterns" | "mobile-patterns" | "demo-compare" | "flow-chat" | "flow-chat-mock" | "mobile" | "subagent-ip";
 type NavigationProps = { page: string; componentName?: string; onNavigate: (page: Page) => void };
 function sectionFor(page: string) {
   return ["brand", "subagent-ip"].includes(page) ? "brand"
-    : ["foundations", "colors", "tokens", "getting-started", "resources"].includes(page) ? "foundations"
+    : ["foundations", "colors", "icons", "tokens", "getting-started", "resources", "skill"].includes(page) ? "foundations"
     : page === "overview" ? undefined : "components";
 }
 /** Whether this route has a section level at all. The shell needs to know before it renders, so
@@ -48,16 +48,16 @@ export function LabSectionNavigation({ page, componentName, onNavigate }: Naviga
   const section = sectionFor(page);
   /* Handheld surface keeps its own rail: the mobile component index plus the mobile-only
      scenes pages. The Desktop rail lists the web catalog and web patterns instead. */
-  const mobileSurface = page === "mobile" || page === "mobile-patterns"
+  const mobileSurface = page === "mobile" || page === "mobile-patterns" || page === "demo-compare"
     || (page === "component" && componentRegistry.find(item => item.name === componentName)?.category === "mobile");
   const activeChapter = useSyncExternalStore(subscribeFoundationSection, getActiveFoundationSection);
   const links: readonly [Page, MessageKey][] = section === "brand"
     ? [["brand", "design.identity"], ["subagent-ip", "design.characters"]]
     : section === "foundations"
-      ? [["foundations", "design.foundations"], ["colors", "nav.colors"], ["tokens", "design.tokens"], ["getting-started", "nav.gettingStarted"], ["resources", "nav.resources"]]
+      ? [["foundations", "design.foundations"], ["colors", "nav.colors"], ["icons", "nav.icons"], ["tokens", "design.tokens"], ["getting-started", "nav.gettingStarted"], ["resources", "nav.resources"], ["skill", "nav.skill"]]
       : section === "components"
         ? (mobileSurface
-          ? [["components", "design.mobile"], ["mobile-patterns", "design.contexts"], ["flow-chat-mock", "design.conversation"]]
+          ? [["components", "design.mobile"], ["mobile-patterns", "design.contexts"], ["demo-compare", "nav.demoCompare"], ["flow-chat-mock", "design.conversation"]]
           : [["components", "design.web"], ["patterns", "design.contexts"], ["flow-chat-mock", "design.conversation"]])
         : [];
   if (!links.length) return null;

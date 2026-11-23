@@ -22,9 +22,9 @@
     margin: 0;
     padding: 0 var(--openbitfun-space-2);
     border: 0.5px solid transparent;
-    border-radius: var(--openbitfun-radius-md);
+    border-radius: var(--openbitfun-layout-mobile-sidebar-control-radius);
     background: transparent;
-    color: var(--openbitfun-color-sidebar-muted);
+    color: var(--openbitfun-color-icon-default);
     font-size: var(--openbitfun-type-body-md-font-size);
     font-weight: var(--openbitfun-type-body-md-font-weight);
     line-height: var(--openbitfun-type-body-md-line-height);
@@ -74,9 +74,9 @@
     margin: 0;
     padding: 0;
     border: 0.5px solid transparent;
-    border-radius: var(--openbitfun-radius-md);
+    border-radius: var(--openbitfun-layout-mobile-sidebar-control-radius);
     background: transparent;
-    color: var(--openbitfun-color-sidebar-muted);
+    color: var(--openbitfun-color-icon-default);
     cursor: pointer;
     touch-action: manipulation;
     -webkit-tap-highlight-color: transparent;

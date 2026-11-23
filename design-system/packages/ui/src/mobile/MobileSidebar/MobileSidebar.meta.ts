@@ -12,6 +12,8 @@ export const mobileSidebarMeta = {
   ],
   states: ["default"],
   tokens: [
+    "layout.mobileSidebar.panelPaddingInline",
+    "layout.mobileSidebar.scrollPaddingBlockStart",
     "color.sidebar.bg",
     "color.sidebar.ink",
   ],

@@ -1,4 +1,5 @@
 import "./styles/layers.css";
+import "./styles/mobile-icons.css";
 
 export {
   MobileActionSheet,
@@ -86,6 +87,11 @@ export {
   type MobileMessageProps,
   type MobileMessageRole,
 } from "./mobile/MobileMessage";
+export {
+  MobileMiniAppCard,
+  type MobileMiniAppCardProps,
+  type MobileMiniAppCardSize,
+} from "./mobile/MobileMiniAppCard";
 export {
   MobilePageHeader,
   type MobilePageHeaderProps,

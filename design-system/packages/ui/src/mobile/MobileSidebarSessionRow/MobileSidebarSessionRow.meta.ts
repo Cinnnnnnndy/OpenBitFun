@@ -2,7 +2,7 @@ import type { ComponentMeta } from "../../registry.types";
 
 export const mobileSidebarSessionRowMeta = {
   category: "mobile",
-  description: "A 40px recent-session row in deep ink with an optional 6px running/error status dot and a timestamp that fades in on hover.",
+  description: "A 40px recent-session row in deep ink. Every row reserves a fixed trailing column for the optional 6px running/error status dot, so dots and the hover-revealed timestamp align across rows.",
   maturity: "stable",
   name: "MobileSidebarSessionRow",
   props: [
@@ -13,6 +13,8 @@ export const mobileSidebarSessionRowMeta = {
   ],
   states: ["default", "hover", "focus-visible", "selected"],
   tokens: [
+    "layout.mobileSidebar.rowRadius",
+    "lineHeight.ui",
     "color.sidebar.bg",
     "color.sidebar.hover",
     "color.sidebar.selection",
@@ -28,6 +30,9 @@ export const mobileSidebarSessionRowMeta = {
     "type.label.xs.fontWeight",
     "type.label.xs.lineHeight",
     "radius.sm",
+    "space.2",
+    "layout.mobileSidebar.sessionStatusColumn",
+    "layout.mobileSidebar.sessionStatusInset",
     "motion.duration.fast",
     "motion.easing.standard",
   ],

@@ -11,6 +11,13 @@ export const mobileSidebarSectionLabelMeta = {
   ],
   states: ["default", "hover"],
   tokens: [
+    "layout.mobileSidebar.sectionHeight",
+    "layout.mobileSidebar.sectionInset",
+    "layout.mobileSidebar.sectionGapBefore",
+    "layout.mobileSidebar.sectionGapAfter",
+    "font.size.xs",
+    "font.weight.regular",
+    "lineHeight.base",
     "color.sidebar.bg",
     "color.sidebar.subtle",
     "color.sidebar.hover",

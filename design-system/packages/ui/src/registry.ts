@@ -64,6 +64,7 @@ import { mobileFileButtonMeta } from "./mobile/MobileFileButton/MobileFileButton
 import { mobileListRowMeta } from "./mobile/MobileListRow/MobileListRow.meta";
 import { mobileLinkMeta } from "./mobile/MobileLink/MobileLink.meta";
 import { mobileMessageMeta } from "./mobile/MobileMessage/MobileMessage.meta";
+import { mobileMiniAppCardMeta } from "./mobile/MobileMiniAppCard/MobileMiniAppCard.meta";
 import { mobilePageHeaderMeta } from "./mobile/MobilePageHeader/MobilePageHeader.meta";
 import { mobileRadioGroupMeta } from "./mobile/MobileRadioGroup/MobileRadioGroup.meta";
 import { mobileSectionMeta } from "./mobile/MobileSection/MobileSection.meta";
@@ -206,6 +207,7 @@ export const componentRegistry = [
   mobileLinkMeta,
   mobileListRowMeta,
   mobileMessageMeta,
+  mobileMiniAppCardMeta,
   mobilePageHeaderMeta,
   mobileRadioGroupMeta,
   mobileScrimMeta,

@@ -14,6 +14,7 @@ import { AppWindow, Blocks, BookOpen, Bot, Braces, FileText, House, Languages, M
 import { Button, Dialog, DialogBody, DialogClose, DialogDescription, DialogHeader, DialogHeading, DialogTitle, IconButton, KeyHint, Listbox, ListboxEmpty, ListboxOption, SearchField, Select, Sheet, Icon as CatalogIcon,
   DesignSystemProvider,
   ThemeRoot,
+  canonicalIconNames,
   type ColorScheme,
   type ContrastMode,
   type DensityMode,
@@ -36,8 +37,11 @@ import { GettingStartedPage } from "./pages/GettingStartedPage";
 import { ResourcesPage } from "./pages/ResourcesPage";
 import { PatternsPage } from "./pages/PatternsPage";
 import { MobilePatternsPage } from "./pages/MobilePatternsPage";
+import { DemoComparePage } from "./pages/DemoComparePage";
+import { SkillPage } from "./pages/SkillPage";
 import { FlowChatMockPage } from "./pages/FlowChatMockPage";
 import { ColorsPage } from "./pages/ColorsPage";
+import { IconsPage } from "./pages/IconsPage";
 import { SubagentIpPage } from "./pages/SubagentIpPage";
 import { SUBAGENT_AVATAR_CATALOG } from "./assets/subagentAvatars";
 import {
@@ -66,9 +70,12 @@ type LabRoute =
   | { page: "brand" }
   | { page: "patterns" }
   | { page: "mobile-patterns" }
+  | { page: "demo-compare" }
   | { page: "flow-chat" }
   | { page: "flow-chat-mock" }
   | { page: "colors" }
+  | { page: "icons" }
+  | { page: "skill" }
   | { page: "subagent-ip" }
   | { page: "resources" }
   | { page: "tokens" }
@@ -117,6 +124,12 @@ function parseRoute(hash: string): LabRoute {
   if (route === "tokens") {
     return { page: "tokens" };
   }
+  if (route === "skill") {
+    return { page: "skill" };
+  }
+  if (route === "icons") {
+    return { page: "icons" };
+  }
   if (route === "colors") {
     return { page: "colors" };
   }
@@ -134,6 +147,9 @@ function parseRoute(hash: string): LabRoute {
   }
   if (route === "patterns") {
     return { page: "patterns" };
+  }
+  if (route === "demo-compare") {
+    return { page: "demo-compare" };
   }
   if (route === "mobile-patterns") {
     return { page: "mobile-patterns" };
@@ -244,6 +260,20 @@ export function App() {
       route: { page: "colors" },
     },
     {
+      detail: t("icons.intro", { count: canonicalIconNames.length }),
+      icon: "session",
+      keywords: `icons icon library glyph stroke 图标 ${t("nav.icons")}`,
+      label: t("nav.icons"),
+      route: { page: "icons" },
+    },
+    {
+      detail: t("skill.searchDetail"),
+      icon: FileText,
+      keywords: `skill ai agent prompt generate SKILL.md 生成 规范 ${t("nav.skill")}`,
+      label: t("nav.skill"),
+      route: { page: "skill" },
+    },
+    {
       detail: t("search.componentsDetail", { count: componentRegistry.length }),
       icon: Blocks,
       keywords: `component library catalog ${t("nav.components")}`,
@@ -274,9 +304,16 @@ export function App() {
     {
       detail: t("scenes.mobile.label"),
       icon: Smartphone,
-      keywords: `mobile patterns scenes phone handheld chat sidebar settings pairing ${t("nav.patterns")}`,
+      keywords: `mobile patterns scenes phone handheld home mini apps sidebar ${t("nav.patterns")}`,
       label: `${t("nav.patterns")} · ${t("design.mobile")}`,
       route: { page: "mobile-patterns" },
+    },
+    {
+      detail: t("compare.searchDetail"),
+      icon: Smartphone,
+      keywords: `demo compare fidelity measure 对照 还原 ${t("nav.demoCompare")}`,
+      label: t("nav.demoCompare"),
+      route: { page: "demo-compare" },
     },
     {
       detail: t("search.flowChatDetail", { count: flowChatComponents.length }),
@@ -623,6 +660,10 @@ export function App() {
             />
           )}
 
+          {route.page === "demo-compare" && (
+            <DemoComparePage colorScheme={colorScheme} contrast={contrast} density={density} tokenOverrides={tokenOverrides} />
+          )}
+
           {route.page === "flow-chat-mock" && <FlowChatMockPage />}
 
           {route.page === "tokens" && (
@@ -656,6 +697,10 @@ export function App() {
               onModeChange={changeThemeMode}
             />
           )}
+
+          {route.page === "icons" && <IconsPage colorScheme={colorScheme} contrast={contrast} />}
+
+          {route.page === "skill" && <SkillPage />}
 
           {route.page === "subagent-ip" && <SubagentIpPage />}
 

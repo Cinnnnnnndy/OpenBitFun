@@ -88,6 +88,7 @@ const descriptionKeys: Readonly<Record<string, MessageKey>> = {
   MobileLink: "component.MobileLink.description",
   MobileListRow: "component.MobileListRow.description",
   MobileMessage: "component.MobileMessage.description",
+  MobileMiniAppCard: "component.MobileMiniAppCard.description",
   MobilePageHeader: "component.MobilePageHeader.description",
   MobileScrim: "component.MobileScrim.description",
   MobileSection: "component.MobileSection.description",

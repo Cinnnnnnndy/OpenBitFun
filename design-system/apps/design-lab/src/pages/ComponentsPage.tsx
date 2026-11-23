@@ -84,6 +84,7 @@ import {
   MobileLink,
   MobileListRow,
   MobileMessage,
+  MobileMiniAppCard,
   MobilePageHeader,
   MobileRadioGroup,
   MobileScrim,
@@ -163,6 +164,7 @@ const componentIcons = {
   MobileLink: <CatalogIcon name="link" style={{ width: 19, height: 19 }} />,
   MobileListRow: <Rows3 aria-hidden="true" size={19} />,
   MobileMessage: <CatalogIcon name="session" style={{ width: 19, height: 19 }} />,
+  MobileMiniAppCard: <AppWindow aria-hidden="true" size={19} />,
   MobilePageHeader: <Heading aria-hidden="true" size={19} />,
   MobileRadioGroup: <List aria-hidden="true" size={19} />,
   MobileScrim: <AppWindow aria-hidden="true" size={19} />,
@@ -377,6 +379,8 @@ export function ComponentCardPreview({ component }: { component: ComponentMeta }
       );
     case "MobileMessage":
       return <MobileMessage roleType="user">{t("components.preview.cardDescription")}</MobileMessage>;
+    case "MobileMiniAppCard":
+      return <MobileMiniAppCard description={t("scenes.mobile.miniApp.gomokuDesc")} media={<img src="/assets/gomoku.webp" alt="" draggable={false} />} tabIndex={-1} title={t("scenes.mobile.miniApp.gomoku")} />;
     case "MobilePageHeader":
       return <MobilePageHeader centered title={t("components.preview.session")} />;
     case "MobileScrim":

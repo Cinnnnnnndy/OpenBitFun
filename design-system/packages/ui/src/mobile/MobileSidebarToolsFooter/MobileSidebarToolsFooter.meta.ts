@@ -13,10 +13,12 @@ export const mobileSidebarToolsFooterMeta = {
   ],
   states: ["default", "hover", "focus-visible"],
   tokens: [
+    "layout.mobileSidebar.controlRadius",
+    "color.icon.default",
+    "control.mobileIcon.strokeWidth",
     "color.sidebar.bg",
     "color.sidebar.hover",
     "color.sidebar.ink",
-    "color.sidebar.muted",
     "color.sidebar.line",
     "type.body.md.fontSize",
     "type.body.md.fontWeight",
