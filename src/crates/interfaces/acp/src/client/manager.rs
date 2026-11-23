@@ -234,6 +234,7 @@ impl AcpRemoteSession {
 struct AcpSessionHandle {
     protocol: Arc<Mutex<AcpRemoteSession>>,
     metadata: watch::Receiver<Option<AcpSessionOptions>>,
+    released: Arc<AtomicBool>,
 }
 
 enum AcpMetadataRead {
@@ -247,6 +248,7 @@ impl AcpSessionHandle {
         Self {
             protocol: Arc::new(Mutex::new(AcpRemoteSession::new(sender))),
             metadata,
+            released: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -348,7 +350,7 @@ impl AcpClientService {
         }
         let journal = self.executions.journal()?;
         let transcript = if let Some(path) = storage {
-            self.recover_dialog_turn(path, session, &*journal, Some(turn))
+            self.recover_dialog_turn(path, session, &*journal)
                 .await
                 .map_err(|e| e.to_string())?;
             if self.executions.is_running(session) {
@@ -409,8 +411,7 @@ impl AcpClientService {
             .executions
             .journal()
             .map_err(OpenBitFunError::service)?;
-        self.recover_dialog_turn(path, session, &*journal, None)
-            .await
+        self.recover_dialog_turn(path, session, &*journal).await
     }
 
     // The caller holds the session write gate. No protocol I/O takes place here.
@@ -440,7 +441,6 @@ impl AcpClientService {
         path: &Path,
         session: &str,
         journal: &dyn super::execution::AcpProjectionJournal,
-        incoming: Option<&str>,
     ) -> OpenBitFunResult<()> {
         use openbitfun_core::service::session::TurnStatus;
         if self.checkpoint_completed_turn(path, session).await? {
@@ -498,11 +498,9 @@ impl AcpClientService {
             return Ok(());
         };
         let owned = first.is_some_and(|from| last.turn_index as u64 >= from);
-        // An older view may already have saved the optimistic input for the very
-        // submission now being admitted. Let admission adopt its storage index.
-        if !owned
-            && (incoming == Some(last.turn_id.as_str()) || last.status != TurnStatus::InProgress)
-        {
+        // A completed legacy turn is already durable. Its admission path will
+        // recognize the existing turn and avoid creating another record.
+        if !owned && last.status != TurnStatus::InProgress {
             return Ok(());
         }
         if last.status != TurnStatus::InProgress {
@@ -520,6 +518,16 @@ impl AcpClientService {
         };
         let time = super::transcript::now_ms();
         let events = journal.pending_checkpoint(session);
+        if !owned
+            && data.model_rounds.is_empty()
+            && !events
+                .iter()
+                .any(|event| event.turn_id() == Some(last.turn_id.as_str()))
+        {
+            // Legacy hosts persisted the optimistic input before sending it.
+            // Keep that record reusable when no output has been observed.
+            return Ok(());
+        }
         if owned {
             for event in events
                 .iter()
@@ -1153,6 +1161,9 @@ impl AcpClientService {
         }
         *client.connection.write().await = None;
         *client.agent_capabilities.write().await = None;
+        for session in client.sessions.iter() {
+            session.released.store(true, Ordering::Release);
+        }
         client.sessions.clear();
         client.cancel_handles.clear();
         *status = AcpClientStatus::Stopped;
@@ -1200,6 +1211,7 @@ impl AcpClientService {
             for session_key in session_keys {
                 let active_session_id =
                     if let Some((_, session)) = client.sessions.remove(&session_key) {
+                        session.released.store(true, Ordering::Release);
                         let mut session = session.protocol.lock().await;
                         let session_id = session
                             .active
@@ -1606,6 +1618,11 @@ impl AcpClientService {
                 .lock_current_session(resolved, session_id, remote_connection)
                 .await?;
             let stop = session.stop_requested.subscribe();
+            if resolved.session.released.load(Ordering::Acquire) {
+                return Err(OpenBitFunError::cancelled(
+                    "ACP prompt was released during session setup",
+                ));
+            }
             self.ensure_remote_session(
                 &resolved.client,
                 &resolved.session_key,
@@ -1718,7 +1735,7 @@ impl AcpClientService {
         }
         // Starting the agent and its handshake can take a minute, and so can the
         // session setup below. Both run on their own tasks so a stop settles this
-        // turn at once; they still finish, and the next prompt reuses their result.
+        // turn at once; released handles fence detached setup from reattaching.
         let mut cancel = match admitted_turn {
             Some(turn) => {
                 let Some(receiver) = self
@@ -1731,20 +1748,30 @@ impl AcpClientService {
             }
             None => None,
         };
+        let admission_required = admitted_turn.is_some();
         let resolving = tokio::spawn({
             let service = self.clone();
             let client_id = client_id.to_owned();
             let session_id = openbitfun_session_id.clone();
             let remote_connection = remote_connection_id.clone();
             async move {
-                service
+                let result = service
                     .resolve_or_create_client_session(
                         &client_id,
                         workspace_path,
                         remote_connection.as_deref(),
                         &session_id,
                     )
-                    .await
+                    .await;
+                if let Ok(resolved) = &result {
+                    if admission_required && !service.executions.has_session(&session_id) {
+                        resolved.client.sessions.remove(&resolved.session_key);
+                        return Err(OpenBitFunError::cancelled(
+                            "ACP prompt was released during session setup",
+                        ));
+                    }
+                }
+                result
             }
         });
         let resolved = tokio::select! {
@@ -1762,8 +1789,7 @@ impl AcpClientService {
         let run = async {
             // Setup can wait behind another restore or replay a long history. It
             // runs on its own task so a stop settles this turn immediately. The
-            // task still finishes the restore and releases the session, so the
-            // next prompt reuses it instead of finding a half-attached replay.
+            // session handle remains fenced while release retires the restore.
             let setup = tokio::spawn({
                 let service = self.clone();
                 let mut working = resolved.clone();
@@ -1771,6 +1797,16 @@ impl AcpClientService {
                 let remote_connection = remote_connection_id.clone();
                 let storage = session_storage_path.clone();
                 async move {
+                    if (admission_required && !service.executions.has_session(&session_id))
+                        || working.session.released.load(Ordering::Acquire)
+                    {
+                        return (
+                            working,
+                            Err(OpenBitFunError::cancelled(
+                                "ACP prompt was released during session setup",
+                            )),
+                        );
+                    }
                     let prepared = service
                         .prepare_prompt_session(
                             &mut working,

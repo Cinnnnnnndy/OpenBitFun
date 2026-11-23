@@ -1802,6 +1802,31 @@ async fn retrying_any_saved_turn_among_many_does_not_create_another() -> OpenBit
 }
 
 #[tokio::test]
+async fn retrying_legacy_in_progress_turn_keeps_saved_output() -> OpenBitFunResult<()> {
+    let mut session = TestSession::new().await?;
+    session.save_history(json!({"provider":"acp"})).await?;
+    let mut turn = super::super::transcript::start_turn(CHAT, "turn", 0, "opencode", "hello", None);
+    super::super::transcript::start_round(&mut turn, "round", 0, 1);
+    super::super::transcript::append_text(&mut turn.model_rounds[0], "partial", false, 2);
+    session
+        .storage
+        .save_dialog_turn(session.root.path(), &turn)
+        .await?;
+
+    session.restart()?;
+    assert!(session.admit("turn", "hello").await?.is_none());
+
+    let saved = session
+        .storage
+        .load_dialog_turn(session.root.path(), CHAT, 0)
+        .await?
+        .unwrap();
+    assert_eq!(saved.model_rounds[0].text_items[0].content, "partial");
+    assert_ne!(saved.status, TurnStatus::InProgress);
+    Ok(())
+}
+
+#[tokio::test]
 async fn releasing_before_or_during_worker_startup_never_sends_the_admitted_prompt(
 ) -> OpenBitFunResult<()> {
     for worker_started in [false, true] {
@@ -1828,36 +1853,25 @@ async fn releasing_before_or_during_worker_startup_never_sends_the_admitted_prom
         *client.agent_capabilities.write().await = Some(AgentCapabilities::new());
         *client.status.write().await = AcpClientStatus::Running;
 
-        let (result, ()) = tokio::join!(
-            async {
-                worker.await?;
-                connection
-                    .send_notification(CancelNotification::new("wire-fence"))
-                    .unwrap();
-                OpenBitFunResult::Ok(())
-            },
-            async {
-                loop {
-                    let request = agent.request().await;
-                    match request["method"].as_str() {
-                        Some("session/new") => {
-                            agent
-                                .send(json!({"jsonrpc":"2.0","id":request["id"],
-                        "result":{"sessionId":"original"}}))
-                                .await
-                        }
-                        Some("session/cancel")
-                            if request["params"]["sessionId"] == "wire-fence" =>
-                        {
-                            break
-                        }
-                        _ => panic!("released turn reached the agent: {request}"),
-                    }
-                }
-            }
-        );
-        result?;
+        tokio::time::timeout(Duration::from_secs(5), worker)
+            .await
+            .expect("released turn should settle")?;
         assert!(cancelled);
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if client.sessions.is_empty() && client.cancel_handles.is_empty() {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("released startup should not leave ACP session handles");
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), agent.request())
+                .await
+                .is_err()
+        );
     }
     Ok(())
 }
