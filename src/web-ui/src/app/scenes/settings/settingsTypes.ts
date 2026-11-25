@@ -24,6 +24,7 @@ export type SettingsPageId =
   | 'tools.external-agents'
   | 'tools.external-import'
   | 'data.usage'
+  | 'data.storage'
   | 'data.archived'
   | 'data.diagnostics';
 
@@ -36,7 +37,7 @@ export type SettingsViewId =
 export type SettingsSectionId =
   | 'sidebar-navigation'
   | 'message-sending'
-  | 'btw-close-confirmation'
+  | 'btw'
   | 'text-selection'
   | 'pet'
   | 'desktop-cards'

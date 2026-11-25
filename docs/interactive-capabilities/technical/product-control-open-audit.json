@@ -1,12 +1,12 @@
 {
   "schemaVersion": 1,
   "generatedFrom": "src/shared/interactive-capabilities/catalog.json",
-  "catalogDigest": "3f6c6936d3a543526f6a768b31c8058041ab3704f44be401086eb9174440d5cc",
-  "count": 231,
+  "catalogDigest": "f592c3304b41651db62ca8afeff8bb8e3d56a3e49d6420eff960b3cfe9eb9294",
+  "count": 232,
   "reasonCounts": {
     "externalAuth": 4,
     "secretEntry": 6,
-    "unstructuredInteraction": 194,
+    "unstructuredInteraction": 195,
     "visualSelection": 27
   },
   "entries": [
@@ -2762,15 +2762,15 @@
       "titleZh": "开启或关闭侧问（/btw）面板关闭前的丢弃确认提示",
       "titleEn": "Enable or disable the confirmation prompt before closing a /btw side conversation",
       "reasonCode": "unstructuredInteraction",
-      "reasonZh": "“开启或关闭侧问（/btw）面板关闭前的丢弃确认提示”保存在当前界面的交互偏好中，智能体会为你打开“输入与交互 → 侧问关闭确认”开关位置。",
-      "reasonEn": "“Enable or disable the confirmation prompt before closing a /btw side conversation” is stored as a client UI interaction preference; the Agent opens Input & Interaction → Side-Question Close Confirmation for you.",
+      "reasonZh": "“开启或关闭侧问（/btw）面板关闭前的丢弃确认提示”保存在当前界面的交互偏好中，智能体会为你打开“会话与记忆 → 侧问”中的确认开关。",
+      "reasonEn": "“Enable or disable the confirmation prompt before closing a /btw side conversation” is stored as a client UI interaction preference; the Agent opens Session & Memory → Side questions for you.",
       "presentationTarget": {
         "kind": "settings",
         "pageId": "application.voice",
         "sectionId": "btw-close-confirmation"
       },
       "evidence": [
-        "source:src/web-ui/src/app/scenes/settings/pages/application/BtwCloseConfirmationSettingsSection.tsx#BtwCloseConfirmationSettingsSection"
+        "source:src/web-ui/src/app/scenes/settings/pages/ai/BtwSettingsSection.tsx#BtwSettingsSection"
       ]
     },
     {
@@ -3982,6 +3982,23 @@
       "evidence": [
         "command:get_token_usage_statistics",
         "source:src/web-ui/src/locales/zh-CN/settings/usage.json#trend.legend.cacheRead"
+      ]
+    },
+    {
+      "capabilityId": "setting.data.storage",
+      "itemId": "clean",
+      "titleZh": "预览并清理会话文件快照",
+      "titleEn": "Preview and clean up session file snapshots",
+      "reasonCode": "unstructuredInteraction",
+      "reasonZh": "“预览并清理会话文件快照”会永久移除所选会话的文件回退记录，请在存储空间页面核对并确认。",
+      "reasonEn": "“Preview and clean up session file snapshots” opens Storage so you can review the affected sessions before permanently removing their file rollback history.",
+      "presentationTarget": {
+        "kind": "settings",
+        "pageId": "data.storage"
+      },
+      "evidence": [
+        "command:inspect_snapshot_storage",
+        "command:clean_snapshot_storage"
       ]
     },
     {

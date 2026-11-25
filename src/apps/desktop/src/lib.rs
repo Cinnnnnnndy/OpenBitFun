@@ -30,6 +30,8 @@ mod embedded_relay_host;
 mod figure_verifier;
 mod frontend_asset_cache;
 pub mod frontend_workbench;
+#[cfg(target_os = "linux")]
+mod linux_browser_layout;
 pub mod logging;
 pub mod macos_menubar;
 #[cfg(target_os = "macos")]
@@ -1716,6 +1718,8 @@ pub async fn run() {
             get_snapshot_sessions,
             check_git_isolation,
             get_file_change_history,
+            inspect_snapshot_storage,
+            clean_snapshot_storage,
             get_all_modified_files,
             get_baseline_snapshot_diff,
             // Session persistence API
