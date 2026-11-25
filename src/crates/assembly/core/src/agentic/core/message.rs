@@ -66,6 +66,9 @@ pub struct MessageMetadata {
     pub turn_id: Option<String>,
     pub round_id: Option<String>,
     pub tokens: Option<usize>,
+    /// Runtime snapshots of tool output pixels, retained when inline bytes are redacted on disk.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tool_image_references: Vec<String>,
     /// Anthropic extended thinking signature (for passing back in multi-turn conversations)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thinking_signature: Option<String>,
@@ -433,37 +436,45 @@ impl From<Message> for AIMessage {
                 result_for_assistant,
                 is_error,
                 image_attachments,
-            } => {
-                // Tool messages must include tool_call_id
-                // Prefer result_for_assistant (text specifically for AI), if None or empty then use result (data field)
-                let content_for_ai = if let Some(assistant_text) = result_for_assistant {
-                    // Check if empty string
-                    if assistant_text.trim().is_empty() {
-                        // If empty, use serialized result
-                        serde_json::to_string(&result)
-                            .unwrap_or(format!("Tool {} execution completed", tool_name))
-                    } else {
-                        assistant_text
-                    }
-                } else {
-                    // If no result_for_assistant, use serialized result
-                    serde_json::to_string(&result)
-                        .unwrap_or(format!("Tool {} execution completed", tool_name))
-                };
+            } => Message::ai_tool_result(
+                tool_id,
+                tool_name,
+                &result,
+                result_for_assistant,
+                is_error,
+                image_attachments,
+                model_response_replay,
+            ),
+        }
+    }
+}
 
-                Self {
-                    role: "tool".to_string(),
-                    content: Some(content_for_ai),
-                    reasoning_content: None,
-                    thinking_signature: None,
-                    tool_calls: None,
-                    tool_call_id: Some(tool_id),
-                    name: Some(tool_name),
-                    is_error: Some(is_error),
-                    tool_image_attachments: image_attachments.clone(),
-                    model_response_replay: model_response_replay.clone(),
-                }
-            }
+impl Message {
+    /// Build the provider's tool reply without copying image bytes that this request omits.
+    pub(crate) fn ai_tool_result(
+        tool_id: String,
+        tool_name: String,
+        result: &serde_json::Value,
+        result_for_assistant: Option<String>,
+        is_error: bool,
+        image_attachments: Option<Vec<ToolImageAttachment>>,
+        model_response_replay: Option<ModelResponseReplay>,
+    ) -> AIMessage {
+        AIMessage {
+            role: "tool".into(),
+            content: Some(
+                result_for_assistant
+                    .filter(|text| !text.trim().is_empty())
+                    .unwrap_or_else(|| result.to_string()),
+            ),
+            reasoning_content: None,
+            thinking_signature: None,
+            tool_calls: None,
+            tool_call_id: Some(tool_id),
+            name: Some(tool_name),
+            is_error: Some(is_error),
+            tool_image_attachments: image_attachments,
+            model_response_replay,
         }
     }
 }
@@ -476,6 +487,36 @@ impl From<&Message> for AIMessage {
 }
 
 impl Message {
+    pub(crate) fn skip_for_model_send(&self) -> bool {
+        matches!(
+            self.metadata.semantic_kind,
+            Some(MessageSemanticKind::ComputerUseVerificationScreenshot)
+                | Some(MessageSemanticKind::ComputerUsePostActionSnapshot)
+        )
+    }
+
+    pub(crate) fn image_turn_start(messages: &[Self], current_turn_id: &str) -> usize {
+        messages
+            .iter()
+            .position(|message| {
+                message.metadata.turn_id.as_deref() == Some(current_turn_id)
+                    && !message.skip_for_model_send()
+            })
+            .unwrap_or(messages.len())
+    }
+
+    /// An assistant response consumes preceding observations, including all
+    /// images returned by the previous parallel tool call batch.
+    pub(crate) fn fresh_image_start(messages: &[Self], turn_start: usize) -> usize {
+        let turn_start = turn_start.min(messages.len());
+        messages[turn_start..]
+            .iter()
+            .rposition(|message| {
+                message.role == MessageRole::Assistant && !message.skip_for_model_send()
+            })
+            .map_or(turn_start, |index| turn_start + index + 1)
+    }
+
     pub fn system(text: String) -> Self {
         Self {
             id: Uuid::new_v4().to_string(),

@@ -219,13 +219,16 @@ impl CompressionJob {
         }
     }
 
-    async fn request_summary(&self, messages: &[Message]) -> OpenBitFunResult<String> {
-        let (mut messages, image_turn_start) = ExecutionEngine::build_ai_messages_for_send(
-            messages,
+    async fn request_summary(&self, plan: &CompressionPlan) -> OpenBitFunResult<String> {
+        let (mut messages, image_turn_start) = ExecutionEngine::build_ai_message_prefix_for_send(
+            &plan.summary_request_messages,
             &self.client.config.format,
-            self.workspace.as_ref(),
-            self.workspace_services.as_ref(),
+            ToolUseContext::for_tool_listing(
+                self.workspace.clone(),
+                self.workspace_services.clone(),
+            ),
             &self.turn_id,
+            plan.summary_pending_image_start,
             self.attach_images,
             &self.reminders.ordered_reminders(),
         )
@@ -340,7 +343,7 @@ impl CompressionJob {
                 }
             }
 
-            let summary_result = self.request_summary(&plan.summary_request_messages).await;
+            let summary_result = self.request_summary(&plan).await;
 
             match summary_result {
                 Ok(summary) => {

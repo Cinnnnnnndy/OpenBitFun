@@ -92,7 +92,7 @@ use openbitfun_ai_adapters::ModelExchangeTraceConfig;
 use openbitfun_core_types::{ModelRequestContext, SessionModelBindingPolicy};
 use openbitfun_runtime_ports::{resolve_permission_mode, PermissionMode, PermissionModeLayers};
 use sha2::{Digest, Sha256};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
@@ -2152,11 +2152,7 @@ impl ExecutionEngine {
 
     /// Omit from model request: UI-only verification frames and legacy auto desktop snapshots.
     fn skip_message_for_model_send(msg: &Message) -> bool {
-        matches!(
-            msg.metadata.semantic_kind.as_ref(),
-            Some(MessageSemanticKind::ComputerUseVerificationScreenshot)
-                | Some(MessageSemanticKind::ComputerUsePostActionSnapshot)
-        )
+        msg.skip_for_model_send()
     }
 
     fn is_stale_interrupted_continue(msg: &Message, current_turn_id: &str) -> bool {
@@ -2172,14 +2168,8 @@ impl ExecutionEngine {
         current_turn_id: &str,
         attach_images: bool,
     ) -> openbitfun_core_types::UsageContextBreakdown {
-        let kept_images = if attach_images {
-            Self::image_bearing_indices_to_keep(
-                messages,
-                Self::image_turn_start(messages, current_turn_id),
-            )
-        } else {
-            HashSet::new()
-        };
+        let fresh =
+            Self::fresh_image_start(messages, Self::image_turn_start(messages, current_turn_id));
         let estimates = messages
             .iter()
             .enumerate()
@@ -2190,25 +2180,10 @@ impl ExecutionEngine {
             .map(|(index, message)| {
                 // Use the same eligibility and image-retention policy as model sends;
                 // omitted pixels must not inflate the conversation slice.
-                let tokens = if !kept_images.contains(&index) && Self::message_bears_images(message)
-                {
-                    let mut projected = message.clone();
-                    match &mut projected.content {
-                        MessageContent::Multimodal { text, images } => {
-                            projected.content = MessageContent::Text(if attach_images {
-                                text.clone()
-                            } else {
-                                Self::render_multimodal_as_text(text, images)
-                            });
-                        }
-                        MessageContent::ToolResult {
-                            image_attachments, ..
-                        } => *image_attachments = None,
-                        _ => {}
-                    }
-                    projected.estimate_tokens_with_reasoning(true)
-                } else {
+                let tokens = if attach_images && index >= fresh {
                     message.estimate_tokens_with_reasoning(true)
+                } else {
+                    message.estimate_non_image_tokens_with_reasoning(true)
                 };
                 (message, tokens as u64)
             });
@@ -2239,17 +2214,13 @@ impl ExecutionEngine {
             MessageContent::Multimodal { images, .. } => !images.is_empty(),
             MessageContent::ToolResult {
                 image_attachments, ..
-            } => image_attachments.as_ref().is_some_and(|a| !a.is_empty()),
+            } => {
+                image_attachments.as_ref().is_some_and(|a| !a.is_empty())
+                    || !msg.metadata.tool_image_references.is_empty()
+            }
             _ => false,
         }
     }
-
-    /// The latest image-bearing messages that always keep their pixels.
-    const MIN_RETAINED_IMAGE_MESSAGES: usize = 2;
-    /// Eliding pixels rewrites an already-sent message and invalidates provider
-    /// prompt caches from that message onward, so older image-bearing messages
-    /// are elided this many at a time instead of one per new image.
-    const IMAGE_ELISION_BATCH: usize = 4;
 
     fn routing_capability_fallback(
         messages: &[Message],
@@ -2267,16 +2238,15 @@ impl ExecutionEngine {
         current_turn_start: usize,
         analysis_tool_available: bool,
     ) -> ImageInputRequirement {
-        let retained = Self::image_bearing_indices_to_keep(messages, current_turn_start);
-        if retained.is_empty() {
+        let fresh = &messages[Self::fresh_image_start(messages, current_turn_start)..];
+        if !fresh.iter().any(Self::message_bears_images) {
             return ImageInputRequirement::None;
         }
-        // Tool-result pixels have no analyze_image path contract. Preserve them
-        // by requiring native image support rather than silently dropping them.
         if !analysis_tool_available
-            || retained
-                .iter()
-                .any(|index| matches!(messages[*index].content, MessageContent::ToolResult { .. }))
+            || fresh.iter().any(|message| {
+                matches!(message.content, MessageContent::ToolResult { .. })
+                    && Self::message_bears_images(message)
+            })
         {
             ImageInputRequirement::Native
         } else {
@@ -2285,48 +2255,13 @@ impl ExecutionEngine {
     }
 
     fn image_turn_start(messages: &[Message], current_turn_id: &str) -> usize {
-        messages
-            .iter()
-            .position(|message| {
-                message.metadata.turn_id.as_deref() == Some(current_turn_id)
-                    && !Self::skip_message_for_model_send(message)
-            })
-            .unwrap_or(messages.len())
+        Message::image_turn_start(messages, current_turn_id)
     }
 
-    /// History pixels are elided in cache-stable batches. Active-turn pixels
-    /// are kept for the selected model's outgoing token budget.
-    fn image_bearing_indices_to_keep(
-        messages: &[Message],
-        current_turn_start: usize,
-    ) -> HashSet<usize> {
-        let with_images: Vec<usize> = messages
-            .iter()
-            .enumerate()
-            .filter(|(_, m)| Self::message_bears_images(m))
-            .map(|(i, _)| i)
-            .collect();
-        let elided = Self::elided_image_message_count(with_images.len());
-        with_images
-            .into_iter()
-            .enumerate()
-            .filter_map(|(rank, index)| {
-                (rank >= elided || index >= current_turn_start).then_some(index)
-            })
-            .collect()
-    }
-
-    /// Number of oldest image-bearing messages whose pixels are elided. It only
-    /// grows as history is appended, in steps of `IMAGE_ELISION_BATCH`, and
-    /// always leaves between `MIN_RETAINED_IMAGE_MESSAGES + 1` and
-    /// `MIN_RETAINED_IMAGE_MESSAGES + IMAGE_ELISION_BATCH` messages once it starts.
-    fn elided_image_message_count(image_bearing_messages: usize) -> usize {
-        let retained_ceiling = Self::MIN_RETAINED_IMAGE_MESSAGES + Self::IMAGE_ELISION_BATCH;
-        if image_bearing_messages <= retained_ceiling {
-            return 0;
-        }
-        (image_bearing_messages - Self::MIN_RETAINED_IMAGE_MESSAGES - 1) / Self::IMAGE_ELISION_BATCH
-            * Self::IMAGE_ELISION_BATCH
+    /// An assistant response consumes all preceding observations. The next request
+    /// carries new input and every result of the latest parallel tool call batch.
+    fn fresh_image_start(messages: &[Message], turn_start: usize) -> usize {
+        Message::fresh_image_start(messages, turn_start)
     }
 
     async fn run_finalize_round(
@@ -2422,9 +2357,28 @@ impl ExecutionEngine {
         attach_images: bool,
         prepended_reminders: &[&str],
     ) -> OpenBitFunResult<(Vec<AIMessage>, usize)> {
+        Self::build_ai_message_prefix_for_send(
+            messages,
+            provider,
+            ToolUseContext::for_tool_listing(workspace.cloned(), workspace_services.cloned()),
+            current_turn_id,
+            Self::image_turn_start(messages, current_turn_id),
+            attach_images,
+            prepended_reminders,
+        )
+        .await
+    }
+
+    async fn build_ai_message_prefix_for_send(
+        messages: &[Message],
+        provider: &str,
+        image_context: ToolUseContext,
+        current_turn_id: &str,
+        current_turn_start: usize,
+        attach_images: bool,
+        prepended_reminders: &[&str],
+    ) -> OpenBitFunResult<(Vec<AIMessage>, usize)> {
         let limits = ImageLimits::for_provider(provider);
-        let image_context =
-            ToolUseContext::for_tool_listing(workspace.cloned(), workspace_services.cloned());
 
         let trimmed_reminders = prepended_reminders
             .iter()
@@ -2440,12 +2394,7 @@ impl ExecutionEngine {
             .unwrap_or(messages.len());
         let mut prepended_reminders_injected = false;
 
-        let current_turn_start = Self::image_turn_start(messages, current_turn_id);
-        let keep_image_messages = if attach_images {
-            Self::image_bearing_indices_to_keep(messages, current_turn_start)
-        } else {
-            HashSet::new()
-        };
+        let fresh = Self::fresh_image_start(messages, current_turn_start);
 
         for (msg_idx, msg) in messages.iter().enumerate() {
             if !prepended_reminders_injected && msg_idx == first_non_system_index {
@@ -2463,49 +2412,33 @@ impl ExecutionEngine {
             if msg_idx == current_turn_start {
                 image_turn_start = Some(result.len());
             }
-            let keep_this_message_images = attach_images && keep_image_messages.contains(&msg_idx);
+
             match &msg.content {
                 MessageContent::Multimodal { text, images } => {
-                    if !attach_images {
-                        // Primary model is text-only (or images are disabled). Convert to text-only
-                        // placeholder so providers that don't support image inputs won't error.
-                        let mut text_message = msg.clone();
-                        text_message.content =
-                            MessageContent::Text(Self::render_multimodal_as_text(text, images));
-                        result.push(AIMessage::from(&text_message));
+                    if msg_idx < fresh && !images.is_empty() {
+                        let paths: Vec<&str> = images
+                            .iter()
+                            .filter_map(|image| image.image_path.as_deref())
+                            .collect();
+                        let note =
+                            Self::historical_image_note(&paths, attach_images, &image_context);
+                        result.push(AIMessage::user(format!("{text}\n\n{note}")));
                         continue;
                     }
-
-                    let (filtered_images, dropped_count): (Vec<ImageContextData>, usize) =
-                        if images.is_empty() {
-                            (Vec::new(), 0)
-                        } else if keep_this_message_images {
-                            (images.clone(), 0)
-                        } else {
-                            (Vec::new(), images.len())
-                        };
-
+                    if !attach_images {
+                        result.push(AIMessage::user(Self::render_multimodal_as_text(
+                            text, images,
+                        )));
+                        continue;
+                    }
                     let prompt = if text.trim().is_empty() {
-                        "(image attached)".to_string()
+                        "(image attached)"
                     } else {
-                        text.clone()
-                    };
-                    let prompt = if dropped_count > 0 {
-                        format!(
-                            "{}\n\n[{} image(s) from this message omitted: only the most recent messages in the conversation that contain images are sent to the model.]",
-                            prompt.trim_end(),
-                            dropped_count
-                        )
-                    } else {
-                        prompt
+                        text
                     };
 
-                    match process_image_contexts_in_workspace(
-                        &filtered_images,
-                        provider,
-                        &image_context,
-                    )
-                    .await
+                    match process_image_contexts_in_workspace(images, provider, &image_context)
+                        .await
                     {
                         Ok(processed) => {
                             let next_count = attached_image_count + processed.len();
@@ -2517,9 +2450,8 @@ impl ExecutionEngine {
                             }
                             attached_image_count = next_count;
 
-                            let multimodal = build_multimodal_message_with_images(
-                                &prompt, &processed, provider,
-                            )?;
+                            let multimodal =
+                                build_multimodal_message_with_images(prompt, &processed, provider)?;
                             result.extend(multimodal);
                         }
                         Err(err) => {
@@ -2549,45 +2481,90 @@ impl ExecutionEngine {
                         }
                     }
                 }
-                MessageContent::ToolResult { .. } => {
-                    if !attach_images {
-                        let mut ai = AIMessage::from(msg);
-                        if ai
-                            .tool_image_attachments
-                            .take()
-                            .is_some_and(|images| !images.is_empty())
-                        {
-                            ai.content = Some(format!("{}\n\n[Tool image pixels were not sent: the resolved model does not support image inputs.]", ai.content.as_deref().unwrap_or("")));
-                        }
-                        result.push(ai);
-                        continue;
+                MessageContent::ToolResult {
+                    tool_id,
+                    tool_name,
+                    effective_tool_name,
+                    result: tool_data,
+                    result_for_assistant,
+                    is_error,
+                    image_attachments,
+                } => {
+                    let name = effective_tool_name.as_deref().unwrap_or(tool_name);
+                    let view_data = (name == "view_image" && !is_error).then_some(tool_data);
+                    let view_source = view_data
+                        .and_then(|data| data.get("source_image_reference"))
+                        .and_then(|v| v.as_str());
+                    let view_path = view_data
+                        .and_then(|data| data.get("path"))
+                        .and_then(|v| v.as_str());
+                    let view_image_reply = view_data.is_some()
+                        && (view_source.is_some()
+                            || view_path.is_some()
+                            || result_for_assistant.as_deref()
+                                == Some("Image attached for model vision."));
+                    let pending = attach_images && msg_idx >= fresh;
+                    let references = &msg.metadata.tool_image_references;
+                    let mut images = None;
+                    if pending {
+                        images = match image_attachments {
+                            Some(images) if !images.is_empty() => Some(images.clone()),
+                            _ if !references.is_empty() => Some(
+                                crate::agentic::image_analysis::attachments::restore_tool_images(
+                                    references,
+                                    &image_context,
+                                )
+                                .await?,
+                            ),
+                            _ => None,
+                        };
                     }
-                    let mut ai = AIMessage::from(msg.clone());
-                    if let Some(atts) = ai.tool_image_attachments.take() {
-                        if !atts.is_empty() {
-                            if keep_this_message_images {
-                                let next_count = attached_image_count + atts.len();
-                                if next_count > limits.max_images_per_request {
-                                    return Err(OpenBitFunError::validation(format!(
-                                        "Too many images in one request: {} > {}",
-                                        next_count, limits.max_images_per_request
-                                    )));
-                                }
-                                attached_image_count = next_count;
-                                ai.tool_image_attachments = Some(atts);
-                            } else {
-                                let dropped = atts.len();
-                                let content_str = ai.content.as_deref().unwrap_or("");
-                                ai.content = Some(format!(
-                                    "{}\n\n[{} image(s) from this tool result omitted: only the most recent messages in the conversation that contain images are sent to the model.]",
-                                    content_str.trim_end(),
-                                    dropped
-                                ));
-                                ai.tool_image_attachments = None;
-                            }
+                    let mut assistant_text = result_for_assistant.clone();
+                    let mcp_image_marker = name.starts_with("mcp__")
+                        && assistant_text.as_deref().is_some_and(|text| {
+                            text.lines().any(|line| {
+                                line.starts_with("[Image: image/") && line.ends_with(']')
+                            })
+                        });
+                    if images.is_none()
+                        && (view_image_reply || Self::message_bears_images(msg) || mcp_image_marker)
+                    {
+                        let paths: Vec<&str> = if let Some(source) = view_source {
+                            vec![source]
+                        } else if !references.is_empty() {
+                            references.iter().map(String::as_str).collect()
+                        } else {
+                            view_path.into_iter().collect()
+                        };
+                        let note =
+                            Self::historical_image_note(&paths, attach_images, &image_context);
+                        if view_image_reply {
+                            assistant_text = Some(note);
+                        } else {
+                            let mut text = assistant_text
+                                .filter(|text| !text.trim().is_empty())
+                                .unwrap_or_else(|| tool_data.to_string());
+                            text.push_str("\n\n");
+                            text.push_str(&note);
+                            assistant_text = Some(text);
                         }
                     }
-                    result.push(ai);
+                    attached_image_count += images.as_ref().map_or(0, Vec::len);
+                    if attached_image_count > limits.max_images_per_request {
+                        return Err(OpenBitFunError::validation(format!(
+                            "Too many images in one request: {} > {}",
+                            attached_image_count, limits.max_images_per_request
+                        )));
+                    }
+                    result.push(Message::ai_tool_result(
+                        tool_id.clone(),
+                        tool_name.clone(),
+                        tool_data,
+                        assistant_text,
+                        *is_error,
+                        images,
+                        msg.metadata.model_response_replay.clone(),
+                    ));
                 }
                 _ => result.push(AIMessage::from(msg)),
             }
@@ -2601,6 +2578,52 @@ impl ExecutionEngine {
 
         let image_turn_start = image_turn_start.unwrap_or(result.len());
         Ok((result, image_turn_start))
+    }
+
+    fn historical_image_note(
+        paths: &[&str],
+        native_vision: bool,
+        context: &ToolUseContext,
+    ) -> String {
+        let mut note = String::from("[Earlier image pixels omitted.");
+        let paths: Vec<_> = paths
+            .iter()
+            .copied()
+            .filter(|path| {
+                if crate::agentic::tools::workspace_paths::is_openbitfun_tool_uri(path) {
+                    context.resolve_tool_path(path).is_ok()
+                } else if context.is_remote() {
+                    context.resolve_workspace_tool_path(path).is_ok()
+                } else {
+                    !path.trim().is_empty()
+                }
+            })
+            .collect();
+        if paths.is_empty() {
+            note.push_str(
+                " This record has no saved image path. Ask for the image again if needed.",
+            );
+        } else {
+            let tool = if native_vision {
+                "view_image"
+            } else {
+                "analyze_image"
+            };
+            note.push_str(&format!(
+                " To inspect again, call {tool} with the exact path:"
+            ));
+            for path in paths {
+                if crate::agentic::image_analysis::attachments::is_saved_image(path, context) {
+                    note.push_str(&format!("\n{path}"));
+                } else {
+                    note.push_str(&format!(
+                        "\n{path} (source file; its contents may have changed)"
+                    ));
+                }
+            }
+        }
+        note.push(']');
+        note
     }
 
     fn render_multimodal_as_text(text: &str, images: &[ImageContextData]) -> String {
@@ -3983,30 +4006,27 @@ impl ExecutionEngine {
             context.workspace.clone(),
             context.workspace_services.clone(),
         );
-        // Older turn metadata may still hold inline pixels even when its context
-        // snapshot predates durable attachments. Inline pixels also supersede
-        // old temporary/controller paths, which may no longer exist. Recover
-        // them without changing the record shape or requiring manual migration.
-        for message in &mut messages {
+        // Recover unconsumed input from older turn records without touching history.
+        let fresh = Self::fresh_image_start(
+            &messages,
+            Self::image_turn_start(&messages, &context.dialog_turn_id),
+        );
+        for message in &mut messages[fresh..] {
             if let MessageContent::Multimodal { images, .. } = &mut message.content {
-                if !images.iter().any(|image| image.data_url.is_some()) {
-                    continue;
-                }
-                if let Err(error) =
+                if images.iter().any(|image| {
+                    image.data_url.is_some()
+                        && !image.image_path.as_deref().is_some_and(|path| {
+                            crate::agentic::image_analysis::attachments::is_saved_image(
+                                path,
+                                &attachment_context,
+                            )
+                        })
+                }) {
                     crate::agentic::image_analysis::attachments::prepare_inline_image_attachments(
                         images,
                         &attachment_context,
                     )
-                    .await
-                {
-                    if message.metadata.turn_id.as_deref() == Some(context.dialog_turn_id.as_str())
-                    {
-                        return Err(error);
-                    }
-                    warn!(
-                        "Unable to recover historical image attachment: message_id={}, error={}",
-                        message.id, error
-                    );
+                    .await?;
                 }
             }
         }
@@ -4166,8 +4186,12 @@ impl ExecutionEngine {
                     .await
                     };
                     if route == RoundModelRoute::Economy {
-                        if let Some(reason) = Self::routing_capability_fallback(
+                        let fresh = Self::fresh_image_start(
                             &messages,
+                            Self::image_turn_start(&messages, &context.dialog_turn_id),
+                        );
+                        if let Some(reason) = Self::routing_capability_fallback(
+                            &messages[fresh..],
                             &baseline_primary_model_facts,
                             &model_facts,
                         ) {
@@ -4784,26 +4808,16 @@ impl ExecutionEngine {
 
             let analysis_available =
                 enable_tools && available_tools.iter().any(|name| name == "analyze_image");
-            let send_image_requirement = if selected_pool.is_some() {
-                Self::image_input_requirement(
-                    &messages,
-                    Self::image_turn_start(&messages, &context.dialog_turn_id),
-                    analysis_available,
-                )
-            } else if !primary_supports_image_understanding
-                && messages.iter().any(|message| {
-                    message.metadata.turn_id.as_deref() == Some(context.dialog_turn_id.as_str())
-                        && matches!(&message.content, MessageContent::Multimodal { images, .. } if !images.is_empty())
-                })
-            {
-                if analysis_available {
-                    ImageInputRequirement::NativeOrAnalysisTool
+            let send_image_requirement =
+                if selected_pool.is_some() || !primary_supports_image_understanding {
+                    Self::image_input_requirement(
+                        &messages,
+                        Self::image_turn_start(&messages, &context.dialog_turn_id),
+                        analysis_available,
+                    )
                 } else {
-                    ImageInputRequirement::Native
-                }
-            } else {
-                ImageInputRequirement::None
-            };
+                    ImageInputRequirement::None
+                };
             if send_image_requirement != ImageInputRequirement::None {
                 let config_service = get_global_config_service().await?;
                 let ai_config = config_service.get_config(Some("ai")).await?;
@@ -5339,9 +5353,11 @@ impl ExecutionEngine {
                         let mut images = agent_dialog_turn_image_contexts(&injection.attachments)
                             .map_err(|error| OpenBitFunError::validation(error.to_string()))?
                             .unwrap_or_default();
-                        crate::agentic::image_analysis::attachments::prepare_inline_image_attachments(
-                            &mut images, &attachment_context,
-                        ).await?;
+                        crate::agentic::image_analysis::attachments::prepare_input_attachments(
+                            &mut images,
+                            &attachment_context,
+                        )
+                        .await?;
                         let user_msg = if images.is_empty() {
                             Message::internal_reminder(reminder_kind, wrapped)
                         } else {
@@ -6314,7 +6330,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn configured_image_limit_recovers_legacy_tool_history_on_plain_continue() {
+    async fn configured_image_limit_applies_to_pending_tools_and_plain_continue_sends_only_references(
+    ) {
         use crate::agentic::execution::round_executor::tests::{
             retry_test_success, RetryTestServer,
         };
@@ -6336,9 +6353,8 @@ mod tests {
             .unwrap()
             .1
             .to_owned();
-        let mut original = vec![Message::user("Inspect these files".into())];
-        for index in 0..4 {
-            let call = ToolCall {
+        let calls: Vec<_> = (0..4)
+            .map(|index| ToolCall {
                 tool_id: format!("view-{index}"),
                 tool_name: "view_image".into(),
                 arguments: json!({"path": format!("image-{index}.png")}),
@@ -6347,11 +6363,14 @@ mod tests {
                 parse_error: None,
                 recovered_from_truncation: false,
                 repair_kind: Default::default(),
-            };
-            original.push(Message::assistant_with_tools(
-                String::new(),
-                vec![call.clone()],
-            ));
+            })
+            .collect();
+        let mut original = vec![
+            Message::user("Inspect these files".into()).with_turn_id("inspect".into()),
+            Message::assistant_with_tools(String::new(), calls.clone())
+                .with_turn_id("inspect".into()),
+        ];
+        for (index, call) in calls.into_iter().enumerate() {
             original.push(Message::tool_result(ToolResult {
                 tool_id: call.tool_id,
                 tool_name: "view_image".into(),
@@ -6378,15 +6397,21 @@ mod tests {
         capped.config.max_images_per_request = Some(3);
 
         for attempt in 0..3 {
-            if attempt > 0 {
-                store.add_message("image-limit", Message::user("Continue".into()));
-            }
-            let (messages, _) = ExecutionEngine::build_ai_messages_for_send(
+            let turn = if attempt == 2 {
+                store.add_message(
+                    "image-limit",
+                    Message::user("Continue".into()).with_turn_id("continue".into()),
+                );
+                "continue"
+            } else {
+                "inspect"
+            };
+            let (messages, boundary) = ExecutionEngine::build_ai_messages_for_send(
                 &store.get_context_messages("image-limit"),
                 "openai",
                 None,
                 None,
-                "continued-turn",
+                turn,
                 true,
                 &[],
             )
@@ -6399,7 +6424,15 @@ mod tests {
             };
             let result = tokio::time::timeout(
                 Duration::from_secs(5),
-                client.send_message_once_with_trace_and_request_context(messages, None, None, None),
+                client.send_message_once_with_trace_and_request_context(
+                    messages,
+                    None,
+                    Some(openbitfun_core_types::ai::ModelRequestContext {
+                        image_turn_start: Some(boundary),
+                        ..Default::default()
+                    }),
+                    None,
+                ),
             )
             .await
             .expect("image request must settle");
@@ -6410,13 +6443,13 @@ mod tests {
                     ErrorCategory::InvalidRequest,
                 );
             } else {
-                result.expect("plain continuation must fit the configured image limit");
+                result.expect("capped retry and plain continuation must succeed");
             }
         }
 
         let requests = server.requests.lock().unwrap();
         assert_eq!(requests.len(), 3);
-        for (request, expected) in requests.iter().zip([4, 3, 3]) {
+        for (request, expected) in requests.iter().zip([4, 3, 0]) {
             let images = request["messages"]
                 .as_array()
                 .unwrap()
@@ -6426,15 +6459,21 @@ mod tests {
                 .filter(|part| part["type"] == "image_url")
                 .count();
             assert_eq!(images, expected, "{request}");
-            assert_eq!(
-                request["messages"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .filter(|message| message["role"] == "tool")
-                    .count(),
-                4
-            );
+            let tool_results: Vec<_> = request["messages"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|message| message["role"] == "tool")
+                .collect();
+            assert_eq!(tool_results.len(), 4);
+            for (index, tool) in tool_results.iter().enumerate() {
+                assert_eq!(tool["tool_call_id"], format!("view-{index}"));
+                if expected == 0 {
+                    let text = tool["content"].as_str().unwrap();
+                    assert!(text.contains(&format!("image-{index}.png")));
+                    assert!(text.contains("view_image"));
+                }
+            }
         }
         let preserved = store.get_context_messages("image-limit");
         assert_eq!(
@@ -6444,23 +6483,29 @@ mod tests {
     }
 
     #[test]
-    fn image_input_requirement_tracks_inherited_steered_and_retained_images() {
+    fn image_input_requirement_tracks_only_pending_observations() {
         use super::ImageInputRequirement as Requirement;
         let image = crate::agentic::image_analysis::attachments::test_image();
-        let mut messages = vec![Message::user("Text only".into())];
+        let user_image =
+            Message::user_multimodal("Inspect the attachment".into(), vec![image.clone()]);
+        let mut messages = vec![user_image.clone(), Message::user("Follow up".into())];
         assert_eq!(
-            ExecutionEngine::image_input_requirement(&messages, messages.len(), false),
+            ExecutionEngine::image_input_requirement(&messages, 1, false),
             Requirement::None
         );
-        let user_image = Message::user_multimodal("Inherited image".into(), vec![image.clone()]);
         messages.push(user_image.clone());
         assert_eq!(
-            ExecutionEngine::image_input_requirement(&messages, messages.len(), true),
+            ExecutionEngine::image_input_requirement(&messages, 1, true),
             Requirement::NativeOrAnalysisTool
         );
         assert_eq!(
-            ExecutionEngine::image_input_requirement(&messages, messages.len(), false),
+            ExecutionEngine::image_input_requirement(&messages, 1, false),
             Requirement::Native
+        );
+        messages.push(Message::assistant("I see it".into()));
+        assert_eq!(
+            ExecutionEngine::image_input_requirement(&messages, 1, true),
+            Requirement::None
         );
         let tool_image = Message::tool_result(ToolResult {
             tool_id: "image-call".into(),
@@ -6477,39 +6522,17 @@ mod tests {
         });
         messages.push(tool_image);
         assert_eq!(
-            ExecutionEngine::image_input_requirement(&messages, messages.len(), true),
+            ExecutionEngine::image_input_requirement(&messages, 1, true),
             Requirement::Native
         );
-        messages.push(user_image.clone());
-        assert_eq!(
-            ExecutionEngine::image_input_requirement(&messages, messages.len(), true),
-            Requirement::Native
-        );
+        messages.push(Message::assistant("I inspected the tool result".into()));
         messages.push(Message::internal_reminder_multimodal(
             InternalReminderKind::UserSteering,
-            "New image",
-            vec![image.clone()],
-        ));
-        // Elision advances in batches, so the tool pixels stay in the sent window.
-        assert_eq!(
-            ExecutionEngine::image_input_requirement(&messages, messages.len(), true),
-            Requirement::Native
-        );
-        messages.push(user_image.clone());
-        messages.push(user_image.clone());
-        assert_eq!(
-            ExecutionEngine::image_input_requirement(&messages, messages.len(), true),
-            Requirement::Native
-        );
-        messages.push(Message::internal_reminder_multimodal(
-            InternalReminderKind::UserSteering,
-            "Seventh image",
+            "Also look at this",
             vec![image],
         ));
-        // The seventh image-bearing message elides the oldest batch, including
-        // the tool pixels, from the same window used for sending.
         assert_eq!(
-            ExecutionEngine::image_input_requirement(&messages, messages.len(), true),
+            ExecutionEngine::image_input_requirement(&messages, 1, true),
             Requirement::NativeOrAnalysisTool
         );
         let mut hidden = user_image;
@@ -6591,11 +6614,7 @@ mod tests {
                 .chain(&visible.deferred_tools)
                 .any(|tool| tool.name() == "analyze_image");
             assert_eq!(
-                ExecutionEngine::image_input_requirement(
-                    &messages,
-                    messages.len(),
-                    analysis_available
-                ),
+                ExecutionEngine::image_input_requirement(&messages, 0, analysis_available),
                 super::ImageInputRequirement::NativeOrAnalysisTool,
             );
         }
@@ -6681,70 +6700,143 @@ mod tests {
         assert!(messages.iter().all(|message| matches!(&message.content, crate::agentic::core::MessageContent::Multimodal { images, .. } if images[0].data_url.is_some())));
     }
 
-    #[test]
-    fn image_elision_advances_in_batches_and_never_reverts() {
-        let min = ExecutionEngine::MIN_RETAINED_IMAGE_MESSAGES;
-        let batch = ExecutionEngine::IMAGE_ELISION_BATCH;
-        let mut previous = 0;
-        for count in 0..=40 {
-            let elided = ExecutionEngine::elided_image_message_count(count);
-            assert!(elided >= previous, "count={count}");
-            assert_eq!(elided % batch, 0, "count={count}");
-            let retained = count - elided;
-            if count <= min + batch {
-                assert_eq!(elided, 0, "count={count}");
-            } else {
-                assert!(retained > min && retained <= min + batch, "count={count}");
+    #[tokio::test]
+    async fn image_snapshot_restores_a_redacted_tool_result_as_a_reference_on_followup() {
+        use crate::agentic::image_analysis::attachments;
+        let dir = tempfile::tempdir().unwrap();
+        let manager = PersistenceManager::new(Arc::new(PathManager::with_user_root_for_tests(
+            dir.path().join("user-data"),
+        )))
+        .unwrap();
+        let workspace = WorkspaceBinding::new(None, dir.path().to_owned());
+        let mut context =
+            crate::agentic::tools::ToolUseContext::for_tool_listing(Some(workspace.clone()), None);
+        context.custom_data.insert(
+            "__openbitfun_test_runtime_root".into(),
+            json!(dir.path().join("attachments-root")),
+        );
+        let pixels = attachments::test_image().data_url.unwrap();
+        let frame = crate::util::types::ToolImageAttachment {
+            mime_type: "image/png".into(),
+            data_base64: pixels.split_once(',').unwrap().1.to_owned(),
+        };
+        let references = attachments::tool_image_references(std::slice::from_ref(&frame), &context)
+            .await
+            .unwrap();
+        let mut message = Message::tool_result(ToolResult {
+            tool_id: "capture".into(),
+            tool_name: "screen_capture".into(),
+            effective_tool_name: None,
+            result: json!({"window": "Workspace"}),
+            result_for_assistant: Some("Workspace screenshot".into()),
+            is_error: false,
+            duration_ms: None,
+            image_attachments: Some(vec![frame.clone()]),
+        })
+        .with_turn_id("inspection".into());
+        message.metadata.tool_image_references = references.clone();
+        let session = uuid::Uuid::new_v4().to_string();
+        manager
+            .save_turn_context_snapshot(dir.path(), &session, 0, &[message])
+            .await
+            .unwrap();
+        let restored = manager
+            .load_turn_context_snapshot(dir.path(), &session, 0)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            restored[0].content,
+            crate::agentic::core::MessageContent::ToolResult {
+                image_attachments: None,
+                ..
             }
-            previous = elided;
-        }
-        assert_eq!(ExecutionEngine::elided_image_message_count(6), 0);
-        assert_eq!(ExecutionEngine::elided_image_message_count(7), 4);
-        assert_eq!(ExecutionEngine::elided_image_message_count(10), 4);
-        assert_eq!(ExecutionEngine::elided_image_message_count(11), 8);
+        ));
+        assert_eq!(restored[0].metadata.tool_image_references, references);
+        let (pending, _) = ExecutionEngine::build_ai_message_prefix_for_send(
+            &restored,
+            "openai",
+            context.clone(),
+            "inspection",
+            0,
+            true,
+            &[],
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            pending[0].tool_image_attachments.as_ref().unwrap()[0].data_base64,
+            frame.data_base64
+        );
+        let (outgoing, _) = ExecutionEngine::build_ai_message_prefix_for_send(
+            &restored,
+            "openai",
+            context,
+            "followup",
+            restored.len(),
+            true,
+            &[],
+        )
+        .await
+        .unwrap();
+        assert!(outgoing[0].tool_image_attachments.is_none());
+        assert_eq!(outgoing[0].tool_call_id.as_deref(), Some("capture"));
+        let text = outgoing[0].content.as_deref().unwrap();
+        assert!(text.contains("Workspace screenshot"));
+        assert!(text.contains(&references[0]));
+        assert!(!text.contains("may have changed"));
     }
 
     #[tokio::test]
-    async fn new_images_keep_earlier_sent_messages_unchanged_between_elision_batches() {
-        let image = crate::agentic::image_analysis::attachments::test_image();
-        let image_message = |index: usize| {
-            Message::user_multimodal(format!("Screenshot {index}"), vec![image.clone()])
-                .with_turn_id("earlier".into())
-        };
+    async fn image_projection_reuses_the_reference_after_an_assistant_reads_the_image() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace =
+            WorkspaceBinding::new(Some("image-reference-test".into()), root.path().into());
+        let mut context =
+            crate::agentic::tools::ToolUseContext::for_tool_listing(Some(workspace), None);
+        context
+            .custom_data
+            .insert("__openbitfun_test_runtime_root".into(), json!(root.path()));
+        let mut image = crate::agentic::image_analysis::attachments::test_image();
+        crate::agentic::image_analysis::attachments::prepare_inline_image_attachments(
+            std::slice::from_mut(&mut image),
+            &context,
+        )
+        .await
+        .unwrap();
+        let path = image.image_path.clone().unwrap();
+        let mut messages =
+            vec![
+                Message::user_multimodal("Inspect this screenshot".into(), vec![image])
+                    .with_turn_id("turn".into()),
+            ];
         let send = |messages: Vec<Message>| async move {
-            serde_json::to_value(
-                ExecutionEngine::build_ai_messages_for_send(
-                    &messages,
-                    "anthropic",
-                    None,
-                    None,
-                    "turn",
-                    true,
-                    &["stable reminder"],
-                )
-                .await
-                .unwrap()
-                .0,
+            ExecutionEngine::build_ai_messages_for_send(
+                &messages,
+                "anthropic",
+                None,
+                None,
+                "turn",
+                true,
+                &[],
             )
+            .await
             .unwrap()
+            .0
         };
-        let mut messages = vec![Message::system("system".into())];
-        let mut previous = send(messages.clone()).await;
-        for index in 1..=7 {
-            messages.push(image_message(index));
-            let current = send(messages.clone()).await;
-            let previous_len = previous.as_array().unwrap().len();
-            let prefix_kept =
-                current.as_array().unwrap()[..previous_len] == previous.as_array().unwrap()[..];
-            // Only the seventh image-bearing message elides a batch and rewrites history.
-            assert_eq!(prefix_kept, index < 7, "image message {index}");
-            previous = current;
-        }
-        let sent = previous.to_string();
-        assert_eq!(
-            sent.matches("image(s) from this message omitted").count(),
-            4
+        let initial = send(messages.clone()).await;
+        assert!(initial[0].content.as_deref().unwrap().contains("base64"));
+        messages.push(
+            Message::assistant("I inspected the screenshot.".into()).with_turn_id("turn".into()),
         );
+        let after_reply = send(messages.clone()).await;
+        let reference = after_reply[0].content.as_deref().unwrap();
+        assert!(reference.contains(path.as_str()));
+        assert!(!reference.contains("base64"));
+        messages
+            .push(Message::user("Summarize the observations.".into()).with_turn_id("turn".into()));
+        let continued = send(messages).await;
+        assert_eq!(continued[0].content, after_reply[0].content);
     }
 
     #[tokio::test]
@@ -7921,7 +8013,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn image_projection_preserves_all_active_turn_pixels_through_history_batch_elision() {
+    async fn image_projection_preserves_all_pending_pixels_from_the_active_turn() {
         use super::ImageInputRequirement;
         let image = crate::agentic::image_analysis::attachments::test_image();
         let mut messages = vec![
@@ -7974,7 +8066,11 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(boundary, 1);
-        assert!(outgoing[0].content.as_deref().unwrap().contains("omitted"));
+        assert!(!outgoing[0]
+            .content
+            .as_deref()
+            .unwrap()
+            .contains("image_url"));
         assert_eq!(
             outgoing[1].tool_image_attachments.as_ref().unwrap().len(),
             1

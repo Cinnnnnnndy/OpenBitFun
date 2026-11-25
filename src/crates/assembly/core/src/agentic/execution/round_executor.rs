@@ -2499,7 +2499,7 @@ impl RoundExecutor {
         // Create tool result messages (also need to set turn_id and round_id)
         let dialog_turn_id = context.dialog_turn_id.clone();
         let round_id_clone = round_id.clone();
-        let tool_result_messages: Vec<Message> = tool_results
+        let mut tool_result_messages: Vec<Message> = tool_results
             .iter()
             .map(|result| {
                 let mut message = Message::tool_result(result.clone())
@@ -2513,6 +2513,44 @@ impl RoundExecutor {
                 message
             })
             .collect();
+
+        let image_context = tool_context_runtime::ToolUseContext::for_tool_listing(
+            context.workspace.clone(),
+            context.workspace_services.clone(),
+        );
+        for message in &mut tool_result_messages {
+            if let MessageContent::ToolResult {
+                image_attachments: Some(images),
+                result_for_assistant,
+                result,
+                ..
+            } = &mut message.content
+            {
+                match crate::agentic::image_analysis::attachments::tool_image_references(
+                    images,
+                    &image_context,
+                )
+                .await
+                {
+                    Ok(references) => message.metadata.tool_image_references = references,
+                    Err(error) => {
+                        warn!(
+                            "Failed to save tool image snapshots: message_id={}, error={error}",
+                            message.id
+                        );
+                        if result_for_assistant
+                            .as_deref()
+                            .is_none_or(|text| text.trim().is_empty())
+                        {
+                            *result_for_assistant = Some(result.to_string());
+                        }
+                        if let Some(text) = result_for_assistant {
+                            text.push_str("\n[The runtime could not save an image snapshot for later inspection.]");
+                        }
+                    }
+                }
+            }
+        }
 
         let has_more_rounds = !tool_result_messages.is_empty();
 

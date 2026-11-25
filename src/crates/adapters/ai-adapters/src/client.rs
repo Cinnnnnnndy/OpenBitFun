@@ -566,7 +566,9 @@ impl AIClient {
                     if attempt == max_attempts - 1
                         || error
                             .downcast_ref::<AiProviderError>()
-                            .is_some_and(|error| error.delivery_uncertain)
+                            .is_some_and(|error| {
+                                error.delivery_uncertain || error.http_status == Some(413)
+                            })
                     {
                         return Err(error);
                     }
@@ -600,7 +602,9 @@ impl AIClient {
                     if attempt == max_attempts - 1
                         || error
                             .downcast_ref::<AiProviderError>()
-                            .is_some_and(|error| error.delivery_uncertain)
+                            .is_some_and(|error| {
+                                error.delivery_uncertain || error.http_status == Some(413)
+                            })
                     {
                         return Err(error);
                     }
@@ -628,11 +632,16 @@ impl AIClient {
         extra_body: Option<&serde_json::Value>,
     ) -> Result<Vec<Message>> {
         #[cfg(not(feature = "vision-input"))]
-        let _ = (tools, request_context);
+        let _ = tools;
         // Project only the outgoing copy, against the actual selected client.
         responses_websocket::validate(self)?;
         // Account/channel failover and direct analysis calls share this boundary.
-        let messages = image_budget::project(messages, self.config.max_images_per_request)?;
+        let messages = image_budget::project(
+            messages,
+            self.config.max_images_per_request,
+            request_context.and_then(|context| context.image_turn_start),
+            ApiFormat::parse(&self.config.format)?,
+        )?;
         image_budget::validate_extra_body(self.config.max_images_per_request, extra_body)?;
         #[cfg(feature = "vision-input")]
         let replaced = image_budget::context::validate_override(
@@ -3011,6 +3020,54 @@ mod tests {
         let response = result.expect("the second stream attempt should succeed");
         assert_eq!(response.text, "Recovered");
         assert_eq!(attempts.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn oversized_http_body_reaches_the_caller_without_a_retry() {
+        use axum::http::StatusCode;
+        use openbitfun_core_types::errors::{AiProviderError, ErrorCategory};
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let observed = Arc::clone(&attempts);
+        let app = Router::new().route(
+            "/chat/completions",
+            post(move || {
+                observed.fetch_add(1, Ordering::SeqCst);
+                async {
+                    (
+                        StatusCode::PAYLOAD_TOO_LARGE,
+                        "<html><title>413 Request Entity Too Large</title></html>",
+                    )
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let mut client = make_test_client("openai", None);
+        client.config.request_url =
+            format!("http://{}/chat/completions", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let messages = vec![crate::types::Message::user(
+            "Inspect the attachment.".into(),
+        )];
+
+        let streamed = client
+            .send_message_stream(messages.clone(), None, None)
+            .await
+            .err()
+            .unwrap();
+        let aggregated = client.send_message(messages, None).await.err().unwrap();
+        server.abort();
+
+        for error in [streamed, aggregated] {
+            let detail = error.downcast_ref::<AiProviderError>().unwrap();
+            assert_eq!(detail.http_status, Some(413));
+            assert_eq!(detail.category, ErrorCategory::InvalidRequest);
+            assert!(detail.message.contains("Crop images"));
+        }
+        assert_eq!(
+            attempts.load(Ordering::SeqCst),
+            2,
+            "one HTTP request per call"
+        );
     }
 
     #[test]

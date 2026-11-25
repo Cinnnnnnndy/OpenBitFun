@@ -141,10 +141,15 @@ fn omit_history_before_resizing_the_current_screenshot_and_preserve_originals() 
     let data = screenshot_with_small_text();
     let original = vec![uploaded(&png(1536, 1536)), tool_result("view_image", &data)];
     let mut roomy = original.clone();
-    project(&mut roomy, &config, None, None, None).unwrap();
+    let turn = ModelRequestContext {
+        image_turn_start: Some(1),
+        ..Default::default()
+    };
+    project(&mut roomy, &config, None, Some(&turn), None).unwrap();
+    assert!(user_image_size(&roomy[0]).is_none());
     assert_eq!(
-        serde_json::to_value(roomy).unwrap(),
-        serde_json::to_value(&original).unwrap()
+        roomy[1].tool_image_attachments.as_ref().unwrap()[0].data_base64,
+        data
     );
 
     let mut limited = original.clone();
@@ -517,6 +522,83 @@ async fn selected_model_window_controls_pixels_on_the_wire() {
     let (width, height) = requests[1];
     assert!(
         width >= 512 && VisionTokenPolicy::for_model("test-vl").estimate(width, height) <= 1500
+    );
+}
+
+#[tokio::test]
+async fn later_http_rounds_send_only_fresh_pixels_under_a_gateway_body_limit() {
+    use axum::{body::Bytes, extract::DefaultBodyLimit, routing::post, Router};
+    use std::sync::{Arc, Mutex};
+
+    // Incompressible screenshots of the same dimensions have comparable byte
+    // sizes. The gateway can accept one image with framing, but never both.
+    let screenshot = |mut seed: u32| {
+        encode_png(image::GrayImage::from_fn(256, 256, |_, _| {
+            seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+            image::Luma([(seed >> 24) as u8])
+        }))
+    };
+    let a = screenshot(1);
+    let b = screenshot(2);
+    let limit = a.len().max(b.len()) + 8192;
+    assert!(a.len() + b.len() > limit);
+    let requests = Arc::new(Mutex::new(Vec::<Bytes>::new()));
+    let captured = requests.clone();
+    let router = Router::new().route("/chat/completions", post(move |body: Bytes| {
+        let captured = captured.clone();
+        async move {
+            captured.lock().unwrap().push(body);
+            let chunk = json!({"id":"test","object":"chat.completion.chunk","created":1,"model":"test-vl",
+                "choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":"stop"}]});
+            ([("content-type", "text/event-stream")], format!("data: {chunk}\n\ndata: [DONE]\n\n"))
+        }
+    })).layer(DefaultBodyLimit::max(limit));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/chat/completions", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    let mut config = config();
+    config.request_url = url.clone();
+    config.base_url = url;
+    let client = crate::AIClient::new(config);
+    let mut history = vec![Message::user("Read screenshot A".into())];
+    for next in [
+        Some(("a", &a)),
+        None,
+        Some(("b", &b)),
+        Some(("a-again", &a)),
+    ] {
+        if let Some((id, data)) = next {
+            history.push(Message::assistant_with_tools(vec![crate::ToolCall {
+                id: id.into(),
+                name: "view_image".into(),
+                arguments: json!({"path":id}),
+                raw_arguments: None,
+            }]));
+            let mut result = tool_result("view_image", data);
+            result.tool_call_id = Some(id.into());
+            history.push(result);
+        } else {
+            history.push(Message::assistant("A reviewed".into()));
+            history.push(Message::user("Continue".into()));
+        }
+        client
+            .send_message_once_with_trace_and_request_context(history.clone(), None, None, None)
+            .await
+            .unwrap();
+    }
+    server.abort();
+    let requests = requests.lock().unwrap();
+    assert_eq!(requests.len(), 4);
+    for (wire, (expected_a, expected_b)) in requests.iter().zip([(1, 0), (0, 0), (0, 1), (1, 0)]) {
+        assert!(wire.len() <= limit);
+        let json = std::str::from_utf8(wire).unwrap();
+        assert_eq!(json.matches(a.as_str()).count(), expected_a);
+        assert_eq!(json.matches(b.as_str()).count(), expected_b);
+    }
+    assert!(requests[1].len() < 8192);
+    assert_eq!(
+        history[2].tool_image_attachments.as_ref().unwrap()[0].data_base64,
+        a
     );
 }
 

@@ -6591,12 +6591,20 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             )?;
         }
         let workspace = Self::build_workspace_binding(&session.config).await;
+        let services = if images.iter().any(|image| {
+            image.data_url.is_none()
+                && image.image_path.as_deref().is_some_and(|path| {
+                    !crate::agentic::tools::workspace_paths::is_openbitfun_tool_uri(path)
+                })
+        }) {
+            Self::build_workspace_services(&workspace).await?
+        } else {
+            None
+        };
         let context =
-            crate::agentic::tools::framework::ToolUseContext::for_tool_listing(workspace, None);
-        crate::agentic::image_analysis::attachments::prepare_inline_image_attachments(
-            images, &context,
-        )
-        .await
+            crate::agentic::tools::framework::ToolUseContext::for_tool_listing(workspace, services);
+        crate::agentic::image_analysis::attachments::prepare_input_attachments(images, &context)
+            .await
     }
 
     fn input_image_pool_id(config: &SessionConfig) -> Option<&str> {
@@ -7177,19 +7185,9 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             user_message_metadata = Some(metadata);
         }
 
-        // Pool admission sees the same image-bearing history as execution,
-        // including inherited BTW context. Fixed-model admission retains its
-        // existing current-input validation contract.
-        let mut image_input_messages =
-            if session.config.model_binding_policy == SessionModelBindingPolicy::Pool {
-                self.session_manager
-                    .get_context_messages(&session_id)
-                    .await?
-            } else {
-                Vec::new()
-            };
-        let current_turn_start = image_input_messages.len();
-        image_input_messages.extend(additional_prepended_messages.iter().cloned());
+        // Only new input can require a visual model. Admission can check it
+        // without loading or cloning any images in the session's earlier turns.
+        let mut image_input_messages = additional_prepended_messages.clone();
         image_input_messages.extend(
             wrapped_user_input_payload
                 .prepended_messages
@@ -7213,7 +7211,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             );
         let image_requirement = ExecutionEngine::resolve_image_input_requirement(
             &image_input_messages,
-            current_turn_start,
+            0,
             session.config.enable_tools,
             &image_tool_context,
         )

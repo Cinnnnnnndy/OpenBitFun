@@ -1,7 +1,7 @@
 //! Pixel projection for one outgoing request. All positions refer to the
 //! provider-neutral messages before the adapter merges roles and tool results.
 
-use super::{inline_media, is_content_part, is_image_part};
+use super::{inline_media, is_image_part, user_parts};
 use crate::client::format::ApiFormat;
 use crate::providers::openai::OpenAIMessageConverter;
 use crate::types::{AIConfig, Message, ModelRequestContext, ToolDefinition};
@@ -13,10 +13,8 @@ use openbitfun_core_types::errors::{AiProviderError, ErrorCategory};
 use openbitfun_core_types::token_estimate::{
     automatic_max_output_tokens, TokenCounter, INPUT_SAFETY_RESERVE,
 };
-use serde_json::{json, Value};
+use serde_json::Value;
 use std::collections::BTreeMap;
-
-const OMITTED: &str = "[Earlier image omitted to fit the context window.]";
 
 struct Image {
     message: usize,
@@ -175,7 +173,6 @@ pub(in crate::client) struct Budget {
     tools: usize,
     schema: usize,
     text_floor: usize,
-    turn_start: Option<usize>,
 }
 
 impl Budget {
@@ -251,7 +248,6 @@ impl Budget {
             tools,
             schema,
             text_floor: context.map_or(0, |ctx| ctx.minimum_non_image_input_tokens),
-            turn_start: context.and_then(|ctx| ctx.image_turn_start),
         }
     }
 }
@@ -369,6 +365,11 @@ pub(super) fn project(
     context: Option<&ModelRequestContext>,
     extra: Option<&Value>,
 ) -> Result<()> {
+    super::project_history(
+        messages,
+        context.and_then(|ctx| ctx.image_turn_start),
+        ApiFormat::parse(&config.format)?,
+    );
     apply(messages, Budget::for_request(config, tools, context, extra))
 }
 
@@ -412,24 +413,12 @@ pub(in crate::client) fn apply(messages: &mut [Message], budget: Budget) -> Resu
                 ));
             }
         } else if message.role == "user" {
-            let Some(content) = message
-                .content
-                .as_deref()
-                .filter(|text| text.trim_start().starts_with('['))
+            let Some(parts) = budget
+                .format
+                .and_then(|format| user_parts(&message.content, format))
             else {
                 continue;
             };
-            let Ok(parts) = serde_json::from_str::<Vec<Value>>(content) else {
-                continue;
-            };
-            if matches!(
-                budget.format,
-                Some(ApiFormat::OpenAIChat | ApiFormat::OpenAIResponses)
-            ) && !parts.iter().all(is_content_part)
-            {
-                // OpenAI renders unrecognized JSON arrays as literal user text.
-                continue;
-            }
             let before = images.len();
             for (part, value) in parts
                 .iter()
@@ -487,116 +476,70 @@ pub(in crate::client) fn apply(messages: &mut [Message], budget: Budget) -> Resu
     }
     let text = text.max(budget.text_floor).saturating_add(budget.schema);
     let input_limit = budget.limit;
-    let mut total = images
+    let total = images
         .iter()
         .fold(text, |n, img| n.saturating_add(img.cost));
     if total <= input_limit {
         return Ok(());
     }
 
-    let turn_start = budget
-        .turn_start
-        .or_else(|| messages.iter().rposition(|message| message.role == "user"))
-        .unwrap_or(0)
-        .min(messages.len());
-    // Each assistant call batch starts a new model round, even when several
-    // rounds answer the same user. Older observations were already sent.
-    let current_start = messages[turn_start..]
+    // Reserve the readable minimum of each current image first, then share
+    // the remaining detail across them. Small images keep every pixel.
+    let mut adjustable = Vec::new();
+    let mut required = total;
+    for (index, img) in images
         .iter()
-        .rposition(|message| {
-            message.role == "assistant"
-                && message
-                    .tool_calls
-                    .as_ref()
-                    .is_some_and(|calls| !calls.is_empty())
-        })
-        .map_or(turn_start, |index| turn_start + index);
-    let marker_cost = 4 + TokenCounter::estimate_tokens(OMITTED);
-    for image in images
-        .iter_mut()
-        .take_while(|img| img.message < current_start)
+        .enumerate()
+        .filter(|(_, img)| img.target > img.minimum)
     {
-        image.target = 0;
-        total = total.saturating_sub(image.cost).saturating_add(marker_cost);
-        if total <= input_limit {
-            break;
+        required = required.saturating_sub(img.cost - img.minimum);
+        if messages[img.message].role == "tool" {
+            let (w, h) = img.dimensions.expect("resizable image dimensions");
+            required += TokenCounter::estimate_tokens(&img.preview_note(w, h)) + 4;
         }
+        adjustable.push(index);
     }
-    if total > input_limit {
-        // Reserve the readable minimum of each current image first, then share
-        // the remaining detail across them. Small images keep every pixel.
-        let mut adjustable = Vec::new();
-        let mut required = total;
-        for (index, img) in images
-            .iter()
-            .enumerate()
-            .filter(|(_, img)| img.target > img.minimum)
-        {
-            required = required.saturating_sub(img.cost - img.minimum);
-            if messages[img.message].role == "tool" {
-                let (w, h) = img.dimensions.expect("resizable image dimensions");
-                required += TokenCounter::estimate_tokens(&img.preview_note(w, h)) + 4;
-            }
-            adjustable.push(index);
-        }
-        if required > input_limit {
-            return Err(image_budget_error(format!(
+    if required > input_limit {
+        return Err(image_budget_error(format!(
                 "Cannot fit the images and conversation in the model's context window with the requested output reserved ({required} estimated input tokens needed, {input_limit} available). Crop the relevant area, use fewer images, or shorten the conversation."
             )));
-        }
-        let mut spare = input_limit - required;
-        adjustable.sort_by_key(|&i| images[i].cost - images[i].minimum);
-        let mut count = adjustable.len();
-        for index in adjustable {
-            let image = &mut images[index];
-            let extra = (spare / count).min(image.cost - image.minimum);
-            image.target = image.minimum + extra;
-            spare -= extra;
-            count -= 1;
-        }
+    }
+    let mut spare = input_limit - required;
+    adjustable.sort_by_key(|&i| images[i].cost - images[i].minimum);
+    let mut count = adjustable.len();
+    for index in adjustable {
+        let image = &mut images[index];
+        let extra = (spare / count).min(image.cost - image.minimum);
+        image.target = image.minimum + extra;
+        spare -= extra;
+        count -= 1;
     }
 
     let mut edited_users = std::collections::BTreeSet::new();
-    // Remove tool attachments from the back so original positions stay valid.
-    for image in images.iter().rev().filter(|img| img.target != img.cost) {
+    for image in images.iter().filter(|image| image.target < image.cost) {
         let message = &mut messages[image.message];
         if let Some(parts) = users.get_mut(&image.message) {
             let part = &mut parts[image.part];
-            if image.target == 0 {
-                *part = json!({"type": "text", "text": OMITTED});
-            } else {
-                let (mime, data) =
-                    part_payload(part).expect("resizable user image has inline data");
-                replace_payload(
-                    part,
-                    resize_preview(image.policy, mime, data, image.target)?,
-                );
-            }
+            let (mime, data) = part_payload(part).expect("resizable user image has inline data");
+            replace_payload(
+                part,
+                resize_preview(image.policy, mime, data, image.target)?,
+            );
             edited_users.insert(image.message);
         } else {
-            let attachments = message
+            let attachment = &mut message
                 .tool_image_attachments
                 .as_mut()
-                .expect("tool image group");
-            let note = if image.target == 0 {
-                attachments.remove(image.part);
-                OMITTED.to_owned()
-            } else {
-                let attachment = &mut attachments[image.part];
-                let preview = resize_preview(
-                    image.policy,
-                    &attachment.mime_type,
-                    &attachment.data_base64,
-                    image.target,
-                )?;
-                let note = image.preview_note(preview.width, preview.height);
-                attachment.mime_type = preview.mime_type;
-                attachment.data_base64 = preview.data_base64;
-                note
-            };
-            if attachments.is_empty() {
-                message.tool_image_attachments = None;
-            }
+                .expect("tool image group")[image.part];
+            let preview = resize_preview(
+                image.policy,
+                &attachment.mime_type,
+                &attachment.data_base64,
+                image.target,
+            )?;
+            let note = image.preview_note(preview.width, preview.height);
+            attachment.mime_type = preview.mime_type;
+            attachment.data_base64 = preview.data_base64;
             let content = message.content.get_or_insert_with(String::new);
             content.push('\n');
             content.push_str(&note);

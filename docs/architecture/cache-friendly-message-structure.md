@@ -302,13 +302,12 @@ Important exceptions:
   context and older persisted context snapshots
 - context compression intentionally rewrites conversation history into a shorter
   summary form, then invalidates prompt cache and starts a new stable prefix
-- image payloads are elided from older image-bearing messages at send time.
-  The latest two image-bearing messages always keep pixels; older ones are
-  elided four at a time (`MIN_RETAINED_IMAGE_MESSAGES`,
-  `IMAGE_ELISION_BATCH` in `execution_engine.rs`). Each elision rewrites an
-  already-sent message and invalidates the provider cache from that message
-  onward, so it must stay batched rather than sliding by one message per new
-  image. Model-pool image requirements use the same retained window.
+- Each request sends pixels from pending user uploads and new tool observations,
+  including parallel tool results. After an assistant response, those messages
+  carry text and available image references on later requests. Reopening a
+  referenced image supplies a new observation. This changes the provider cache
+  prefix at the first replaced image. Model-pool image requirements use the same
+  pending observations. The session retains the original attachments.
 
 ## Session Storage Layout
 
