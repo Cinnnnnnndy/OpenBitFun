@@ -291,7 +291,10 @@ fn openai_low_detail_fits_at_the_selected_models_base_cost() {
     let mut overridden = [Message::user(
         json!([{"type":"image_url","image_url":{"url":url,"detail":"low"}}]).to_string(),
     )];
-    project(&mut overridden, &config, None, Some(&context), Some(&extra)).unwrap();
+    let error = project(&mut overridden, &config, None, Some(&context), Some(&extra)).unwrap_err();
+    assert!(error
+        .to_string()
+        .contains("custom request changes the model"));
     config.custom_request_body_mode = Some("trim".into());
     assert!(project(&mut overridden, &config, None, Some(&context), Some(&extra)).is_err());
     config.model = "gpt-4o".into();
@@ -344,12 +347,26 @@ fn gemini_uses_global_resolution_for_projected_images_and_override_parts_on_the_
             "mediaResolution": {"level":"MEDIA_RESOLUTION_ULTRA_HIGH"}
         }]}]
     });
-    assert!(super::context::validate_override(&config, &[], None, None, Some(&raw)).is_err());
+    assert!(super::context::validate_override(
+        &crate::AIClient::new(config.clone()),
+        &[],
+        None,
+        None,
+        Some(&raw)
+    )
+    .is_err());
     raw["contents"][0]["parts"][0]
         .as_object_mut()
         .unwrap()
         .remove("mediaResolution");
-    assert!(super::context::validate_override(&config, &[], None, None, Some(&raw)).unwrap());
+    assert!(super::context::validate_override(
+        &crate::AIClient::new(config.clone()),
+        &[],
+        None,
+        None,
+        Some(&raw)
+    )
+    .unwrap());
 }
 
 #[test]
@@ -586,15 +603,49 @@ async fn later_http_rounds_send_only_fresh_pixels_under_a_gateway_body_limit() {
             .await
             .unwrap();
     }
+    let calls = ["batch-a", "batch-b"]
+        .into_iter()
+        .map(|id| crate::ToolCall {
+            id: id.into(),
+            name: "view_image".into(),
+            arguments: json!({"path":id}),
+            raw_arguments: None,
+        })
+        .collect();
+    let mut batch = vec![
+        Message::user("Read both screenshots".into()),
+        Message::assistant_with_tools(calls),
+    ];
+    for (id, pixels) in [("batch-a", &a), ("batch-b", &b)] {
+        let mut result = tool_result("view_image", pixels);
+        result.tool_call_id = Some(id.into());
+        batch.push(result);
+    }
+    client
+        .send_message_once_with_trace_and_request_context(batch, None, None, None)
+        .await
+        .expect("a 413 must allow a smaller tool-image batch to succeed");
     server.abort();
     let requests = requests.lock().unwrap();
-    assert_eq!(requests.len(), 4);
+    assert_eq!(requests.len(), 5);
     for (wire, (expected_a, expected_b)) in requests.iter().zip([(1, 0), (0, 0), (0, 1), (1, 0)]) {
         assert!(wire.len() <= limit);
         let json = std::str::from_utf8(wire).unwrap();
         assert_eq!(json.matches(a.as_str()).count(), expected_a);
         assert_eq!(json.matches(b.as_str()).count(), expected_b);
     }
+    let recovered = std::str::from_utf8(&requests[4]).unwrap();
+    assert!(!recovered.contains(&a));
+    assert!(recovered.contains(&b));
+    assert!(recovered.contains("omitted to fit the request body"));
+    let body: Value = serde_json::from_str(recovered).unwrap();
+    let tool_ids: Vec<_> = body["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|part| part["tool_call_id"].as_str())
+        .collect();
+    assert_eq!(tool_ids, ["batch-a", "batch-b"]);
     assert!(requests[1].len() < 8192);
     assert_eq!(
         history[2].tool_image_attachments.as_ref().unwrap()[0].data_base64,
@@ -610,10 +661,23 @@ fn custom_image_payload_must_fit_the_actual_output_reserve() {
     let native: Value =
         serde_json::from_str(uploaded(&png(1024, 1024)).content.as_deref().unwrap()).unwrap();
     let mut body = json!({"messages": [{"role": "user", "content": native}]});
-    super::context::validate_override(&config, &[], None, None, Some(&body)).unwrap();
+    super::context::validate_override(
+        &crate::AIClient::new(config.clone()),
+        &[],
+        None,
+        None,
+        Some(&body),
+    )
+    .unwrap();
     body["max_completion_tokens"] = json!(21_999);
-    let error =
-        super::context::validate_override(&config, &[], None, None, Some(&body)).unwrap_err();
+    let error = super::context::validate_override(
+        &crate::AIClient::new(config.clone()),
+        &[],
+        None,
+        None,
+        Some(&body),
+    )
+    .unwrap_err();
     assert_eq!(
         error
             .downcast_ref::<openbitfun_core_types::errors::AiProviderError>()
@@ -624,15 +688,33 @@ fn custom_image_payload_must_fit_the_actual_output_reserve() {
     config.format = "responses".into();
     let native = body["messages"].take();
     let responses = json!({"input": native, "max_output_tokens": 20_500});
-    assert!(super::context::validate_override(&config, &[], None, None, Some(&responses)).unwrap());
+    assert!(super::context::validate_override(
+        &crate::AIClient::new(config.clone()),
+        &[],
+        None,
+        None,
+        Some(&responses)
+    )
+    .unwrap());
     let system = Message::system("long instruction ".repeat(500));
-    assert!(
-        super::context::validate_override(&config, &[system], None, None, Some(&responses))
-            .is_err()
-    );
+    assert!(super::context::validate_override(
+        &crate::AIClient::new(config.clone()),
+        &[system],
+        None,
+        None,
+        Some(&responses)
+    )
+    .is_err());
     config.format = "openai".into();
     body["messages"] = json!([{"role":"user","content":"hello"}]);
-    assert!(super::context::validate_override(&config, &[], None, None, Some(&body)).is_ok());
+    assert!(super::context::validate_override(
+        &crate::AIClient::new(config.clone()),
+        &[],
+        None,
+        None,
+        Some(&body)
+    )
+    .is_ok());
 }
 
 #[test]
@@ -658,4 +740,81 @@ fn deferred_tool_preserves_only_coordinate_bound_frames() {
         let result = project(&mut messages, &config, None, Some(&budget), None);
         assert_eq!(result.is_ok(), should_fit, "{name}: {result:?}");
     }
+}
+
+#[test]
+fn anthropic_preflight_uses_the_effective_output_override() {
+    let mut config = config();
+    config.format = "anthropic".into();
+    config.context_window = 32_000;
+    config.max_tokens = Some(8_000);
+    let extra = json!({"max_tokens":1024});
+    let message = Message::user(
+        json!([
+            {"type":"text","text":"some words ".repeat(4500)},
+            {"type":"image","source":{"type":"base64","media_type":"image/png","data":png(512,512)}}
+        ])
+        .to_string(),
+    );
+    project(&mut [message.clone()], &config, None, None, Some(&extra)).unwrap();
+    config.custom_request_body_mode = Some("trim".into());
+    let error = project(&mut [message], &config, None, None, Some(&extra)).unwrap_err();
+    assert!(error.to_string().contains("14000 available"), "{error}");
+}
+
+#[test]
+fn anthropic_file_images_participate_in_preflight() {
+    let mut config = config();
+    config.format = "anthropic".into();
+    config.context_window = 32_000;
+    config.max_tokens = Some(8_000);
+    let context = with_remaining_input(&config, 0, 1);
+    let part = json!({"type":"image","source":{"type":"file","file_id":"file-fixture"}});
+    let message = Message::user(json!([part.clone()]).to_string());
+    assert!(project(&mut [message], &config, None, Some(&context), None).is_err());
+
+    let extra = json!({"messages":[{"role":"user","content":[part]}],"max_tokens":22_000});
+    let client = crate::AIClient::new(config);
+    assert!(super::context::validate_override(&client, &[], None, None, Some(&extra)).is_err());
+}
+
+#[test]
+fn responses_does_not_count_an_image_against_only_part_of_an_external_history() {
+    let mut config = config();
+    config.format = "responses".into();
+    let client = crate::AIClient::new(config);
+    let mut input = json!({"input":[{"role":"user","content":[{"type":"input_image",
+        "image_url":format!("data:image/png;base64,{}", png(512,512))}]}]});
+    assert!(super::context::validate_override(&client, &[], None, None, Some(&input)).unwrap());
+    for (key, value) in [
+        ("previous_response_id", "resp_fixture"),
+        ("conversation", "conv_fixture"),
+    ] {
+        input[key] = json!(value);
+        let error =
+            super::context::validate_override(&client, &[], None, None, Some(&input)).unwrap_err();
+        assert!(error.to_string().contains("cannot be budgeted locally"));
+        input.as_object_mut().unwrap().remove(key);
+    }
+}
+
+#[cfg(feature = "subscription-auth")]
+#[tokio::test]
+async fn codex_preflight_ignores_output_fields_removed_by_the_subscription_route() {
+    let mut config = config();
+    config.format = "responses".into();
+    config.request_url = "https://chatgpt.com/backend-api/codex/responses".into();
+    config.context_window = 32_000;
+    config.max_tokens = Some(8_000);
+    let client = crate::AIClient::new(config)
+        .with_subscription_provider(crate::subscription_auth::SubscriptionProvider::Codex);
+    client
+        .prepare_message_inputs(
+            vec![uploaded(&png(512, 512))],
+            None,
+            None,
+            Some(&json!({"max_output_tokens":22_000})),
+        )
+        .await
+        .unwrap();
 }

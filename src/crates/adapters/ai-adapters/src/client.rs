@@ -26,7 +26,7 @@ use crate::types::*;
 use anyhow::Result;
 use format::ApiFormat;
 use log::warn;
-use openbitfun_core_types::errors::AiProviderError;
+use openbitfun_core_types::errors::{AiProviderError, ErrorCategory};
 use reqwest::Client;
 use std::time::Duration;
 use std::{fmt, future::Future, pin::Pin, sync::Arc};
@@ -631,8 +631,6 @@ impl AIClient {
         request_context: Option<&ModelRequestContext>,
         extra_body: Option<&serde_json::Value>,
     ) -> Result<Vec<Message>> {
-        #[cfg(not(feature = "vision-input"))]
-        let _ = tools;
         // Project only the outgoing copy, against the actual selected client.
         responses_websocket::validate(self)?;
         // Account/channel failover and direct analysis calls share this boundary.
@@ -641,11 +639,15 @@ impl AIClient {
             self.config.max_images_per_request,
             request_context.and_then(|context| context.image_turn_start),
             ApiFormat::parse(&self.config.format)?,
+            request_context.map_or_else(
+                || tools.is_none_or(<[_]>::is_empty),
+                |context| context.retain_latest_user_image,
+            ),
         )?;
         image_budget::validate_extra_body(self.config.max_images_per_request, extra_body)?;
         #[cfg(feature = "vision-input")]
         let replaced = image_budget::context::validate_override(
-            &self.config,
+            self,
             &messages,
             tools,
             request_context,
@@ -658,11 +660,11 @@ impl AIClient {
                 .any(image_budget::context::may_contain_images)
         {
             let budget = image_budget::context::Budget::for_request(
-                &self.config,
+                self,
                 tools,
                 request_context,
                 extra_body,
-            );
+            )?;
             // Decoding and resampling a large screenshot can occupy a CPU for
             // a full scheduling slice. Keep it off the async transport worker.
             tokio::task::spawn_blocking(move || -> Result<_> {
@@ -678,6 +680,64 @@ impl AIClient {
     }
 
     async fn send_prepared_message_stream(
+        &self,
+        messages: Vec<Message>,
+        tools: Option<Vec<ToolDefinition>>,
+        extra_body: Option<serde_json::Value>,
+        max_tries: usize,
+        trace: Option<ModelExchangeTraceConfig>,
+        request_context: Option<ModelRequestContext>,
+    ) -> Result<StreamResponse> {
+        let can_reduce_batch = extra_body.as_ref().is_none_or(|body| {
+            ["messages", "input", "contents"]
+                .iter()
+                .all(|key| body.get(key).is_none())
+        });
+        let Some(smaller) = can_reduce_batch
+            .then(|| image_budget::smaller_tool_batch(&messages))
+            .flatten()
+        else {
+            return self
+                .send_wire_message_stream(
+                    messages,
+                    tools,
+                    extra_body,
+                    max_tries,
+                    trace,
+                    request_context,
+                )
+                .await;
+        };
+        let outcome = self
+            .send_wire_message_stream(
+                messages,
+                tools.clone(),
+                extra_body.clone(),
+                max_tries,
+                trace.clone(),
+                request_context.clone(),
+            )
+            .await;
+        if let Err(error) = &outcome {
+            if error
+                .downcast_ref::<AiProviderError>()
+                .is_some_and(|error| {
+                    error.http_status == Some(413)
+                        && error.category == ErrorCategory::InvalidRequest
+                        && !error.delivery_uncertain
+                })
+            {
+                // Only a confirmed byte-limit rejection is safe to resend. This
+                // retry changes the body and retains the tool-call protocol.
+                return self
+                    .send_wire_message_stream(smaller, tools, extra_body, 1, trace, request_context)
+                    .await;
+            }
+        }
+        outcome
+    }
+
+    async fn send_wire_message_stream(
         &self,
         messages: Vec<Message>,
         tools: Option<Vec<ToolDefinition>>,

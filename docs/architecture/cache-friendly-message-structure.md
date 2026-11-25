@@ -304,10 +304,12 @@ Important exceptions:
   summary form, then invalidates prompt cache and starts a new stable prefix
 - Each request sends pixels from pending user uploads and new tool observations,
   including parallel tool results. After an assistant response, those messages
-  carry text and available image references on later requests. Reopening a
-  referenced image supplies a new observation. This changes the provider cache
-  prefix at the first replaced image. Model-pool image requirements use the same
-  pending observations. The session retains the original attachments.
+  carry text and available image references on later requests. A vision route
+  without `view_image` keeps the most recent user upload within the request
+  budget. Reopening a reference supplies a new observation and changes the
+  provider cache prefix at the first replaced image. Session-scoped tool image
+  snapshots follow session deletion. A fork copies the snapshots referenced by
+  the history it retains.
 
 ## Session Storage Layout
 

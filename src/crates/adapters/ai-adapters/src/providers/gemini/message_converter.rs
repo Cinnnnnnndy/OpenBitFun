@@ -377,94 +377,22 @@ impl GeminiMessageConverter {
             return Vec::new();
         }
 
-        let parsed = match serde_json::from_str::<Value>(content) {
-            Ok(parsed) if parsed.is_array() => parsed,
-            _ => return vec![json!({ "text": content })],
+        let Ok(Value::Array(items)) = serde_json::from_str::<Value>(content) else {
+            return vec![json!({ "text": content })];
         };
-
-        let mut parts = Vec::new();
-
-        if let Some(items) = parsed.as_array() {
-            // Untyped {text: ...} also occurs in ordinary user-supplied JSON.
-            // Interpret it as a native Gemini part only in a recognized part list.
-            let user_parts = !is_model_role
-                && items.iter().any(|item| {
-                    item.get("inline_data").is_some()
-                        || item.get("inlineData").is_some()
-                        || matches!(
-                            item["type"].as_str(),
-                            Some(
-                                "text"
-                                    | "input_text"
-                                    | "output_text"
-                                    | "image"
-                                    | "image_url"
-                                    | "input_image"
-                            )
-                        )
-                });
-            for item in items {
-                let item_type = item.get("type").and_then(Value::as_str);
-                match item_type {
-                    Some("text" | "input_text" | "output_text") => {
-                        if let Some(text) = item.get("text").and_then(Value::as_str) {
-                            if !text.is_empty() {
-                                parts.push(json!({ "text": text }));
-                            }
-                        }
-                    }
-                    None if user_parts => {
-                        if let Some(inline) =
-                            item.get("inline_data").or_else(|| item.get("inlineData"))
-                        {
-                            let mime = inline
-                                .get("mime_type")
-                                .or_else(|| inline.get("mimeType"))
-                                .and_then(Value::as_str);
-                            if let (Some(mime), Some(data)) = (mime, inline["data"].as_str()) {
-                                parts.push(json!({"inlineData": {"mimeType": mime, "data": data}}));
-                            }
-                        } else if let Some(text) =
-                            item["text"].as_str().filter(|text| !text.is_empty())
-                        {
-                            parts.push(json!({"text": text}));
-                        }
-                    }
-                    Some("image_url" | "input_image") if !is_model_role => {
-                        if let Some(url) = item.get("image_url").and_then(|value| {
-                            value
-                                .get("url")
-                                .and_then(Value::as_str)
-                                .or_else(|| value.as_str())
-                        }) {
-                            if let Some(part) = Self::convert_image_url_to_part(url) {
-                                parts.push(part);
-                            }
-                        }
-                    }
-                    Some("image") if !is_model_role => {
-                        let source = item.get("source");
-                        let mime_type = source
-                            .and_then(|value| value.get("media_type"))
-                            .and_then(Value::as_str);
-                        let data = source
-                            .and_then(|value| value.get("data"))
-                            .and_then(Value::as_str);
-
-                        if let (Some(mime_type), Some(data)) = (mime_type, data) {
-                            parts.push(json!({
-                                "inlineData": {
-                                    "mimeType": mime_type,
-                                    "data": data,
-                                }
-                            }));
-                        }
-                    }
-                    _ => {}
-                }
-            }
+        if !Self::is_content_parts(&items, is_model_role) {
+            return vec![json!({ "text": content })];
         }
-
+        let parts: Vec<_> = items
+            .iter()
+            .filter_map(|item| {
+                if let Some(text) = item.get("text").and_then(Value::as_str) {
+                    return (!text.is_empty()).then(|| json!({ "text": text }));
+                }
+                let (mime, data) = Self::inline_image_payload(item)?;
+                Some(json!({"inlineData": {"mimeType": mime, "data": data}}))
+            })
+            .collect();
         if parts.is_empty() {
             vec![json!({ "text": content })]
         } else {
@@ -472,25 +400,79 @@ impl GeminiMessageConverter {
         }
     }
 
-    fn convert_image_url_to_part(url: &str) -> Option<Value> {
-        let prefix = "data:";
-        if !url.starts_with(prefix) {
-            warn!("Gemini currently supports inline data URLs for image parts; skipping unsupported image URL");
-            return None;
-        }
+    pub(crate) fn is_user_content_parts(items: &[Value]) -> bool {
+        Self::is_content_parts(items, false)
+    }
 
-        let rest = &url[prefix.len()..];
-        let (mime_type, data) = rest.split_once(";base64,")?;
-        if mime_type.is_empty() || data.is_empty() {
-            return None;
-        }
+    fn is_content_parts(items: &[Value], is_model_role: bool) -> bool {
+        // A bare array of objects with a text property can be ordinary user JSON.
+        items
+            .iter()
+            .any(|item| item.get("type").is_some() || Self::inline_image_payload(item).is_some())
+            && items.iter().all(|item| {
+                let Some(fields) = item.as_object() else {
+                    return false;
+                };
+                let kind = item["type"].as_str();
+                let text = match kind {
+                    Some("text" | "input_text" | "output_text") => fields.len() == 2,
+                    None if !is_model_role => fields.len() == 1,
+                    _ => false,
+                } && item["text"].is_string();
+                text || (!is_model_role && Self::inline_image_payload(item).is_some())
+            })
+    }
 
-        Some(json!({
-            "inlineData": {
-                "mimeType": mime_type,
-                "data": data,
+    fn inline_image_payload(item: &Value) -> Option<(&str, &str)> {
+        let fields = item.as_object()?;
+        let kind = item.get("type");
+        let payload = match kind {
+            None if fields.keys().all(|key| {
+                matches!(
+                    key.as_str(),
+                    "inlineData" | "inline_data" | "mediaResolution" | "media_resolution"
+                )
+            }) =>
+            {
+                item.get("inlineData").or_else(|| item.get("inline_data"))?
             }
-        }))
+            Some(kind) if kind == "image" && fields.len() == 2 => item.get("source")?,
+            Some(kind)
+                if (kind == "image_url" || kind == "input_image")
+                    && fields
+                        .keys()
+                        .all(|key| matches!(key.as_str(), "type" | "image_url" | "detail")) =>
+            {
+                let value = item.get("image_url")?;
+                let url = value.as_str().or_else(|| {
+                    let fields = value.as_object()?;
+                    fields
+                        .keys()
+                        .all(|key| matches!(key.as_str(), "url" | "detail"))
+                        .then(|| value["url"].as_str())
+                        .flatten()
+                })?;
+                let (mime, data) = url.strip_prefix("data:")?.split_once(";base64,")?;
+                return (!mime.is_empty() && !data.is_empty()).then_some((mime, data));
+            }
+            _ => return None,
+        };
+        let fields = payload.as_object()?;
+        if !fields.keys().all(|key| {
+            matches!(
+                key.as_str(),
+                "mimeType" | "mime_type" | "media_type" | "data"
+            ) || (kind.is_some() && key == "type" && payload["type"] == "base64")
+        }) {
+            return None;
+        }
+        let mime = payload
+            .get("mimeType")
+            .or_else(|| payload.get("mime_type"))
+            .or_else(|| payload.get("media_type"))?
+            .as_str()?;
+        let data = payload["data"].as_str()?;
+        (!mime.is_empty() && !data.is_empty()).then_some((mime, data))
     }
 
     fn parse_tool_response(content: Option<&str>) -> Value {
@@ -943,10 +925,17 @@ mod tests {
             ]})]
         );
 
-        let literal = r#"[{"text":"example JSON"}]"#;
-        let (_, contents) =
-            GeminiMessageConverter::convert_messages(vec![Message::user(literal.into())], "gemini");
-        assert_eq!(contents[0]["parts"], json!([{"text": literal}]));
+        for literal in [
+            r#"[{"text":"example JSON"}]"#,
+            r#"[{"type":"text","text":""}]"#,
+            r#"[{"id":7,"text":"first item"},{"inlineData":{"reference":"attachment-1"}}]"#,
+        ] {
+            let (_, contents) = GeminiMessageConverter::convert_messages(
+                vec![Message::user(literal.into())],
+                "gemini",
+            );
+            assert_eq!(contents[0]["parts"], json!([{"text": literal}]));
+        }
     }
 
     #[test]

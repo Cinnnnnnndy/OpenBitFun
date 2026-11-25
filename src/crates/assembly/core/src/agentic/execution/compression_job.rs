@@ -220,16 +220,19 @@ impl CompressionJob {
     }
 
     async fn request_summary(&self, plan: &CompressionPlan) -> OpenBitFunResult<String> {
+        let mut image_context = ToolUseContext::for_tool_listing(
+            self.workspace.clone(),
+            self.workspace_services.clone(),
+        );
+        image_context.session_id = Some(self.session_id.clone());
         let (mut messages, image_turn_start) = ExecutionEngine::build_ai_message_prefix_for_send(
             &plan.summary_request_messages,
             &self.client.config.format,
-            ToolUseContext::for_tool_listing(
-                self.workspace.clone(),
-                self.workspace_services.clone(),
-            ),
+            image_context,
             &self.turn_id,
             plan.summary_pending_image_start,
             self.attach_images,
+            false,
             &self.reminders.ordered_reminders(),
         )
         .await?;

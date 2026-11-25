@@ -317,3 +317,94 @@ async fn cold_session_deletion_reclaims_persisted_file_snapshots() {
             .exists());
     }
 }
+
+#[cfg(feature = "tools-image-analysis")]
+#[tokio::test]
+async fn delete_session_removes_its_persisted_tool_image_snapshot() {
+    use crate::agentic::image_analysis::attachments;
+    use crate::agentic::tools::{implementations::ViewImageTool, Tool, ToolResult, ToolUseContext};
+    use crate::agentic::workspace::WorkspaceBinding;
+
+    let workspace = TestWorkspace::new();
+    let paths = workspace.path_manager();
+    let runtime = paths.project_runtime_root(workspace.path());
+    let persistence = Arc::new(PersistenceManager::new(paths).unwrap());
+    let manager = test_manager(persistence.clone());
+    let session = manager
+        .create_session(
+            "Screenshot session".into(),
+            "agent".into(),
+            SessionConfig {
+                workspace_path: Some(workspace.path().to_string_lossy().into_owned()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let binding = WorkspaceBinding::new(
+        Some(workspace.workspace_id().into()),
+        workspace.path().into(),
+    );
+    let mut context = ToolUseContext::for_tool_listing(Some(binding), None);
+    context.custom_data.insert(
+        "__openbitfun_test_runtime_root".into(),
+        serde_json::json!(runtime),
+    );
+    context.primary_model_facts =
+        tool_runtime::context::PrimaryModelFacts::new("test", "vision", "openai", true);
+    context.session_id = Some(session.session_id.clone());
+
+    let original = workspace.path().join("original.png");
+    let image = attachments::test_image();
+    let (bytes, _) =
+        crate::agentic::image_analysis::decode_data_url(image.data_url.as_deref().unwrap())
+            .unwrap();
+    tokio::fs::write(&original, &bytes).await.unwrap();
+    let results = ViewImageTool::new()
+        .call_impl(&serde_json::json!({"path":original}), &context)
+        .await
+        .unwrap();
+    let ToolResult::Result {
+        data,
+        image_attachments,
+        ..
+    } = &results[0]
+    else {
+        panic!("Expected a tool image");
+    };
+    let reference = data["source_image_reference"].as_str().unwrap();
+    assert!(reference.starts_with("openbitfun://current-session/attachments/images/"));
+    let snapshot =
+        std::path::PathBuf::from(context.resolve_tool_path(reference).unwrap().resolved_path);
+    let mut result = Message::tool_result(crate::agentic::core::ToolResult {
+        tool_id: "capture".into(),
+        tool_name: "view_image".into(),
+        effective_tool_name: None,
+        result: data.clone(),
+        result_for_assistant: None,
+        is_error: false,
+        duration_ms: None,
+        image_attachments: image_attachments.clone(),
+    });
+    result.metadata.tool_image_references =
+        attachments::tool_image_references(image_attachments.as_deref().unwrap(), &context)
+            .await
+            .unwrap();
+    persistence
+        .save_turn_context_snapshot(workspace.path(), &session.session_id, 0, &[result])
+        .await
+        .unwrap();
+    assert_eq!(tokio::fs::read(&snapshot).await.unwrap(), bytes);
+    let restored = persistence
+        .load_turn_context_snapshot(workspace.path(), &session.session_id, 0)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(restored[0].metadata.tool_image_references, [reference]);
+    manager
+        .delete_session(workspace.path(), &session.session_id)
+        .await
+        .unwrap();
+    assert!(!snapshot.exists());
+    assert_eq!(tokio::fs::read(original).await.unwrap(), bytes);
+}

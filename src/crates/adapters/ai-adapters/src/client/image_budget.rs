@@ -42,8 +42,9 @@ pub(super) fn project(
     max_images: Option<usize>,
     turn_start: Option<usize>,
     format: ApiFormat,
+    retain_latest_user_image: bool,
 ) -> Result<Vec<Message>> {
-    project_history(&mut messages, turn_start, format);
+    project_history(&mut messages, turn_start, format, retain_latest_user_image);
     let Some(mut remaining) = max_images else {
         return Ok(messages);
     };
@@ -88,15 +89,73 @@ pub(super) fn project(
     Ok(messages)
 }
 
+/// A gateway can reject a batch even when all its images fit the context window.
+pub(super) fn smaller_tool_batch(messages: &[Message]) -> Option<Vec<Message>> {
+    let count = messages
+        .iter()
+        .filter(|message| message.role == "tool")
+        .map(|message| message.tool_image_attachments.as_ref().map_or(0, Vec::len))
+        .sum::<usize>();
+    if count < 2 {
+        return None;
+    }
+    let mut keep_one = true;
+    let mut reduced = Vec::with_capacity(messages.len());
+    for message in messages.iter().rev() {
+        let attachments = message
+            .tool_image_attachments
+            .as_deref()
+            .unwrap_or_default();
+        if message.role != "tool" || attachments.is_empty() {
+            reduced.push(message.clone());
+            continue;
+        }
+        let keep = usize::from(std::mem::take(&mut keep_one));
+        let mut adjusted = Message {
+            content: message.content.clone(),
+            role: message.role.clone(),
+            reasoning_content: message.reasoning_content.clone(),
+            thinking_signature: message.thinking_signature.clone(),
+            tool_calls: message.tool_calls.clone(),
+            tool_call_id: message.tool_call_id.clone(),
+            name: message.name.clone(),
+            is_error: message.is_error,
+            model_response_replay: message.model_response_replay.clone(),
+            tool_image_attachments: (keep > 0).then(|| attachments[..keep].to_vec()),
+        };
+        if attachments.len() > keep {
+            let text = adjusted.content.get_or_insert_with(String::new);
+            text.push_str("\n[Some tool images were omitted to fit the request body. Read the images in separate calls if needed.]");
+        }
+        reduced.push(adjusted);
+    }
+    reduced.reverse();
+    Some(reduced)
+}
+
 /// A response confirms receipt of all preceding inputs. Consecutive user
 /// messages or parallel tool results after it may still await their first send.
-fn project_history(messages: &mut [Message], turn_start: Option<usize>, format: ApiFormat) {
+fn project_history(
+    messages: &mut [Message],
+    turn_start: Option<usize>,
+    format: ApiFormat,
+    retain_latest_user_image: bool,
+) {
     let turn_start = turn_start.unwrap_or(0).min(messages.len());
     let pending_start = messages[turn_start..]
         .iter()
         .rposition(|message| message.role == "assistant")
         .map_or(turn_start, |index| turn_start + index + 1);
-    for message in &mut messages[..pending_start] {
+    let retained = retain_latest_user_image
+        .then(|| {
+            messages.iter().rposition(|message| {
+                message.role == "user"
+                    && user_parts(&message.content, format)
+                        .is_some_and(|parts| parts.iter().any(is_image_part))
+            })
+        })
+        .flatten();
+    for (index, message) in messages[..pending_start].iter_mut().enumerate() {
         match message.role.as_str() {
             "tool" => {
                 if let Some(images) = message
@@ -111,7 +170,7 @@ fn project_history(messages: &mut [Message], turn_start: Option<usize>, format: 
                     ));
                 }
             }
-            "user" => {
+            "user" if Some(index) != retained => {
                 let Some(mut parts) = user_parts(&message.content, format) else {
                     continue;
                 };
@@ -123,7 +182,8 @@ fn project_history(messages: &mut [Message], turn_start: Option<usize>, format: 
                         .or_else(|| url.as_str())
                         .or_else(|| part["source"]["url"].as_str())
                         .filter(|url| url.starts_with("https://") || url.starts_with("http://"))
-                        .or_else(|| part["file_id"].as_str());
+                        .or_else(|| part["file_id"].as_str())
+                        .or_else(|| part["source"]["file_id"].as_str());
                     let text = match reference {
                         Some(reference) => format!("[Earlier image reference: {reference}]"),
                         None => "[Earlier image. Reattach or read it again if pixels are needed.]"
@@ -151,6 +211,11 @@ fn user_parts(content: &Option<String>, format: ApiFormat) -> Option<Vec<Value>>
     let parts: Vec<Value> = serde_json::from_str(content).ok()?;
     if matches!(format, ApiFormat::OpenAIChat | ApiFormat::OpenAIResponses)
         && !parts.iter().all(is_content_part)
+    {
+        return None;
+    }
+    if matches!(format, ApiFormat::Gemini | ApiFormat::GeminiCodeAssist)
+        && !crate::providers::GeminiMessageConverter::is_user_content_parts(&parts)
     {
         return None;
     }
@@ -214,6 +279,8 @@ fn is_image_part(part: &Value) -> bool {
         }
         Some("image") => part.get("source").is_some_and(|source| {
             image_url(source.get("url"))
+                || (source["type"] == "file"
+                    && source["file_id"].as_str().is_some_and(|id| !id.is_empty()))
                 || (source
                     .get("media_type")
                     .and_then(Value::as_str)
@@ -247,7 +314,7 @@ mod tests {
     use crate::types::ToolImageAttachment;
 
     fn project(messages: Vec<Message>, max_images: Option<usize>) -> Result<Vec<Message>> {
-        super::project(messages, max_images, None, ApiFormat::OpenAIChat)
+        super::project(messages, max_images, None, ApiFormat::OpenAIChat, false)
     }
 
     fn image(id: &str) -> Value {
@@ -612,8 +679,14 @@ mod tests {
             Message::user("Review the details.".into()),
         ];
         let original = serde_json::to_value(&messages).unwrap();
-        let projected =
-            super::project(messages.clone(), None, None, ApiFormat::OpenAIResponses).unwrap();
+        let projected = super::project(
+            messages.clone(),
+            None,
+            None,
+            ApiFormat::OpenAIResponses,
+            false,
+        )
+        .unwrap();
         let old = projected[0].content.as_deref().unwrap();
         assert!(
             old.contains(url)
@@ -710,7 +783,7 @@ mod tests {
             (ApiFormat::Gemini, "gemini-3-pro"),
             (ApiFormat::Gemini, "gemini-2.5-pro"),
         ] {
-            let projected = super::project(history.clone(), None, None, format).unwrap();
+            let projected = super::project(history.clone(), None, None, format, false).unwrap();
             let wire = match format {
                 ApiFormat::OpenAIChat => OpenAIMessageConverter::convert_messages(projected),
                 ApiFormat::OpenAIResponses => {

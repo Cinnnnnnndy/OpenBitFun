@@ -16,9 +16,54 @@ fn image_runtime_root(context: &ToolUseContext) -> OpenBitFunResult<PathBuf> {
     }
 }
 
+const IMAGE_DIRECTORY: &str = "attachments/images";
+
+fn snapshot_filename(name: &str) -> bool {
+    name.split_once('.').is_some_and(|(digest, extension)| {
+        digest.len() == 64
+            && digest.bytes().all(|b| b.is_ascii_hexdigit())
+            && matches!(extension, "png" | "jpg" | "gif" | "webp" | "bmp")
+    })
+}
+
+fn session_image_reference(relative: &str) -> OpenBitFunResult<String> {
+    openbitfun_agent_tools::build_openbitfun_current_session_uri(relative)
+        .map_err(|error| OpenBitFunError::validation(error.to_string()))
+}
+
+fn session_image_name(reference: &str) -> Option<String> {
+    let parsed = openbitfun_agent_tools::parse_openbitfun_current_session_uri(reference).ok()?;
+    let name = parsed
+        .relative_path
+        .strip_prefix(IMAGE_DIRECTORY)?
+        .strip_prefix('/')?;
+    snapshot_filename(name).then(|| name.to_owned())
+}
+
+pub(crate) async fn copy_session_image_reference(
+    reference: &str,
+    source_session_dir: &Path,
+    target_session_dir: &Path,
+) -> OpenBitFunResult<()> {
+    let Some(name) = session_image_name(reference) else {
+        return Ok(());
+    };
+    let source = source_session_dir.join(IMAGE_DIRECTORY).join(&name);
+    let target = target_session_dir.join(IMAGE_DIRECTORY).join(name);
+    if target.is_file() {
+        return Ok(());
+    }
+    let bytes = match tokio::fs::read(&source).await {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(OpenBitFunError::io(error.to_string())),
+    };
+    persist_attachment(&target, bytes).await
+}
+
 fn image_reference(context: &ToolUseContext, name: &str) -> OpenBitFunResult<String> {
     build_tool_runtime_artifact_reference(
-        &format!("attachments/images/{name}"),
+        &format!("{IMAGE_DIRECTORY}/{name}"),
         Some(&image_runtime_root(context)?),
         context.current_workspace_scope().as_deref(),
         context.should_emit_runtime_uri(),
@@ -28,21 +73,32 @@ fn image_reference(context: &ToolUseContext, name: &str) -> OpenBitFunResult<Str
 
 pub(crate) fn is_saved_image(path: &str, context: &ToolUseContext) -> bool {
     let name = path.rsplit(['/', '\\']).next().unwrap_or("");
-    let Some((digest, _)) = name.split_once('.') else {
-        return false;
-    };
-    digest.len() == 64
-        && digest.bytes().all(|b| b.is_ascii_hexdigit())
+    if session_image_name(path).is_some() {
+        return context.session_id.is_some() && context.workspace.is_some();
+    }
+    snapshot_filename(name)
         && image_reference(context, name).is_ok_and(|reference| reference == path)
 }
 
 /// Save the exact frame, including observations that never had a source file.
 pub(crate) async fn save_image(bytes: &[u8], context: &ToolUseContext) -> OpenBitFunResult<String> {
+    let session = context
+        .session_id
+        .as_deref()
+        .filter(|_| context.workspace.is_some());
+    let root = if let Some(session_id) = session {
+        openbitfun_core_types::validate_session_id(session_id)
+            .map_err(OpenBitFunError::validation)?;
+        context.current_workspace_session_dir(session_id)?
+    } else {
+        image_runtime_root(context)?
+    };
     let (reference, _) = save_in_root(
         bytes,
-        &image_runtime_root(context)?,
+        &root,
         context.current_workspace_scope().as_deref(),
         context.should_emit_runtime_uri(),
+        session.is_some(),
     )
     .await?;
     Ok(reference)
@@ -98,7 +154,15 @@ pub(crate) async fn prepare_input_attachments(
             continue;
         }
         let bytes = super::image_processing::read_image_in_context(path, context).await?;
-        image.image_path = Some(save_image(&bytes, context).await?);
+        let (reference, _) = save_in_root(
+            &bytes,
+            &image_runtime_root(context)?,
+            context.current_workspace_scope().as_deref(),
+            context.should_emit_runtime_uri(),
+            false,
+        )
+        .await?;
+        image.image_path = Some(reference);
     }
     prepare_inline_image_attachments(images, context).await
 }
@@ -135,8 +199,14 @@ async fn prepare_in_runtime_root(
             continue;
         };
         let (bytes, _) = decode_data_url(data_url)?;
-        let (path, mime_type) =
-            save_in_root(&bytes, runtime_root, workspace_scope, emit_runtime_uri).await?;
+        let (path, mime_type) = save_in_root(
+            &bytes,
+            runtime_root,
+            workspace_scope,
+            emit_runtime_uri,
+            false,
+        )
+        .await?;
         image.image_path = Some(path);
         image.mime_type = mime_type.to_string();
     }
@@ -148,6 +218,7 @@ async fn save_in_root(
     runtime_root: &Path,
     workspace_scope: Option<&str>,
     emit_runtime_uri: bool,
+    session_scoped: bool,
 ) -> OpenBitFunResult<(String, &'static str)> {
     let format = image::guess_format(bytes).map_err(|error| {
         OpenBitFunError::validation(format!("Invalid image attachment: {error}"))
@@ -164,20 +235,24 @@ async fn save_in_root(
             )))
         }
     };
-    let relative_path = format!("attachments/images/{:x}.{extension}", Sha256::digest(bytes));
+    let relative_path = format!("{IMAGE_DIRECTORY}/{:x}.{extension}", Sha256::digest(bytes));
     let path = runtime_root.join(&relative_path);
     // A replay or queued dispatch can prepare the same pixels twice. The
     // content address lets it reuse a complete, unchanged artifact.
     if tokio::fs::read(&path).await.ok().as_deref() != Some(bytes) {
         persist_attachment(&path, bytes.to_vec()).await?;
     }
-    let reference = build_tool_runtime_artifact_reference(
-        &relative_path,
-        Some(runtime_root),
-        workspace_scope,
-        emit_runtime_uri,
-    )
-    .map_err(|error| OpenBitFunError::validation(error.to_string()))?;
+    let reference = if session_scoped {
+        session_image_reference(&relative_path)?
+    } else {
+        build_tool_runtime_artifact_reference(
+            &relative_path,
+            Some(runtime_root),
+            workspace_scope,
+            emit_runtime_uri,
+        )
+        .map_err(|error| OpenBitFunError::validation(error.to_string()))?
+    };
     Ok((reference, mime_type))
 }
 

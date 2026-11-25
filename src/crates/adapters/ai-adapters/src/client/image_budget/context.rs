@@ -3,11 +3,15 @@
 
 use super::{inline_media, is_image_part, user_parts};
 use crate::client::format::ApiFormat;
-use crate::providers::openai::OpenAIMessageConverter;
+use crate::providers::{
+    anthropic, gemini,
+    openai::{self, OpenAIMessageConverter},
+};
 use crate::types::{AIConfig, Message, ModelRequestContext, ToolDefinition};
 use crate::vision_tokens::{
     inline_image_dimensions, ResizedInlineImage, VisionTokenPolicy, UNKNOWN_IMAGE_DIMENSIONS,
 };
+use crate::AIClient;
 use anyhow::Result;
 use openbitfun_core_types::errors::{AiProviderError, ErrorCategory};
 use openbitfun_core_types::token_estimate::{
@@ -144,30 +148,61 @@ fn resize_preview(
     })
 }
 
-fn output_reserve(config: &AIConfig, extra: Option<&Value>) -> usize {
-    let default = if config.format.eq_ignore_ascii_case("anthropic") {
-        32_000
-    } else {
-        automatic_max_output_tokens(config.context_window)
+fn request_options(client: &AIClient, format: ApiFormat, extra: Option<&Value>) -> Result<Value> {
+    let url = &client.config.request_url;
+    let extra = extra.and_then(Value::as_object).map(|fields| {
+        Value::Object(
+            fields
+                .iter()
+                .filter(|(key, _)| !matches!(key.as_str(), "messages" | "input" | "contents"))
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect(),
+        )
+    });
+    match format {
+        ApiFormat::OpenAIChat => {
+            openai::chat::try_build_request_body(client, url, vec![], None, extra)
+        }
+        ApiFormat::OpenAIResponses if openai::codex_chatgpt::is_codex_chatgpt_endpoint(url) => {
+            openai::codex_chatgpt::try_build_request_body(client, None, vec![], None, extra)
+        }
+        ApiFormat::OpenAIResponses => {
+            openai::responses::try_build_request_body(client, None, vec![], None, extra)
+        }
+        ApiFormat::Anthropic => {
+            anthropic::request::try_build_request_body(client, url, None, vec![], None, extra)
+        }
+        ApiFormat::Gemini => {
+            gemini::request::try_build_request_body(client, None, vec![], None, extra)
+        }
+        ApiFormat::GeminiCodeAssist => {
+            gemini::code_assist::image_budget_request_options(client, extra)
+        }
+    }
+}
+
+fn output_reserve(config: &AIConfig, format: ApiFormat, options: &Value) -> usize {
+    let cap = match format {
+        ApiFormat::OpenAIChat => options["max_completion_tokens"]
+            .as_u64()
+            .or_else(|| options["max_tokens"].as_u64()),
+        ApiFormat::OpenAIResponses => options["max_output_tokens"].as_u64(),
+        ApiFormat::Anthropic => options["max_tokens"].as_u64(),
+        ApiFormat::Gemini | ApiFormat::GeminiCodeAssist => {
+            options["generationConfig"]["maxOutputTokens"].as_u64()
+        }
     };
-    let configured = config.max_tokens.unwrap_or(default) as usize;
-    // Custom request bodies can raise the wire output cap on compatible gateways.
-    [
-        "/max_tokens",
-        "/max_completion_tokens",
-        "/max_output_tokens",
-        "/generationConfig/maxOutputTokens",
-    ]
-    .into_iter()
-    .filter_map(|path| extra?.pointer(path)?.as_u64())
-    .fold(configured, |cap, value| {
-        cap.max(usize::try_from(value).unwrap_or(usize::MAX))
-    })
+    cap.map_or_else(
+        || automatic_max_output_tokens(config.context_window) as usize,
+        |value| usize::try_from(value).unwrap_or(usize::MAX),
+    )
 }
 
 /// Admission facts captured from the client selected for *this* send.
 pub(in crate::client) struct Budget {
-    format: Option<ApiFormat>,
+    format: ApiFormat,
+    model_override: bool,
+    external_history: bool,
     policy: VisionTokenPolicy,
     limit: usize,
     tools: usize,
@@ -177,16 +212,19 @@ pub(in crate::client) struct Budget {
 
 impl Budget {
     pub(in crate::client) fn for_request(
-        config: &AIConfig,
+        client: &AIClient,
         tools: Option<&[ToolDefinition]>,
         context: Option<&ModelRequestContext>,
         extra: Option<&Value>,
-    ) -> Self {
+    ) -> Result<Self> {
+        let config = &client.config;
+        let format = ApiFormat::parse(&config.format)?;
+        // Use the same provider merge and reserved-field rules as transport,
+        // without converting or cloning the runtime messages and tool schema.
+        let options = request_options(client, format, extra)?;
         let window = config.context_window as usize;
-        // Leave input space for clients whose entire window is smaller than
-        // the ordinary compression safety reserve.
         let limit = window
-            .saturating_sub(output_reserve(config, extra))
+            .saturating_sub(output_reserve(config, format, &options))
             .saturating_sub(INPUT_SAFETY_RESERVE.min(window / 3));
         let wire_overhead = |value: &Value| TokenCounter::estimate_tokens(&value.to_string());
         let schema = context
@@ -212,28 +250,25 @@ impl Budget {
                     .and_then(|body| body.get("tools"))
                     .map_or(0, wire_overhead),
             );
-        let format = ApiFormat::parse(&config.format).ok();
-        let body_selects_model = !crate::client::utils::is_trim_custom_request_body_mode(config)
+        let model = if format == ApiFormat::Gemini {
+            &config.model
+        } else {
+            options["model"].as_str().unwrap_or(&config.model)
+        };
+        let model_override = model != config.model
             && matches!(
                 format,
-                Some(ApiFormat::OpenAIChat | ApiFormat::OpenAIResponses | ApiFormat::Anthropic)
+                ApiFormat::OpenAIChat | ApiFormat::OpenAIResponses | ApiFormat::Anthropic
             );
-        let model = if body_selects_model {
-            extra
-                .and_then(|body| body["model"].as_str())
-                .unwrap_or(&config.model)
-        } else {
-            &config.model
-        };
+        let external_history = format == ApiFormat::OpenAIResponses
+            && ["previous_response_id", "conversation"]
+                .iter()
+                .any(|key| options.get(key).is_some_and(|value| !value.is_null()));
         let mut policy = VisionTokenPolicy::for_model(model);
-        if matches!(
-            format,
-            Some(ApiFormat::Gemini | ApiFormat::GeminiCodeAssist)
-        ) {
-            let generation = extra.and_then(|body| {
-                body.get("generationConfig")
-                    .or_else(|| body.get("generation_config"))
-            });
+        if matches!(format, ApiFormat::Gemini | ApiFormat::GeminiCodeAssist) {
+            let generation = options
+                .get("generationConfig")
+                .or_else(|| options.get("generation_config"));
             policy = policy.with_gemini_media_resolution(generation.and_then(|config| {
                 config
                     .get("mediaResolution")
@@ -241,27 +276,44 @@ impl Budget {
                     .as_str()
             }));
         }
-        Self {
+        Ok(Self {
             format,
+            model_override,
+            external_history,
             policy,
             limit,
             tools,
             schema,
             text_floor: context.map_or(0, |ctx| ctx.minimum_non_image_input_tokens),
+        })
+    }
+
+    fn check_image_scope(&self) -> Result<()> {
+        if self.model_override {
+            return Err(image_budget_error(
+                "The custom request changes the model for an image input. Configure that model and its context window directly, and remove the model override.".into(),
+            ));
         }
+        if self.external_history {
+            return Err(image_budget_error(
+                "Image requests with a custom Responses conversation or previous_response_id cannot be budgeted locally. Send the full history or use managed Responses WebSocket continuation.".into(),
+            ));
+        }
+        Ok(())
     }
 }
 
 /// A raw provider message override has no application turn or attachment identity.
 /// Keep it intact when it fits; report oversized image overrides before transport.
 pub(in crate::client) fn validate_override(
-    config: &AIConfig,
+    client: &AIClient,
     messages: &[Message],
     tools: Option<&[ToolDefinition]>,
     context: Option<&ModelRequestContext>,
     body: Option<&Value>,
 ) -> Result<bool> {
     let Some(body) = body else { return Ok(false) };
+    let config = &client.config;
     let (key, system_key) = match ApiFormat::parse(&config.format)? {
         ApiFormat::OpenAIChat => ("messages", None),
         ApiFormat::Anthropic => ("messages", Some("system")),
@@ -315,14 +367,15 @@ pub(in crate::client) fn validate_override(
             _ => 1,
         }
     }
-    let budget = Budget::for_request(config, tools, context, Some(body));
+    let budget = Budget::for_request(client, tools, context, Some(body))?;
     let mut saw_image = false;
     let gemini = matches!(
         budget.format,
-        Some(ApiFormat::Gemini | ApiFormat::GeminiCodeAssist)
+        ApiFormat::Gemini | ApiFormat::GeminiCodeAssist
     );
     let cost = count(override_messages, budget.policy, gemini, &mut saw_image);
     if saw_image {
+        budget.check_image_scope()?;
         // Responses, Anthropic and Gemini send system messages in a separate
         // field, which survives an override of just input/messages/contents.
         let preserved_system = if system_key.is_some_and(|key| body.get(key).is_none()) {
@@ -369,8 +422,12 @@ pub(super) fn project(
         messages,
         context.and_then(|ctx| ctx.image_turn_start),
         ApiFormat::parse(&config.format)?,
+        context.is_some_and(|ctx| ctx.retain_latest_user_image),
     );
-    apply(messages, Budget::for_request(config, tools, context, extra))
+    apply(
+        messages,
+        Budget::for_request(&AIClient::new(config.clone()), tools, context, extra)?,
+    )
 }
 
 // Desktop and browser control actions reuse the exact coordinates of their
@@ -413,10 +470,7 @@ pub(in crate::client) fn apply(messages: &mut [Message], budget: Budget) -> Resu
                 ));
             }
         } else if message.role == "user" {
-            let Some(parts) = budget
-                .format
-                .and_then(|format| user_parts(&message.content, format))
-            else {
+            let Some(parts) = user_parts(&message.content, budget.format) else {
                 continue;
             };
             let before = images.len();
@@ -434,8 +488,7 @@ pub(in crate::client) fn apply(messages: &mut [Message], budget: Budget) -> Resu
                 ));
             }
             if images.len() > before {
-                if let Some(format @ (ApiFormat::OpenAIChat | ApiFormat::OpenAIResponses)) =
-                    budget.format
+                if let format @ (ApiFormat::OpenAIChat | ApiFormat::OpenAIResponses) = budget.format
                 {
                     if let Some(part) = parts.iter().position(|part| {
                         !OpenAIMessageConverter::can_render_user_part(part, format)
@@ -453,6 +506,7 @@ pub(in crate::client) fn apply(messages: &mut [Message], budget: Budget) -> Resu
     if images.is_empty() {
         return Ok(());
     }
+    budget.check_image_scope()?;
 
     let mut text = 3 + budget.tools;
     for (index, message) in messages.iter().enumerate() {

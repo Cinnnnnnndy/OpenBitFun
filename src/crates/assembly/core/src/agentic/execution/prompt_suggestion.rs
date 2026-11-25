@@ -76,13 +76,19 @@ pub(super) async fn build_prompt_suggestion_messages(
         .iter()
         .map(String::as_str)
         .collect::<Vec<_>>();
-    let (mut ai_messages, image_turn_start) = ExecutionEngine::build_ai_messages_for_send(
+    let mut image_context = crate::agentic::tools::ToolUseContext::for_tool_listing(
+        request.workspace.clone(),
+        request.workspace_services.clone(),
+    );
+    image_context.session_id = Some(request.session_id.clone());
+    let (mut ai_messages, image_turn_start) = ExecutionEngine::build_ai_message_prefix_for_send(
         &request.messages,
         &request.ai_client.config.format,
-        request.workspace.as_ref(),
-        request.workspace_services.as_ref(),
+        image_context,
         &request.turn_id,
+        Message::image_turn_start(&request.messages, &request.turn_id),
         request.attach_images,
+        request.model_request_context.retain_latest_user_image,
         &reminders,
     )
     .await?;

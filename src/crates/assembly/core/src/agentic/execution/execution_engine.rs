@@ -2276,16 +2276,23 @@ impl ExecutionEngine {
         let finalize_tool_names = Self::finalize_tool_names(input.tool_definitions.as_deref());
         let finalize_runtime_tool_restrictions =
             Self::finalize_runtime_tool_restrictions(input.context, &finalize_tool_names);
-        let (mut final_ai_messages, image_turn_start) = Self::build_ai_messages_for_send(
+        let mut image_context = ToolUseContext::for_tool_listing(
+            input.context.workspace.clone(),
+            input.context.workspace_services.clone(),
+        );
+        image_context.session_id = Some(input.context.session_id.clone());
+        let (mut final_ai_messages, image_turn_start) = Self::build_ai_message_prefix_for_send(
             input.messages,
             &input.ai_client.config.format,
-            input.context.workspace.as_ref(),
-            input.context.workspace_services.as_ref(),
+            image_context,
             &input.context.dialog_turn_id,
+            Self::image_turn_start(input.messages, &input.context.dialog_turn_id),
             input.primary_model_facts.supports_image_inputs,
+            true,
             input.prepended_reminders,
         )
         .await?;
+
         final_ai_messages.push(AIMessage::user(render_system_reminder(input.reminder_text)));
         final_ai_messages.push(AIMessage::user(Self::FINALIZE_USER_FOLLOWUP.to_string()));
 
@@ -2317,6 +2324,7 @@ impl ExecutionEngine {
             effective_model_name: input.ai_client.config.model.clone(),
             model_request_context: ModelRequestContext {
                 image_turn_start: Some(image_turn_start),
+                retain_latest_user_image: true,
                 ..input.model_request_context.clone()
             },
             account_client_source: input.account_client_source.clone(),
@@ -2348,6 +2356,7 @@ impl ExecutionEngine {
             .await
     }
 
+    #[cfg(test)]
     pub(super) async fn build_ai_messages_for_send(
         messages: &[Message],
         provider: &str,
@@ -2364,18 +2373,20 @@ impl ExecutionEngine {
             current_turn_id,
             Self::image_turn_start(messages, current_turn_id),
             attach_images,
+            false,
             prepended_reminders,
         )
         .await
     }
 
-    async fn build_ai_message_prefix_for_send(
+    pub(super) async fn build_ai_message_prefix_for_send(
         messages: &[Message],
         provider: &str,
         image_context: ToolUseContext,
         current_turn_id: &str,
         current_turn_start: usize,
         attach_images: bool,
+        retain_latest_user_image: bool,
         prepended_reminders: &[&str],
     ) -> OpenBitFunResult<(Vec<AIMessage>, usize)> {
         let limits = ImageLimits::for_provider(provider);
@@ -2395,6 +2406,12 @@ impl ExecutionEngine {
         let mut prepended_reminders_injected = false;
 
         let fresh = Self::fresh_image_start(messages, current_turn_start);
+        let retained_user_image = retain_latest_user_image.then(|| {
+            messages.iter().rposition(|message| {
+                !Self::skip_message_for_model_send(message)
+                    && matches!(&message.content, MessageContent::Multimodal { images, .. } if !images.is_empty())
+            })
+        }).flatten();
 
         for (msg_idx, msg) in messages.iter().enumerate() {
             if !prepended_reminders_injected && msg_idx == first_non_system_index {
@@ -2415,13 +2432,18 @@ impl ExecutionEngine {
 
             match &msg.content {
                 MessageContent::Multimodal { text, images } => {
-                    if msg_idx < fresh && !images.is_empty() {
+                    if msg_idx < fresh && Some(msg_idx) != retained_user_image && !images.is_empty()
+                    {
                         let paths: Vec<&str> = images
                             .iter()
                             .filter_map(|image| image.image_path.as_deref())
                             .collect();
-                        let note =
-                            Self::historical_image_note(&paths, attach_images, &image_context);
+                        let note = Self::historical_image_note(
+                            &paths,
+                            attach_images,
+                            retain_latest_user_image,
+                            &image_context,
+                        );
                         result.push(AIMessage::user(format!("{text}\n\n{note}")));
                         continue;
                     }
@@ -2536,8 +2558,12 @@ impl ExecutionEngine {
                         } else {
                             view_path.into_iter().collect()
                         };
-                        let note =
-                            Self::historical_image_note(&paths, attach_images, &image_context);
+                        let note = Self::historical_image_note(
+                            &paths,
+                            attach_images,
+                            retain_latest_user_image,
+                            &image_context,
+                        );
                         if view_image_reply {
                             assistant_text = Some(note);
                         } else {
@@ -2583,9 +2609,16 @@ impl ExecutionEngine {
     fn historical_image_note(
         paths: &[&str],
         native_vision: bool,
+        view_image_unavailable: bool,
         context: &ToolUseContext,
     ) -> String {
         let mut note = String::from("[Earlier image pixels omitted.");
+        if view_image_unavailable {
+            note.push_str(
+                " Ask for a new attachment if the current task requires inspecting them.]",
+            );
+            return note;
+        }
         let paths: Vec<_> = paths
             .iter()
             .copied()
@@ -4837,16 +4870,34 @@ impl ExecutionEngine {
                 &model_fingerprint,
                 selected_pool.is_some(),
             );
-            let (ai_messages, image_turn_start) = Self::build_ai_messages_for_send(
+            let retain_latest_user_image = primary_supports_image_understanding
+                && (!enable_tools
+                    || context
+                        .runtime_tool_restrictions
+                        .denied_tool_names
+                        .contains("view_image")
+                    || !available_tools
+                        .iter()
+                        .chain(&deferred_tools)
+                        .any(|name| name == "view_image"));
+            let mut image_context = ToolUseContext::for_tool_listing(
+                context.workspace.clone(),
+                context.workspace_services.clone(),
+            );
+            image_context.session_id = Some(context.session_id.clone());
+            let (ai_messages, image_turn_start) = Self::build_ai_message_prefix_for_send(
                 &request_messages,
                 &ai_client.config.format,
-                context.workspace.as_ref(),
-                context.workspace_services.as_ref(),
+                image_context,
                 &context.dialog_turn_id,
+                Self::image_turn_start(&request_messages, &context.dialog_turn_id),
                 primary_supports_image_understanding,
+                retain_latest_user_image,
                 &send_prepended_reminders,
             )
             .await?;
+            model_request_context.retain_latest_user_image = retain_latest_user_image;
+            round_context.model_request_context.retain_latest_user_image = retain_latest_user_image;
 
             round_context.model_request_context.image_turn_start = Some(image_turn_start);
             round_context
@@ -6113,8 +6164,7 @@ mod tests {
         ContextCompressor, PromptCachePolicy, SessionContextStore, SessionManager,
         SessionManagerConfig, TokenAnchor, TokenAnchorInput,
     };
-    use crate::agentic::tools::ResolvedToolManifest;
-    use crate::agentic::tools::ToolRuntimeRestrictions;
+    use crate::agentic::tools::{ResolvedToolManifest, ToolRuntimeRestrictions, ToolUseContext};
     use crate::agentic::workspace::{local_workspace_services, WorkspaceBinding};
     use crate::infrastructure::PathManager;
 
@@ -6124,6 +6174,7 @@ mod tests {
     use crate::service::config::types::AIModelConfig;
     use crate::service::remote_ssh::workspace_state::workspace_session_identity;
     use crate::util::types::ToolDefinition;
+    use openbitfun_core_types::ModelRequestContext;
     use openbitfun_runtime_ports::{
         PermissionMode, WorkspaceDirEntry, WorkspaceFileSystem, WorkspacePathKind,
     };
@@ -6760,6 +6811,7 @@ mod tests {
             "inspection",
             0,
             true,
+            false,
             &[],
         )
         .await
@@ -6775,6 +6827,7 @@ mod tests {
             "followup",
             restored.len(),
             true,
+            false,
             &[],
         )
         .await
@@ -6785,6 +6838,69 @@ mod tests {
         assert!(text.contains("Workspace screenshot"));
         assert!(text.contains(&references[0]));
         assert!(!text.contains("may have changed"));
+    }
+
+    #[tokio::test]
+    async fn image_projection_without_view_tool_keeps_the_latest_upload_on_the_wire() {
+        use crate::agentic::execution::round_executor::tests::{
+            retry_test_success, RetryTestServer,
+        };
+        let server = RetryTestServer::new(vec![retry_test_success(), retry_test_success()]);
+        let image = crate::agentic::image_analysis::attachments::test_image();
+        let mut history =
+            vec![
+                Message::user_multimodal("Look at this screenshot".into(), vec![image])
+                    .with_turn_id("initial".into()),
+            ];
+        let client = server.client();
+        for turn in ["initial", "followup"] {
+            let (messages, boundary) = ExecutionEngine::build_ai_message_prefix_for_send(
+                &history,
+                "openai",
+                ToolUseContext::for_tool_listing(None, None),
+                turn,
+                Message::image_turn_start(&history, turn),
+                true,
+                true,
+                &[],
+            )
+            .await
+            .unwrap();
+            let response = client
+                .send_message_once_with_trace_and_request_context(
+                    messages,
+                    None,
+                    Some(ModelRequestContext {
+                        image_turn_start: Some(boundary),
+                        retain_latest_user_image: true,
+                        ..Default::default()
+                    }),
+                    None,
+                )
+                .await
+                .unwrap();
+            if turn == "initial" {
+                history.push(Message::assistant(response.text).with_turn_id("initial".into()));
+                history.push(
+                    Message::user("Read the value in the lower right".into())
+                        .with_turn_id("followup".into()),
+                );
+            }
+        }
+        let requests = server.requests.lock().unwrap();
+        assert_eq!(requests.len(), 2);
+        for body in requests.iter() {
+            assert!(body.get("tools").is_none());
+            let image_count = body["messages"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|message| message["content"].as_array())
+                .flatten()
+                .filter(|part| part["type"] == "image_url")
+                .count();
+            assert_eq!(image_count, 1);
+        }
     }
 
     #[tokio::test]

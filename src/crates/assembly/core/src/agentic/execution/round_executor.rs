@@ -2514,10 +2514,11 @@ impl RoundExecutor {
             })
             .collect();
 
-        let image_context = tool_context_runtime::ToolUseContext::for_tool_listing(
+        let mut image_context = tool_context_runtime::ToolUseContext::for_tool_listing(
             context.workspace.clone(),
             context.workspace_services.clone(),
         );
+        image_context.session_id = Some(context.session_id.clone());
         for message in &mut tool_result_messages {
             if let MessageContent::ToolResult {
                 image_attachments: Some(images),

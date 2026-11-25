@@ -658,6 +658,7 @@ mod tests {
         context
             .custom_data
             .insert("__openbitfun_test_runtime_root".into(), json!(root.path()));
+        context.session_id = Some("screenshot-session".into());
         let original = png_bytes(3, 2);
         let frame = crate::util::types::ToolImageAttachment {
             mime_type: "image/png".into(),
@@ -667,7 +668,17 @@ mod tests {
             .await
             .unwrap();
         let reference = &references[0];
-        assert!(reference.starts_with("openbitfun://runtime/workspace-remote/attachments/images/"));
+        assert!(reference.starts_with("openbitfun://current-session/attachments/images/"));
+        assert!(context
+            .resolve_tool_path(reference)
+            .unwrap()
+            .resolved_path
+            .starts_with(
+                root.path()
+                    .join("sessions/screenshot-session")
+                    .to_str()
+                    .unwrap()
+            ));
         let restored = restore_tool_images(&references, &context).await.unwrap();
         assert_eq!(restored[0].data_base64, frame.data_base64);
         let result = ViewImageTool::new()
