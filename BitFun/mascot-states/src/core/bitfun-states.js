@@ -140,8 +140,8 @@
 <linearGradient id="mf${u}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff" stop-opacity=".6"/><stop offset=".3" stop-color="#fff" stop-opacity="0"/><stop offset=".8" stop-color="#fff" stop-opacity="0"/><stop offset="1" stop-color="#fff" stop-opacity=".3"/></linearGradient>
 <linearGradient id="bs${u}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff" stop-opacity=".22"/><stop offset=".45" stop-color="#fff" stop-opacity="0"/><stop offset="1" stop-color="#000" stop-opacity=".28"/></linearGradient>
 <filter color-interpolation-filters="sRGB" id="tb${u}" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="${x.plush ? 3.6 : 2.6}"/></filter>
-<filter color-interpolation-filters="sRGB" id="fz${u}" x="-12%" y="-12%" width="124%" height="124%"><feTurbulence type="fractalNoise" baseFrequency=".85" numOctaves="3" seed="5" result="n"/><feDisplacementMap in="SourceGraphic" in2="n" scale="2.8" xChannelSelector="R" yChannelSelector="G"/></filter>
-<filter color-interpolation-filters="sRGB" id="fur${u}" x="0" y="0" width="100%" height="100%"><feTurbulence type="fractalNoise" baseFrequency="1.5 2.4" numOctaves="3" seed="9" result="n"/><feColorMatrix in="n" type="matrix" values="0 0 0 0 ${fr} 0 0 0 0 ${fg} 0 0 0 0 ${fb} 0 0 0 2.2 -.95" result="a"/><feGaussianBlur in="a" stdDeviation=".35" result="ab"/><feComposite in="ab" in2="SourceAlpha" operator="in"/></filter>
+<filter color-interpolation-filters="sRGB" id="fz${u}" x="-25%" y="-25%" width="150%" height="150%"><feTurbulence type="fractalNoise" baseFrequency=".62" numOctaves="2" seed="5" result="n"/><feDisplacementMap in="SourceGraphic" in2="n" scale="1.7" xChannelSelector="R" yChannelSelector="G" result="d"/><feGaussianBlur in="d" stdDeviation=".28"/></filter>
+<filter color-interpolation-filters="sRGB" id="fur${u}" x="0" y="0" width="100%" height="100%"><feTurbulence type="fractalNoise" baseFrequency="1.5 2.4" numOctaves="3" seed="9" result="n"/><feColorMatrix in="n" type="matrix" values="0 0 0 0 ${fr} 0 0 0 0 ${fg} 0 0 0 0 ${fb} 0 0 0 2.2 -.95" result="a"/><feGaussianBlur in="a" stdDeviation=".55" result="ab"/><feComposite in="ab" in2="SourceAlpha" operator="in"/></filter>
 </defs>`;
   }
 
@@ -160,7 +160,7 @@
       return plush ? `<g filter="url(#fz${u})">${f}</g>` : f;
     }
     const e = edgeOf(P.side);
-    let g = `${e ? `<path d="${SIL}" fill="${e}" stroke="${e}" stroke-width="${sw + 2.6}" stroke-linejoin="round"/>` : ''}<path d="${SIL}" fill="${P.side}" stroke="${P.side}" stroke-width="${sw}" stroke-linejoin="round"/>
+    let g = `${e ? (plush ? `<path d="${SIL}" fill="${e}" stroke="${e}" stroke-width="${sw + 3}" stroke-linejoin="round" opacity=".55" filter="url(#tb${u})"/>` : `<path d="${SIL}" fill="${e}" stroke="${e}" stroke-width="${sw + 2.6}" stroke-linejoin="round"/>`) : ''}<path d="${SIL}" fill="${P.side}" stroke="${P.side}" stroke-width="${sw}" stroke-linejoin="round"/>
 <path d="${LEFT}" fill="${P.sideL}" filter="url(#tb${u})"/>
 <path d="${TOP}" fill="url(#tg${u})"${P.crisp ? '' : ` filter="url(#tb${u})"`}/>
 <path d="M60 69.2 L87 53.6 L87 77.6 L60 93.2Z" fill="url(#rf${u})" filter="url(#tb${u})"/>${e ? `<path d="M60 69.2 L87 53.6 L87 77.6 L60 93.2Z" fill="#000" opacity=".035" filter="url(#tb${u})"/><path d="${LEFT}" fill="#000" opacity=".07" filter="url(#tb${u})"/>` : ''}
