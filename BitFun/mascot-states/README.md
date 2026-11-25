@@ -1,0 +1,79 @@
+# 毕方形象 · 多状态设计与配色
+
+OpenBitFun 吉祥物“毕方”的设计稿与生成代码。形象以等距视角的圆角方块为底座：顶面一根短天线和天线球，右侧面一对竖椭圆眼睛。天线球的颜色表示 Agent 当前的工作状态，共 14 个状态。
+
+## 快速查看
+
+直接用浏览器打开 `bitfun-mascot.html`。这是合成后的完整单文件，无需联网或本地服务，依次包含三个章节：
+
+| 章节 | 内容 | 独立页面 |
+|---|---|---|
+| 01 自己搭配 | 用户选择身体和天线球颜色；实时预览 3D、平面、6 个状态、小尺寸图标；4 项可读性检查；导出 SVG 和配色 JSON | `dist/pages/customize.html` |
+| 02 配色方案 | 主推方案 R（单色 + 设计系统身份色 + AI 光晕 + 高饱和，21 套），以及备选方案 | `dist/pages/palettes.html` |
+| 03 形象与状态 | 形象构成、参考 Meta Muse 的思路、14 个状态、色卡与搭配校验、小尺寸规则、产品内示意、使用规则 | `dist/pages/states.html` |
+
+## 目录结构
+
+```
+mascot-states/
+├── README.md
+├── package.json
+├── bitfun-mascot.html         完整单文件（由 build.js 生成并随仓库提交，勿手改）
+├── src/                       源码（只改这里）
+│   ├── build.js               构建脚本
+│   ├── shell.html             合成单文件的外壳（标题、章节导航）
+│   ├── core/
+│   │   └── bitfun-states.js   形象生成器：14 个状态、配色、质感、视图，输出 SVG 字符串
+│   ├── tokens/
+│   │   └── openbitfun-tokens.json  从 OpenBitFun 设计系统摘录的 token
+│   └── pages/
+│       ├── customize.html     01 自己搭配
+│       ├── palettes.html      02 配色方案
+│       └── states.html        03 形象与状态
+├── dist/                      构建产物（由 build.js 生成；仓库 .gitignore 忽略 dist，不提交）
+│   ├── pages/                 三个章节的独立页面
+│   └── assets/
+│       ├── svg/               完整版 SVG（含道具），按“视图-质感-配色”分目录
+│       ├── svg-compact/       去掉道具的中尺寸版
+│       ├── svg-icon/          32px 以下使用的平面图标版
+│       ├── bitfun-colors.css  内置 6 套配色的 CSS 变量
+│       └── bitfun-colors.json 同上，JSON 格式
+└── docs/
+    └── eye-options-done-offline.png   “完成 / 离线”眼型的候选对比
+```
+
+## 构建
+
+需要 Node.js 18 及以上，无第三方依赖。
+
+```bash
+npm run build        # 等同于 node src/build.js
+```
+
+构建会更新 `bitfun-mascot.html`，并清空、重新生成 `dist/`（三个独立页面、756 个 SVG、色卡）。`dist/` 不随仓库提交，需要 SVG 时在本地构建一次即可。
+
+## 设计要点
+
+- **身体**：等距圆角方块，所有状态形体一致，只允许压扁、晃动这类弹性形变。3D 有光滑、金属、毛绒三种质感；平面视图只有纯色一种。
+- **天线球 = 状态灯**：思考紫、执行蓝、需要你琥珀、完成绿、异常红、离线灰。球内不放任何图标，只靠颜色和动效区分状态。待命色必须避开这几个色相。
+- **眼睛**：按身体的感知亮度自动选择，OKLab L < 0.70 用白眼，否则用黑眼；内置的身体颜色在浅色、深色主题下眼睛对比度都不低于 3:1；用户自定义颜色时由“自己搭配”的检查项提示。眼型包括常态、放大、专注、眯眼、亮眼（完成）、眼缝（离线）、`> <`（异常）。
+- **浅色身体**：相对亮度 > 0.72 时自动加一圈同色系细轮廓，避免在浅底上消失。
+- **尺寸分级**：≥ 64px 显示完整道具；32–63px 去掉道具；< 32px 自动切换为平面图标版。
+
+## 与 OpenBitFun 设计系统的关系
+
+- 页面样式（背景、文字、描边、圆角、间距、字号）全部使用 `--openbitfun-*` 变量，数值来自 `src/tokens/openbitfun-tokens.json`。
+- token 来源：仓库 `Cinnnnnnndy/OpenBitFun`，分支 `feat/mobile-design-lab-fusion`，路径 `design-system/packages/theme-openbitfun/src/*.tokens.json` 与 `design-system/packages/design-tokens/src/system.tokens.json`。设计系统更新后，请同步这个文件再重新构建。
+- 身体颜色中只有设计系统身份色（`color.identity.project.*`）是 token；状态球使用 `color.status.*.emphasis`。
+
+### 待确认
+
+- “思考”状态没有对应的状态 token，暂用 `color.accent.secondary`。
+- 中性色、高饱和色、AI 光晕色（主推方案里标“非 token”的颜色）尚未进入设计系统；进入产品前需要补充 token 或替换。
+- 页面是静态设计稿，交互控件使用原生表单元素，没有使用 `@openbitfun/ui` 组件；如需放入 Design Lab，需要用库组件重写。
+- 形象内部的明暗、高光、毛绒纹理属于插画绘制，不对应 token。
+
+## 参考
+
+- Meta Muse 吉祥物 Jolly 的设计思路：[Axios](https://www.axios.com/2026/09/25/ai-doom-meta-muse-mascot)、[AGTP on X](https://x.com/AGTPinsights/status/2102636424550088886)
+- 配色趋势依据见“配色方案”章节底部的参考链接。

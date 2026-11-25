@@ -1,0 +1,383 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>毕方 BitFun · 多状态形象变体</title>
+<style>
+/*__TOKENS__*/
+:root{color-scheme:light}
+[data-openbitfun-design-system-root]{--ink:var(--openbitfun-color-content-primary);--sub:var(--openbitfun-color-content-secondary);--mute:var(--openbitfun-color-content-muted);--line:var(--openbitfun-color-border-subtle);--bg:var(--openbitfun-color-surface-scene);--card:var(--openbitfun-color-surface-raised)}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-size:15px;line-height:1.65;font-family:var(--openbitfun-font-family-sans);-webkit-font-smoothing:antialiased}
+.wrap{max-width:1180px;margin:0 auto;padding:56px 32px 96px}
+h1{font-size:34px;line-height:1.25;margin:0 0 10px;letter-spacing:-.01em}
+h2{font-size:22px;margin:0 0 6px}
+.lead{color:var(--sub);max-width:760px;margin:0}
+.eyebrow{font-size:12px;letter-spacing:.12em;color:var(--mute);text-transform:uppercase;margin-bottom:10px}
+section{margin-top:64px}
+.sec-desc{color:var(--sub);margin:0 0 24px;max-width:780px}
+
+/* hero */
+.hero{display:grid;grid-template-columns:300px 1fr;gap:40px;align-items:center;margin-top:36px}
+.hero-fig{background:var(--card);border:1px solid var(--line);border-radius:28px;aspect-ratio:1;display:grid;place-items:center;position:relative}
+.hero-fig svg{width:78%}
+.hero-fig .tag{position:absolute;left:16px;top:14px;font-size:12px;color:var(--mute)}
+.dna{display:grid;grid-template-columns:repeat(2,1fr);gap:14px}
+.dna div{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:16px 18px}
+.dna b{display:block;font-size:15px;margin-bottom:2px}
+.dna span{color:var(--sub);font-size:13.5px}
+.dna i{font-style:normal;display:inline-block;width:12px;height:12px;border-radius:50%;vertical-align:-1px;margin-right:6px}
+
+/* muse principles */
+.muse{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
+.muse .p{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:18px}
+.muse .n{font-size:12px;color:var(--mute)}
+.muse h3{font-size:16px;margin:4px 0 6px}
+.muse p{margin:0;color:var(--sub);font-size:13.5px}
+.muse .to{margin-top:12px;padding-top:12px;border-top:1px dashed var(--line);font-size:13.5px}
+.muse .to em{font-style:normal;color:var(--mute);font-size:12px;display:block}
+
+/* legend */
+.legend{display:flex;flex-wrap:wrap;gap:10px;margin-bottom:28px}
+.legend span{display:inline-flex;align-items:center;gap:8px;padding:6px 14px 6px 10px;background:var(--card);border:1px solid var(--line);border-radius:999px;font-size:13px}
+.legend i{width:12px;height:12px;border-radius:50%}
+
+/* state cards */
+.group-title{display:flex;align-items:center;gap:10px;margin:34px 0 14px;font-weight:600}
+.group-title i{width:10px;height:10px;border-radius:50%}
+.group-title small{font-weight:400;color:var(--mute)}
+.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:16px}
+@media (max-width:1100px){.grid{grid-template-columns:repeat(3,1fr)}}
+@media (max-width:820px){.grid{grid-template-columns:repeat(2,1fr)}}
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--openbitfun-radius-2xl);overflow:hidden;display:flex;flex-direction:column;transition:box-shadow var(--openbitfun-motion-duration-base,.22s),transform var(--openbitfun-motion-duration-base,.22s)}
+.card:hover{box-shadow:0 12px 28px rgba(16,26,39,.08);transform:translateY(-2px)}
+.stage{--sc:#888;position:relative;display:grid;place-items:center;padding:44px 0 50px;overflow:hidden;
+  background:radial-gradient(70% 55% at 50% 34%,color-mix(in srgb,var(--sc) 16%,transparent),transparent 72%),linear-gradient(180deg,color-mix(in srgb,var(--sc) 5%,var(--openbitfun-color-surface-tertiary)),var(--openbitfun-color-surface-tertiary))}
+.stage svg{width:80%;overflow:visible;position:relative}
+.stage .cat{position:absolute;left:12px;top:12px;display:inline-flex;align-items:center;gap:6px;height:22px;padding:0 9px 0 7px;border-radius:999px;font-size:11.5px;font-weight:500;
+  color:color-mix(in srgb,var(--sc) 62%,var(--ink));background:color-mix(in srgb,var(--sc) 13%,var(--card));box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--sc) 22%,transparent)}
+.stage .cat i{width:6px;height:6px;border-radius:50%;background:var(--sc);box-shadow:0 0 0 3px color-mix(in srgb,var(--sc) 22%,transparent)}
+.stage .no{position:absolute;right:14px;top:14px;font-family:var(--openbitfun-font-family-mono);font-size:11px;letter-spacing:.04em;color:var(--mute)}
+.stage .pill{position:absolute;bottom:14px;left:50%;transform:translateX(-50%)}
+.meta{padding:16px 18px 18px;display:flex;flex-direction:column;gap:10px;border-top:1px solid var(--line)}
+.meta .t{display:flex;align-items:baseline;gap:8px}
+.meta .t b{font-size:16px;font-weight:600;letter-spacing:-.01em}
+.meta .t span{color:var(--mute);font-size:12px}
+.meta dl{margin:0;display:grid;gap:8px}
+.meta dt{font-size:11px;letter-spacing:.06em;color:var(--mute);margin-bottom:2px}
+.meta dd{margin:0;font-size:13px;line-height:1.6}
+.meta dd.when{color:var(--ink)}
+.meta dd.notes{color:var(--sub)}
+
+/* status pill */
+.pill{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 12px 0 4px;background:var(--card);border:1px solid var(--line);border-radius:999px;font-size:12.5px;white-space:nowrap;box-shadow:0 2px 8px rgba(20,24,33,.05)}
+.pill .av{width:22px;height:22px;display:block}
+.pill .av svg{width:100%;height:100%}
+.pill .lv{width:6px;height:6px;border-radius:50%;margin-left:2px;animation:lv 1.2s ease-in-out infinite}
+@keyframes lv{50%{opacity:.25}}
+
+/* sizes */
+.sizes{background:var(--card);border:1px solid var(--line);border-radius:22px;padding:8px 24px}
+.sizes .row{display:grid;grid-template-columns:90px repeat(14,1fr);align-items:center;gap:6px;padding:14px 0;border-bottom:1px solid var(--line)}
+.sizes .row:last-child{border-bottom:0}
+.sizes .lab{font-size:12.5px;color:var(--mute)}
+.sizes .cell{display:grid;place-items:center;font-size:11.5px;color:var(--sub);text-align:center}
+.sizes .cell svg{display:block}
+
+/* demo */
+.demo{display:grid;grid-template-columns:400px 1fr;gap:32px;align-items:start}
+.phone{background:var(--openbitfun-color-surface-raised);border:10px solid var(--ink);border-radius:44px;height:720px;position:relative;overflow:hidden;display:flex;flex-direction:column}
+.phone .top{height:94px;padding:44px 18px 0;display:flex;justify-content:center;align-items:flex-start;border-bottom:1px solid #F2F2F2}
+.phone .top .title{position:absolute;left:0;right:0;top:20px;text-align:center;font-size:12px;color:var(--mute)}
+.phone .msgs{flex:1;padding:18px 18px 0;overflow:hidden;display:flex;flex-direction:column;gap:14px}
+.bubble-u{align-self:flex-end;background:var(--openbitfun-color-surface-workbench);border-radius:18px 18px 4px 18px;padding:10px 14px;max-width:80%;font-size:14px}
+.arow{display:flex;gap:10px;align-items:flex-start}
+.arow .m{width:34px;height:34px;flex:none}
+.arow .m svg{width:100%;height:100%}
+.arow .txt{font-size:14px;padding-top:6px}
+.steps{list-style:none;margin:6px 0 0;padding:0;font-size:13px;color:var(--sub)}
+.steps li{padding:2px 0;display:flex;gap:8px;align-items:center}
+.steps li::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--openbitfun-color-border-default)}
+.steps li.on{color:var(--ink)}
+.steps li.on::before{background:currentColor}
+.hero-live{display:grid;place-items:center;height:210px;margin-top:auto}
+.hero-live svg{width:220px}
+.phone .composer{margin:12px 14px 18px;height:46px;border-radius:23px;background:var(--openbitfun-color-surface-workbench);display:flex;align-items:center;padding:0 16px;color:var(--mute);font-size:13px}
+.ctrl{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:18px}
+button{font:inherit;font-size:13.5px;border:1px solid var(--line);background:#fff;border-radius:999px;padding:8px 16px;cursor:pointer;color:var(--ink)}
+button.primary{background:var(--ink);color:#fff;border-color:var(--ink)}
+button.sel{border-color:var(--ink)}
+.timeline{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:18px 20px;font-size:13.5px;color:var(--sub)}
+.timeline ol{margin:8px 0 0;padding-left:18px}
+.timeline li{padding:3px 0}
+.timeline li.cur{color:var(--ink);font-weight:600}
+
+.rules{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+.rules div{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:18px;font-size:13.5px;color:var(--sub)}
+.rules b{display:block;color:var(--ink);font-size:15px;margin-bottom:4px}
+.matrix{display:grid;grid-template-columns:90px repeat(6,1fr);gap:12px;align-items:stretch}
+.matrix .rl{display:flex;align-items:center;font-size:13px;color:var(--sub)}
+.matrix .ch{font-size:13px;text-align:center;color:var(--ink)}
+.matrix .ch small{display:block;color:var(--mute);font-size:11.5px}
+.matrix .cell{background:var(--card);border:1px solid var(--line);border-radius:20px;aspect-ratio:1;display:grid;place-items:center;cursor:pointer;transition:border-color .15s,box-shadow .15s}
+.matrix .cell svg{width:78%}
+.matrix .cell:hover{border-color:var(--openbitfun-color-border-default)}
+.matrix .cell.on{border-color:var(--ink);box-shadow:0 0 0 2px var(--ink) inset}
+.bar{position:sticky;top:12px;z-index:5;margin:40px 0 -24px;display:flex;flex-wrap:wrap;gap:10px;align-items:center;background:rgba(255,255,255,.9);backdrop-filter:blur(10px);border:1px solid var(--line);border-radius:999px;padding:8px 10px;box-shadow:0 6px 20px rgba(20,24,33,.06)}
+.bar .lab{font-size:12.5px;color:var(--mute);padding:0 4px 0 8px}
+.bar .seg{display:inline-flex;background:var(--openbitfun-color-surface-workbench);border-radius:999px;padding:3px}
+.bar .seg button{border:0;background:transparent;padding:5px 14px;font-size:13px}
+.bar .seg button.on{background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.1)}
+.bar .sw{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);border-radius:999px;padding:4px 12px 4px 5px;font-size:13px;background:#fff;cursor:pointer}
+.bar .sw i{width:18px;height:18px;border-radius:50%;box-shadow:inset 0 0 0 1px rgba(0,0,0,.08);position:relative}
+.bar .sw i b{position:absolute;right:-2px;top:-2px;width:8px;height:8px;border-radius:50%;border:1.5px solid #fff}
+.bar .sw.on{border-color:var(--ink)}
+.cc-h{font-size:15px;margin:30px 0 12px;font-weight:600}
+.cc-h small{font-weight:400;color:var(--mute);font-size:12.5px;margin-left:8px}
+.sw-row{display:grid;grid-template-columns:repeat(7,1fr);gap:10px}
+.sw{background:var(--card);border:1px solid var(--line);border-radius:14px;overflow:hidden;font-size:12px}
+.sw .c{height:52px;border-bottom:1px solid var(--line)}
+.sw .t{padding:8px 10px;color:var(--sub);line-height:1.45}
+.sw .t b{display:block;color:var(--ink);font-weight:500}
+.st-row{display:grid;grid-template-columns:repeat(7,1fr);gap:10px}
+.st{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px;font-size:12px;color:var(--sub);line-height:1.5}
+.st .dot{width:34px;height:34px;border-radius:50%;margin-bottom:8px;box-shadow:inset 0 -4px 8px rgba(0,0,0,.12), inset 0 3px 6px rgba(255,255,255,.35)}
+.st b{display:block;color:var(--ink);font-size:13px}
+.st code{font-size:11.5px;color:var(--ink)}
+.pal-list{display:grid;gap:10px}
+.pal{display:grid;grid-template-columns:96px 140px 1fr;gap:16px;align-items:center;background:var(--card);border:1px solid var(--line);border-radius:18px;padding:10px 16px}
+.pal .fig svg{width:96px;height:96px;display:block}
+.pal .nm b{display:block;font-size:15px}.pal .nm span{color:var(--mute);font-size:12.5px}
+.pal .chips{display:flex;flex-wrap:wrap;gap:8px}
+.chip{display:flex;align-items:center;gap:8px;border:1px solid var(--line);border-radius:999px;padding:4px 12px 4px 4px;font-size:12px;color:var(--sub)}
+.chip i{width:22px;height:22px;border-radius:50%;box-shadow:inset 0 0 0 1px rgba(0,0,0,.08)}
+.chip code{color:var(--ink);font-size:11.5px}
+.mx2{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:6px 16px;overflow-x:auto}
+.mx2 .r{display:grid;grid-template-columns:110px repeat(7,1fr);gap:6px;align-items:center;padding:10px 0;border-bottom:1px solid var(--line);min-width:760px}
+.mx2 .r:last-child{border-bottom:0}
+.mx2 .h{font-size:12px;color:var(--mute);text-align:center}
+.mx2 .l{font-size:13px}
+.mx2 .c{display:flex;flex-direction:column;align-items:center;gap:2px;font-size:11px;color:var(--sub)}
+.mx2 .c svg{width:56px;height:56px}
+.mx2 .c code{font-size:10.5px}
+.adj{color:var(--openbitfun-color-status-warning-emphasis);font-size:10.5px}
+.adj-k{color:var(--openbitfun-color-status-warning-emphasis);font-weight:500}
+@media (max-width:900px){.sw-row,.st-row{grid-template-columns:repeat(3,1fr)}.pal{grid-template-columns:80px 1fr}.pal .chips{grid-column:1/-1}}
+.foot{margin-top:56px;color:var(--mute);font-size:12.5px}
+.foot a{color:var(--sub)}
+@media (max-width:900px){.hero,.demo{grid-template-columns:1fr}.muse,.rules{grid-template-columns:1fr 1fr}.sizes{overflow-x:auto}.sizes .row{min-width:900px}}
+</style>
+</head>
+<body data-openbitfun-design-system-root data-color-scheme="light">
+<div class="wrap">
+  <div class="eyebrow">OpenBitFun · Mascot System v1.0</div>
+  <h1>毕方 · 多状态形象变体</h1>
+  <p class="lead">以视频里的方块毕方为底座（等距圆角方块、白色短天线、侧面一对竖椭圆小眼），参考 Meta Muse 的吉祥物 Jolly 的做法，让形象从“装饰”变成“Agent 正在做什么”的可视化：14 个状态，覆盖感知思考、执行、需要你、结果与离线。3D 另有光滑 / 金属 / 毛绒三种质感，平面版只有纯色一种；内置 6 套配色（视频原版曜石黑 + 5 套明亮马卡龙），可在下方切换。</p>
+
+  <div class="hero">
+    <div class="hero-fig"><span class="tag" id="heroTag">视频原版 · 光滑曜石黑</span><div id="heroIdle"></div></div>
+    <div class="dna">
+      <div><b>身体 = 品牌识别</b><span><i style="background:#0B0B0D"></i>矮胖的等距大圆角方块：顶面柔光、边缘一道细高光、侧面明暗过渡，天线球带玻璃高光。可爱来自比例，高级来自材质。所有状态形体一致，只允许压扁、果冻晃动这类弹性形变。</span></div>
+      <div><b>天线球 = 状态灯</b><span>颜色区分大类（思考 / 执行 / 需要你 / 完成 / 异常 / 离线），动效区分细分状态。小到 18px 也认得出。</span></div>
+      <div><b>眼睛 = 注意力与情绪</b><span><i style="background:#fff;border:1px solid #ddd"></i>默认只有一对眼睛，长在右侧面并跟随等距透视，不画嘴、不画腮红。眼睛颜色按身体深浅自动选择（深色身体白眼、浅色身体黑眼）。7 种眼型：常态、放大、专注、眯眼、亮眼（完成）、眼缝（离线）、&gt;&lt;。视线方向告诉你它在看哪里。</span></div>
+      <div><b>道具 = 具体任务</b><span>键盘、清单、放大镜、终端、分身……只在 ≥64px 的大尺寸出现，小尺寸自动去掉。</span></div>
+    </div>
+  </div>
+
+  <section>
+    <h2>视图 × 质感 × 配色</h2>
+    <p class="sec-desc">同一个方块，两种视图：<b>3D</b> 等距视角用于主视觉、启动页、空状态；<b>平面</b>正视图只有一种：纯色、无质感、无阴影，用于图标、头像、状态胶囊、表情包这类小尺寸或扁平界面。三种质感只用在 3D 上，共 6 套配色（曜石黑 + 5 套明亮马卡龙）：<b>光滑</b>还原视频里的软胶质感，适合产品内的图标与状态；<b>金属</b>是带清晰环境反射带的亮面金属外壳，适合发布会、硬件和高规格场景；<b>毛绒</b>边缘有绒毛、天线球变成毛线球，更适合周边、贴纸、运营物料和 IP 传播。点任意一格即可把整页切换到该组合。</p>
+    <div class="matrix" id="matrix"></div>
+  </section>
+
+  <div class="bar" id="bar"></div>
+
+  <section>
+    <h2>从 Muse 借鉴什么</h2>
+    <p class="sec-desc">Muse 的吉祥物 Jolly 由设计师 Alex Cornell 设计，出发点是“怎么让用户看见后台 Agent 正在做什么”。我们借的是方法，不是长相。</p>
+    <div class="muse">
+      <div class="p"><div class="n">01</div><h3>形象在“干活”</h3><p>Jolly 在 App 顶部开心地敲键盘，状态就是动作本身，而不是一个旋转的 loading。</p><div class="to"><em>毕方转译</em>每个工作状态都配一个能看懂的动作：敲键盘、举清单、拿放大镜、盯终端。</div></div>
+      <div class="p"><div class="n">02</div><h3>形象 + 状态胶囊</h3><p>Muse 最早设计的 UI 就是顶部的 status pill，实时写着“正在查比分”这类具体动作。</p><div class="to"><em>毕方转译</em>形象负责情绪和类别，胶囊负责精确信息（文件名、进度、耗时）。两者永远成对出现。</div></div>
+      <div class="p"><div class="n">03</div><h3>极简五官承载情绪</h3><p>Jolly 只有豆豆眼、上扬嘴角和腮红，靠极少的元素传递亲和感。</p><div class="to"><em>毕方转译</em>比 Jolly 更克制：默认只用一对竖眼，情绪靠眼型和天线表达。另备一套“萌”表情（小嘴 + 腮红），留给贴纸、节日等轻松场景。</div></div>
+      <div class="p"><div class="n">04</div><h3>可延展的 IP</h3><p>GitHub、Spotify 等品牌给 Jolly 做了联名变体，用户也能自定义外观。</p><div class="to"><em>毕方转译</em>方块是稳定底座，质感、配色、天线球与道具都是可替换插槽；本文件的“自己搭配”就是让用户自行组合身体和天线球颜色。</div></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>色卡与搭配</h2>
+    <p class="sec-desc">形象的颜色从产品出发：底色与文字沿用 OpenBitFun 现有的暖白 / 暖灰体系，形象是界面里唯一大面积的彩色。天线球会随状态变色，所以每套身体配色都和 6 个状态色一起校过：同色系撞色时自动换成加深版，待命主色一律避开状态色相，保证“看颜色就知道状态”。</p>
+
+    <h3 class="cc-h">① 产品基底 <small>取自 openbitfun-mobile 的 CSS 变量，形象周边的文字、卡片、描边都用这一组</small></h3>
+    <div class="sw-row" id="ccBase"></div>
+
+    <h3 class="cc-h">② 状态色 <small>天线球专用，全配色通用；饱和度与明度统一；6 套配色内，待命色与状态色的最小色相间隔为 28°</small></h3>
+    <div class="st-row" id="ccStatus"></div>
+
+    <h3 class="cc-h">③ 身体配色 <small>每套 = 身体三面 + 眼睛 + 天线杆 + 待命主色；按套使用，不拆开混搭</small></h3>
+    <div class="pal-list" id="ccPal"></div>
+
+    <h3 class="cc-h">④ 搭配校验 <small>每套配色 × 每个状态的实际天线颜色；<b class="adj-k">加深</b> = 与身体同色系，已替换为加深版</small></h3>
+    <div class="mx2" id="ccMatrix"></div>
+
+    <div class="rules" style="margin-top:22px">
+      <div><b>身体弱化，彩色只给天线球</b>天线球会随状态变色，所以身体用明亮、干净的浅马卡龙色：提亮度、不加灰，暗面用同色相的深一档而不是灰色，球依然是最饱和的那个颜色。界面保持暖白 / 暖灰，球和胶囊圆点是唯一的彩色来源。</div>
+      <div><b>状态色不进身体</b>状态色只出现在天线球、胶囊圆点和少量道具上，从不给身体上色。</div>
+      <div><b>待命色避开状态色相</b>待命主色只从青、莓果紫红、青柠等“空闲色相”里选，不能是紫 / 蓝 / 琥珀 / 绿 / 红，否则会被误读成某个状态。</div>
+      <div><b>同色系自动加深</b>只在身体颜色较浓（如曜石黑之外的彩色身体、联名款）且与状态色相差 &lt; 30° 时，才换成该状态的加深版；当前开心果、天空蓝、香芋紫、蜜桃各有 1–2 个状态使用加深版，见上方校验表。</div>
+      <div><b>完成 = 产品成功色</b>“完成”的绿与产品 --status-success（#27C46A）同一色相，只是略提亮以配合马卡龙身体。</div>
+      <div><b>文字不用彩色</b>状态胶囊里的文字始终用墨色 #171717，只靠右侧小圆点带颜色。</div>
+    </div>
+  </section>
+
+  <section>
+    <h2>状态全集</h2>
+    <p class="sec-desc">按天线颜色分为 7 类，共 14 个状态。每张卡的底色、标签和道具里的线条都取自该状态当前的天线球颜色，切换配色时一起变化；底部是产品里配套的状态胶囊。</p>
+    <div class="legend" id="legend"></div>
+    <div id="groups"></div>
+  </section>
+
+  <section>
+    <h2>小尺寸可读性</h2>
+    <p class="sec-desc">在会话列表头像（18px）、状态胶囊（22px）这类位置，3D 的透视和明暗会糊成一团，所以 32px 以下自动换成平面图标版：正视、眼睛和天线球放大、去掉阴影与特效，只靠“球的颜色 + 眼型”区分状态。</p>
+    <div class="sizes" id="sizes"></div>
+  </section>
+
+  <section>
+    <h2>放进产品里看</h2>
+    <p class="sec-desc">模拟一次“帮我修复登录页报错”的任务流。顶部胶囊用小尺寸形象，会话里的大形象带道具。也可以点下方按钮单独查看任意状态。</p>
+    <div class="demo">
+      <div class="phone">
+        <div class="top"><div class="title">OpenBitFun · CindydeiMac.local</div><div id="demoPill"></div></div>
+        <div class="msgs">
+          <div class="bubble-u">登录页点提交就报错，帮我修一下</div>
+          <div class="arow"><div class="m" id="demoAv"></div><div class="txt"><div id="demoText">好的，我来看看。</div>
+            <ul class="steps" id="demoSteps"></ul></div></div>
+          <div class="hero-live" id="demoBig"></div>
+        </div>
+        <div class="composer">给毕方发消息…</div>
+      </div>
+      <div>
+        <div class="ctrl"><button class="primary" id="play">▶ 播放任务流程</button><button id="stop">暂停</button></div>
+        <div class="ctrl" id="pick"></div>
+        <div class="timeline"><b style="color:var(--ink)">流程</b><ol id="tl"></ol></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>使用规则</h2>
+    <div class="rules">
+      <div><b>一次只表达一件事</b>同一时刻只显示一个状态。并行任务用“多 Agent 协作”统一表达，不叠加多个道具。</div>
+      <div><b>情绪高点要克制</b>“完成”跳 2–3 次后回到待命；“出错”只摇一次并停住；“等你确认”是唯一持续吸引注意的状态。</div>
+      <div><b>状态切换 ≥ 600ms</b>短于 600ms 的步骤合并显示，避免形象抽搐；切换时只换天线颜色与眼型，身体不跳。</div>
+      <div><b>尺寸分级</b>≥64px：完整道具；32–63px：去掉道具；&lt;32px：自动切换为平面图标版——正视、眼睛和天线球放大、去掉阴影和天线特效，只靠球的颜色和眼型区分状态。</div>
+      <div><b>颜色只属于天线</b>状态色不染身体、不染眼睛。换配色时只换身体和待命主色，状态色（紫/蓝/琥珀/绿/红/灰）全套通用。</div>
+      <div><b>尊重减少动效</b>系统开启“减少动态效果”时全部静止，状态仍可通过天线颜色和眼型识别。</div>
+    </div>
+  </section>
+
+  <p class="foot">全部 SVG 由 <code>src/build.js</code> 生成到 <code>dist/assets/</code>：<code>svg/</code>（完整版，含道具）、<code>svg-compact/</code>（去掉道具的中尺寸版）、<code>svg-icon/</code>（32px 以下的平面图标版），按“视图-质感-配色”分目录，每个文件自带动画。<br>Muse / Jolly 资料来源：<a href="https://www.axios.com/2026/09/25/ai-doom-meta-muse-mascot">Axios</a>、<a href="https://x.com/AGTPinsights/status/2102636424550088886">AGTP on X</a>、<a href="https://news.cocoloop.cn/2026/10/ai-agent-mascots-dots-jolly/">Cocoloop</a>。</p>
+</div>
+
+<script>
+/*__BF__*/
+</script>
+<script>
+(function(){
+  const {STATES, CAT, PALETTES, BASE, STYLE, render, statusColor} = BF;
+  const st = document.createElement('style'); st.textContent = STYLE; document.head.appendChild(st);
+  const S = {finish:'smooth', palette:'obsidian', face:'refined', view:'iso'};
+  const VIEW = {iso:'3D', flat:'平面'};
+  const FACE = {refined:'克制', cute:'萌'};
+  const FIN = {smooth:'光滑', metal:'金属', plush:'毛绒'};
+  const R = (id, c, o) => render(id, Object.assign({noStyle:true, compact:!!c, finish:S.finish, palette:S.palette, face:S.face, view:S.view}, o||{}));
+  const byId = id => STATES.find(s => s.id === id);
+  const colorOf = id => statusColor(byId(id).cat, S.palette);
+  const pill = (id, text) => `<span class="pill"><span class="av">${R(id,1,{tiny:true})}</span><span>${text || byId(id).pill}</span><span class="lv" style="background:${colorOf(id)}"></span></span>`;
+  let curDemo = null;
+
+  // 质感 × 配色矩阵
+  const PK = Object.keys(PALETTES);
+  function drawMatrix(){
+    document.getElementById('matrix').innerHTML = '<div></div>' + PK.map(k => `<div class="ch">${PALETTES[k].name}<small>${PALETTES[k].note}</small></div>`).join('') +
+      [['iso','smooth'],['iso','metal'],['iso','plush'],['flat','smooth']].map(([v,f]) => `<div class="rl">${v==='flat' ? '平面' : VIEW[v] + ' · ' + FIN[f]}</div>` + PK.map(k => `<div class="cell ${S.view===v&&(v==='flat'||S.finish===f)&&S.palette===k?'on':''}" data-v="${v}" data-f="${f}" data-p="${k}">${R('idle',1,{finish:f,palette:k,view:v})}</div>`).join('')).join('');
+  }
+  document.getElementById('matrix').onclick = e => { const c = e.target.closest('.cell'); if(!c) return; S.view = c.dataset.v; set(c.dataset.f, c.dataset.p); };
+  function drawBar(){
+    document.getElementById('bar').innerHTML = `<span class="lab">视图</span><span class="seg">${['iso','flat'].map(v=>`<button data-v="${v}" class="${S.view===v?'on':''}">${VIEW[v]}</button>`).join('')}</span><span class="lab">表情</span><span class="seg">${['refined','cute'].map(f=>`<button data-face="${f}" class="${S.face===f?'on':''}">${FACE[f]}</button>`).join('')}</span><span class="lab">质感</span><span class="seg" style="${S.view==='flat'?'opacity:.35;pointer-events:none':''}">${['smooth','metal','plush'].map(f=>`<button data-f="${f}" class="${S.finish===f?'on':''}">${FIN[f]}</button>`).join('')}</span>
+      <span class="lab">配色</span>${PK.map(k=>{const P=PALETTES[k];return `<span class="sw ${S.palette===k?'on':''}" data-p="${k}"><i style="background:${P.side}"><b style="background:${P.accent}"></b></i>${P.name}</span>`}).join('')}`;
+  }
+  document.getElementById('bar').onclick = e => { const b = e.target.closest('[data-f],[data-p],[data-face],[data-v]'); if(!b) return; if (b.dataset.face) S.face = b.dataset.face; if (b.dataset.v) S.view = b.dataset.v; set(b.dataset.f || S.finish, b.dataset.p || S.palette); };
+
+  function drawAll(){
+    drawMatrix(); drawBar();
+    document.getElementById('heroIdle').innerHTML = R('idle', 1);
+    document.getElementById('heroTag').textContent = (S.view==='iso'&&S.finish==='smooth'&&S.palette==='obsidian' ? '视频原版 · ' : '') + VIEW[S.view] + (S.view==='flat' ? '' : ' · ' + FIN[S.finish]) + ' · ' + PALETTES[S.palette].name + (S.face==='cute' ? ' · 萌' : '');
+    document.getElementById('legend').innerHTML = Object.values(CAT).map(c => { const col = statusColor(c.key, S.palette); return `<span><i style="background:${col}"></i>${c.name}<small style="color:var(--mute)">${col}</small></span>`; }).join('');
+    drawColors(); drawGroups(); drawSizes(); if (curDemo) show(curDemo.f, curDemo.i);
+  }
+  function drawColors(){
+    const catKeys = Object.keys(CAT);
+    document.getElementById('ccBase').innerHTML = Object.entries(BASE).map(([k,v]) => `<div class="sw"><div class="c" style="background:${v.hex}"></div><div class="t"><b>${v.name}</b>${v.hex}</div></div>`).join('');
+    document.getElementById('ccStatus').innerHTML = catKeys.map(k => { const c = CAT[k], col = statusColor(k, S.palette); return `<div class="st"><div class="dot" style="background:${col}"></div><b>${c.name}</b><code>${k==='idle'?col+' · 随配色':c.color+' / 加深 '+c.deep}</code><br>${c.hue}<br>${c.mean}</div>`; }).join('');
+    const chip = (hex, lab) => `<span class="chip"><i style="background:${hex}"></i>${lab} <code>${hex}</code></span>`;
+    document.getElementById('ccPal').innerHTML = PK.map(k => { const P = PALETTES[k]; const ov = Object.keys(CAT).filter(c => BF.isDeep(c,k)).map(c => chip(statusColor(c,k), CAT[c].name + '·加深')).join('');
+      return `<div class="pal"><div class="fig">${R('idle',1,{palette:k,face:'refined'})}</div><div class="nm"><b>${P.name}</b><span>${P.note}</span></div>
+      <div class="chips">${chip(P.top1,'顶面亮')}${chip(P.side,'身体')}${chip(P.sideL,'暗面')}${chip(P.eye,'眼睛')}${chip(P.stem,'天线杆')}${chip(P.accent,'待命主色')}${ov}</div></div>`; }).join('');
+    document.getElementById('ccMatrix').innerHTML = `<div class="r"><div></div>${catKeys.map(k => `<div class="h">${CAT[k].name}</div>`).join('')}</div>` +
+      PK.map(k => { const P = PALETTES[k]; const rep = {idle:'idle',think:'thinking',work:'coding',ask:'awaiting',ok:'done',err:'error',off:'sleeping'};
+        return `<div class="r"><div class="l">${P.name}</div>${catKeys.map(c => { const col = statusColor(c,k), adj = BF.isDeep(c,k);
+          return `<div class="c">${R(rep[c],1,{palette:k})}<code>${col}</code>${adj ? '<span class="adj">加深</span>' : ''}</div>`; }).join('')}</div>`; }).join('');
+  }
+  function set(f, p){ S.finish = f; S.palette = p; drawAll(); }
+
+  // groups
+  const order = ['idle','think','work','ask','ok','err','off'];
+  const sorted = order.flatMap(k => STATES.filter(s => s.cat === k));
+  function drawGroups(){ document.getElementById('groups').innerHTML = `<div class="grid">${sorted.map((s, n) => { const c = Object.assign({}, CAT[s.cat], {color: colorOf(s.id)}); return `<div class="card"><div class="stage" style="--sc:${c.color}"><span class="cat"><i></i>${c.name}</span><span class="no">${String(n+1).padStart(2,'0')}</span>${R(s.id)}${pill(s.id)}</div>
+      <div class="meta"><div class="t"><b>${s.name}</b><span>${s.en}</span></div><dl><div><dt>出现时机</dt><dd class="when">${s.when}</dd></div><div><dt>设计要点</dt><dd class="notes">${s.notes}</dd></div></dl></div></div>`; }).join('')}</div>`; }
+
+  // sizes
+  const sizes = [56, 32, 22, 18];
+  function drawSizes(){ document.getElementById('sizes').innerHTML =
+    `<div class="row"><div class="lab"></div>${STATES.map(s => `<div class="cell">${s.name}</div>`).join('')}</div>` +
+    sizes.map(px => `<div class="row"><div class="lab">${px}px</div>${STATES.map(s => `<div class="cell"><div style="width:${px}px;height:${px}px">${R(s.id,1,px<32?{tiny:true}:{})}</div></div>`).join('')}</div>`).join(''); }
+
+  // demo
+  const FLOW = [
+    {id:'listening', t:'正在听你说…', d:1800},
+    {id:'thinking', t:'我先想一下问题可能出在哪。', d:2200},
+    {id:'planning', t:'拆成 3 步来做：', d:2600, steps:['复现报错','定位原因','修复并验证']},
+    {id:'searching', t:'正在读取 auth/ 目录下的 12 个文件…', d:2600, on:0},
+    {id:'debugging', t:'找到了：token 为空时调用了 .split()。', d:2600, on:1, pill:'定位问题 · TypeError'},
+    {id:'coding', t:'正在修改 src/auth/login.ts', d:2800, on:2, pill:'编辑 src/auth/login.ts'},
+    {id:'running', t:'跑一遍登录相关的测试。', d:2600, on:2},
+    {id:'awaiting', t:'改动涉及 2 个文件，确认后我就提交。', d:3000, on:2},
+    {id:'done', t:'修好了，测试全部通过 ✓', d:3200, on:3, pill:'已完成 · 修改 2 个文件'},
+    {id:'idle', t:'还有什么需要我做的？', d:2400, on:3}
+  ];
+  let steps = [], timer = null, i = 0;
+  const tl = document.getElementById('tl');
+  tl.innerHTML = FLOW.map(f => `<li>${byId(f.id).name}</li>`).join('');
+  function show(f, idx){
+    curDemo = {f, i: idx};
+    document.getElementById('demoPill').innerHTML = pill(f.id, f.pill);
+    document.getElementById('demoAv').innerHTML = R(f.id,1);
+    document.getElementById('demoBig').innerHTML = R(f.id);
+    document.getElementById('demoText').textContent = f.t || byId(f.id).pill;
+    if (f.steps) steps = f.steps;
+    document.getElementById('demoSteps').innerHTML = steps.map((s,k) => `<li class="${f.on!=null && k<=f.on ? 'on':''}" style="${f.on!=null && k<=f.on ? 'color:'+colorOf(f.id):''}"><span style="color:var(--ink)">${s}</span></li>`).join('');
+    [...tl.children].forEach((li,k) => li.classList.toggle('cur', k===idx));
+    [...document.querySelectorAll('#pick button')].forEach(b => b.classList.toggle('sel', b.dataset.id===f.id));
+  }
+  function step(){ show(FLOW[i], i); const d = FLOW[i].d; i = (i+1) % FLOW.length; if (i===0) steps=[]; timer = setTimeout(step, d); }
+  document.getElementById('play').onclick = () => { clearTimeout(timer); i = 0; steps = []; step(); };
+  document.getElementById('stop').onclick = () => clearTimeout(timer);
+  document.getElementById('pick').innerHTML = STATES.map(s => `<button data-id="${s.id}">${s.name}</button>`).join('');
+  document.getElementById('pick').onclick = e => { const id = e.target.dataset && e.target.dataset.id; if(!id) return; clearTimeout(timer); [...tl.children].forEach(li=>li.classList.remove('cur')); steps=[]; show({id}, -1); };
+  drawAll(); clearTimeout(timer); i = 0; steps = []; step();
+})();
+</script>
+</body>
+</html>
