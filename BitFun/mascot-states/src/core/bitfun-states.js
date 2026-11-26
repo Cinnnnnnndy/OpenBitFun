@@ -114,6 +114,16 @@
 @keyframes bf-flow{to{stroke-dashoffset:-12}}
 .bf .mini1{animation:bf-f 2.6s ease-in-out infinite}
 .bf .mini2{animation:bf-f 2.6s ease-in-out -1.3s infinite}
+.bf .ac-breathe{animation:bf-acb 3.2s ease-in-out infinite;transform-origin:center}
+@keyframes bf-acb{0%,100%{opacity:.45;transform:scale(.85)}50%{opacity:1;transform:scale(1)}}
+.bf .ac-ping{animation:bf-acp 1.8s ease-out infinite;transform-origin:center}
+@keyframes bf-acp{0%{opacity:.8;transform:scale(.4)}100%{opacity:0;transform:scale(1.25)}}
+.bf .ac-draw{stroke-dasharray:30;animation:bf-acd 2.6s ease-in-out infinite both}
+@keyframes bf-acd{0%{stroke-dashoffset:30}35%,85%{stroke-dashoffset:0;opacity:1}100%{stroke-dashoffset:0;opacity:0}}
+.bf .ac-travel{animation:bf-act 2s ease-in-out infinite}
+@keyframes bf-act{0%,100%{transform:translateX(-5px)}50%{transform:translateX(5px)}}
+.bf .ac-spin{animation:bf-spin 3s linear infinite;transform-origin:center}
+.bf .ac-spin-r{animation:bf-spin 4.5s linear infinite reverse;transform-origin:center}
 @media (prefers-reduced-motion: reduce){.bf *{animation:none!important}}
 `;
 
@@ -345,23 +355,24 @@
          <rect class="caret" x="107.5" y="60" width="6" height="1.8" rx=".9" fill="#E8EAEE"/>
          <rect x="101" y="69" width="30" height="4" rx="2" fill="#3A3F4B"/>
          <rect class="prog" x="101" y="69" width="30" height="4" rx="2" fill="${c}"/>`];
-      case 'debugging': return [B, antenna(x, c, ['pulse']), eyes(x, 'focus', { dx: -2, dy: 1.5 }), soft(x), mouth(x, 'wavy'),
-        !compact && `<g transform="translate(8 0)"><g class="crawl"><g transform="translate(-4 104)">
-           <g stroke="${C.ink}" stroke-width="1.3" stroke-linecap="round"><path d="M-6 -2 l-3 -2 M-6 1 l-3.5 0 M-6 4 l-3 2 M6 -2 l3 -2 M6 1 l3.5 0 M6 4 l3 2 M-2 -7 l-2 -3 M2 -7 l2 -3"/></g>
-           <circle cx="0" cy="-5.5" r="3" fill="${C.ink}"/><ellipse cx="0" cy="1" rx="6.2" ry="6.6" fill="#EF5A4C"/>
-           <line x1="0" y1="-5" x2="0" y2="7.5" stroke="${C.ink}" stroke-width="1"/><circle cx="-2.6" cy="0" r="1.2" fill="${C.ink}"/><circle cx="2.8" cy="3" r="1.2" fill="${C.ink}"/>
-         </g></g>
-         <line x1="5" y1="93" x2="12" y2="86" stroke="${C.ink}" stroke-width="3.6" stroke-linecap="round"/>
-         <circle cx="-3" cy="101" r="11" fill="${c}" fill-opacity=".1" stroke="${C.ink}" stroke-width="2.6"/></g>`,
-        !compact && hand(x, 22, 85),
-        !compact && `<path class="sweat" d="M97 38 q3.5 5 0 7 q-3.5 -2 0 -7z" fill="#9CCBF5"/>`];
-      case 'collab': return [
-        !compact && `<path class="flow" d="M60 19 Q0 10 -9.6 77" fill="none" stroke="${c}" stroke-width="1.6"/>
-         <path class="flow" d="M60 19 Q120 10 129.6 77" fill="none" stroke="${c}" stroke-width="1.6"/>
-         <circle r="2.4" fill="${c}"><animateMotion dur="1.6s" repeatCount="indefinite" path="M60 19 Q0 10 -9.6 77"/></circle>
-         <circle r="2.4" fill="${c}"><animateMotion dur="1.6s" begin=".8s" repeatCount="indefinite" path="M60 19 Q120 10 129.6 77"/></circle>`,
-        B, antenna(x, c, ['pulse']), eyes(x, 'normal', { cls: 'lookLR' }), soft(x), mouth(x, 'smile'),
-        !compact && mini(x, -30, 70, '#8B7CF6', 'mini1'), !compact && mini(x, 109.2, 70, x.P.accent, 'mini2')];
+      // 调试：右侧代码卡，一行报错（红色波浪线）被替换成修好的一行
+      case 'debugging': return [B, antenna(x, c, ['pulse']), eyes(x, 'focus', { dx: 1.5, dy: 1 }), soft(x), mouth(x, 'wavy'),
+        !compact && `<rect x="96" y="38" width="40" height="46" rx="6" fill="#fff" filter="url(#ps${x.u})"/>
+         <g fill="${tint(c, .72)}">${[47, 53, 71, 77].map((y, i) => `<rect x="101" y="${y}" width="${[24, 18, 26, 14][i]}" height="2.6" rx="1.3"/>`).join('')}</g>
+         <rect x="99" y="58" width="34" height="10" rx="3" fill="#EF5A4C" opacity=".1" class="flash"/>
+         <rect x="101" y="60" width="22" height="2.6" rx="1.3" fill="#EF5A4C" opacity=".85"/>
+         <path d="M101 65.4 q1.4 -1.6 2.8 0 t2.8 0 t2.8 0 t2.8 0 t2.8 0 t2.8 0 t2.8 0" fill="none" stroke="#EF5A4C" stroke-width="1" stroke-linecap="round"/>
+         <rect class="code" x="101" y="60" width="22" height="2.6" rx="1.3" fill="${c}"/>`];
+      // 协作：两只迷你分身在两侧，细连线 + 流动的数据点
+      case 'collab': {
+        const L = [-0.8, 66], Rr = [121.2, 66], from = [60, 18];
+        const path = ([tx, ty]) => `M${from[0]} ${from[1]} Q${(from[0] + tx) / 2} ${from[1] - 4} ${tx} ${ty}`;
+        return [
+          !compact && [L, Rr].map((p, k) => `<path d="${path(p)}" fill="none" stroke="${c}" stroke-opacity=".35" stroke-width="1" stroke-dasharray="1.5 3"/>
+           <circle r="1.8" fill="${c}"><animateMotion dur="2s" begin="${k}s" repeatCount="indefinite" path="${path(p)}"/></circle>`).join(''),
+          B, antenna(x, c, ['pulse']), eyes(x, 'normal', { cls: 'lookLR' }), soft(x), mouth(x, 'smile'),
+          !compact && mini(x, -21.2, 58, '#8B7CF6', 'mini1'), !compact && mini(x, 100.8, 58, x.P.accent, 'mini2')];
+      }
       case 'awaiting': return [B, antenna(x, c, ['flash']), eyes(x, 'wide'), blush(x), mouth(x, 'o'),
         !compact && `<g class="wave"><path d="M91 68 Q103 62 106 50" fill="none" stroke="${x.P.side}" stroke-width="7" stroke-linecap="round"/><circle cx="106.5" cy="47" r="5.2" fill="${x.P.hand}"/></g>
          <g class="pulse"><circle cx="126" cy="32" r="8.5" fill="${c}"/><rect x="124.6" y="26.5" width="2.8" height="7" rx="1.4" fill="#fff"/><circle cx="126" cy="36.6" r="1.6" fill="#fff"/></g>`];
@@ -396,6 +407,32 @@
     return isDeep(cat, palette) ? CAT[cat].deep : CAT[cat].color;
   }
 
+  /* ---------- 点缀：替代卡通道具的线框小标记（opt.accent） ---------- */
+  // 线框图形本身，坐标范围约 ±10；bg=true 时线宽不随缩放变粗，用于大尺寸背景纹样
+  function accentGlyph(id, c, bg = false) {
+    const L = `fill="none" stroke="${c}" stroke-width="${bg ? 1.3 : 1.6}"${bg ? ' vector-effect="non-scaling-stroke"' : ''} stroke-linecap="round" stroke-linejoin="round"`;
+    const k = bg ? .5 : 1; // 背景版：实心点缩小，保持线稿感
+    return {
+      idle: `<circle r="7" ${L} opacity=".35"/><circle class="ac-breathe" r="${3 * k}" fill="${c}"/>`,
+      listening: [-6, -2, 2, 6].map((x, i) => `<line class="eq ${['', 'e2', 'e3', 'e2'][i]}" x1="${x}" y1="-7" x2="${x}" y2="7" ${L}/>`).join(''),
+      thinking: [-6, 0, 6].map((x, i) => `<circle class="dot ${['', 'd2', 'd3'][i]}" cx="${x}" cy="0" r="${1.9 * k}" fill="${c}"/>`).join(''),
+      reasoning: `<g class="ac-spin"><path d="M0 -8 A8 8 0 0 1 8 0" ${L}/><path d="M0 8 A8 8 0 0 1 -8 0" ${L}/></g><g class="ac-spin-r"><path d="M4 0 A4 4 0 0 1 0 4" ${L} opacity=".55"/><path d="M-4 0 A4 4 0 0 1 0 -4" ${L} opacity=".55"/></g>`,
+      planning: [-6, 0, 6].map((y, i) => `<path class="chk ${['', 'k2', 'k3'][i]}" d="M-8 ${y} l1.6 1.6 l2.8 -3" ${L}/><line x1="-1" y1="${y}" x2="${[8, 5, 7][i]}" y2="${y}" ${L} opacity=".45"/>`).join(''),
+      coding: `<path d="M-4 -6 L-9 0 L-4 6 M4 -6 L9 0 L4 6" ${L}/><line class="caret" x1="1.4" y1="-6" x2="-1.4" y2="6" ${L}/>`,
+      searching: `<g class="sweep"><circle cx="-2" cy="-2" r="5.2" ${L}/><line x1="1.8" y1="1.8" x2="6" y2="6" ${L}/></g>`,
+      running: bg ? `<line x1="-9" y1="0" x2="9" y2="0" ${L} opacity=".3"/><line class="prog" x1="-9" y1="0" x2="9" y2="0" ${L}/>` : `<rect x="-9" y="-1.6" width="18" height="3.2" rx="1.6" fill="${c}" opacity=".2"/><rect class="prog" x="-9" y="-1.6" width="18" height="3.2" rx="1.6" fill="${c}"/>`,
+      debugging: `<circle r="6.5" ${L}/><path d="M0 -9.5 V-5 M0 5 V9.5 M-9.5 0 H-5 M5 0 H9.5" ${L}/><circle class="ac-breathe" r="${1.8 * k}" fill="${c}"/>`,
+      collab: `<path d="M-7 5 L0 -6 L7 5 Z" ${L} opacity=".4"/>${[[-7, 5], [0, -6], [7, 5]].map(([x, y]) => `<circle cx="${x}" cy="${y}" r="${2.3 * k}" fill="${c}"/>`).join('')}<circle r="${1.4 * k}" fill="${c}"><animateMotion dur="2.4s" repeatCount="indefinite" path="M0 -6 L7 5 L-7 5 Z"/></circle>`,
+      awaiting: `<circle class="ac-ping" r="9" ${L}/><circle r="${3.2 * k}" fill="${c}"/>`,
+      done: `<path class="ac-draw" d="M-7 0 L-2 5 L8 -6" ${L} stroke-width="2"/>`,
+      error: `<path d="M0 -8 L8.5 7 H-8.5 Z" ${L}/><line x1="0" y1="-2" x2="0" y2="2.4" ${L}/><circle cx="0" cy="4.8" r=".9" fill="${c}"/>`,
+      sleeping: `<path d="M3 -8 A8 8 0 1 0 8 4 A6 6 0 1 1 3 -8 Z" ${L}/><path class="zz" d="M-9 -9 h3.5 l-3.5 4 h3.5" ${L} stroke-width="1.3"/>`
+    }[id];
+  }
+  function accent(id, c) {
+    return `<g transform="translate(118 26)"><circle r="14" fill="${c}" opacity=".08"/>${accentGlyph(id, c)}</g>`;
+  }
+
   /* ---------- 渲染 ---------- */
   function render(id, opt = {}) {
     const st = STATES.find(s => s.id === id);
@@ -403,16 +440,16 @@
     const x = { P, u: 'b' + (++UID), plush: opt.finish === 'plush', metal: opt.finish === 'metal', cute: opt.face === 'cute', flat: opt.view === 'flat' || !!opt.tiny, tiny: !!opt.tiny };
     if (x.flat) { x.plush = false; x.metal = false; } // 平面只有一种：纯平、简化
     const color = statusColor(st.cat, opt.palette);
-    const compact = !!opt.compact || !!opt.tiny;
-    const list = parts(id, x, color, compact).filter(Boolean).join('');
-    const wrap = st.wrap === 'hop' && compact ? 'f' : st.wrap;
-    const vb = x.tiny ? '20 13 80 90' : compact ? '9 1 102 107' : '0 0 160 136';
+    const compact = !!opt.compact || !!opt.tiny, ac = !!opt.accent && !x.tiny;
+    const list = parts(id, x, color, compact || ac).filter(Boolean).join('');
+    const wrap = st.wrap === 'hop' && (compact || ac) ? 'f' : st.wrap;
+    const vb = x.tiny ? '20 13 80 90' : ac ? '34 6 122 120' : compact ? '9 1 102 107' : '0 0 160 136';
     const shadow = x.flat ? '' : false ? `<ellipse cx="60" cy="104" rx="27" ry="2.6" fill="#000" opacity=".07"/>` : `<ellipse cx="60" cy="103.5" rx="30" ry="4.2" fill="url(#sh${x.u})"/>`;
-    const inner = compact ? `${shadow}<g class="${wrap}">${list}</g>` : `<g transform="translate(20 12)">${shadow}<g class="${wrap}">${list}</g></g>`;
+    const inner = compact && !ac ? `${shadow}<g class="${wrap}">${list}</g>` : `<g transform="translate(20 12)">${shadow}<g class="${wrap}">${list}</g>${ac ? accent(id, color) : ''}</g>`;
     const style = opt.noStyle ? '' : `<style>${STYLE}</style>`;
     return `<svg class="bf" xmlns="http://www.w3.org/2000/svg" viewBox="${vb}" role="img" aria-label="毕方 · ${st.name}">${style}${defs(x)}${inner}</svg>`;
   }
 
-  root.BF = { STATES, CAT, PALETTES, BASE, STYLE, render, statusColor, isDeep, hueOf, hueDist };
+  root.BF = { STATES, CAT, PALETTES, BASE, STYLE, render, accentGlyph, statusColor, isDeep, hueOf, hueDist };
   if (typeof module !== 'undefined') module.exports = root.BF;
 })(typeof window !== 'undefined' ? window : globalThis);

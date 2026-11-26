@@ -476,6 +476,16 @@ fieldset+fieldset{margin-top:var(--openbitfun-space-3)}
 @keyframes bf-flow{to{stroke-dashoffset:-12}}
 .bf .mini1{animation:bf-f 2.6s ease-in-out infinite}
 .bf .mini2{animation:bf-f 2.6s ease-in-out -1.3s infinite}
+.bf .ac-breathe{animation:bf-acb 3.2s ease-in-out infinite;transform-origin:center}
+@keyframes bf-acb{0%,100%{opacity:.45;transform:scale(.85)}50%{opacity:1;transform:scale(1)}}
+.bf .ac-ping{animation:bf-acp 1.8s ease-out infinite;transform-origin:center}
+@keyframes bf-acp{0%{opacity:.8;transform:scale(.4)}100%{opacity:0;transform:scale(1.25)}}
+.bf .ac-draw{stroke-dasharray:30;animation:bf-acd 2.6s ease-in-out infinite both}
+@keyframes bf-acd{0%{stroke-dashoffset:30}35%,85%{stroke-dashoffset:0;opacity:1}100%{stroke-dashoffset:0;opacity:0}}
+.bf .ac-travel{animation:bf-act 2s ease-in-out infinite}
+@keyframes bf-act{0%,100%{transform:translateX(-5px)}50%{transform:translateX(5px)}}
+.bf .ac-spin{animation:bf-spin 3s linear infinite;transform-origin:center}
+.bf .ac-spin-r{animation:bf-spin 4.5s linear infinite reverse;transform-origin:center}
 @media (prefers-reduced-motion: reduce){.bf *{animation:none!important}}
 `;
 
@@ -707,23 +717,24 @@ fieldset+fieldset{margin-top:var(--openbitfun-space-3)}
          <rect class=&quot;caret&quot; x=&quot;107.5&quot; y=&quot;60&quot; width=&quot;6&quot; height=&quot;1.8&quot; rx=&quot;.9&quot; fill=&quot;#E8EAEE&quot;/>
          <rect x=&quot;101&quot; y=&quot;69&quot; width=&quot;30&quot; height=&quot;4&quot; rx=&quot;2&quot; fill=&quot;#3A3F4B&quot;/>
          <rect class=&quot;prog&quot; x=&quot;101&quot; y=&quot;69&quot; width=&quot;30&quot; height=&quot;4&quot; rx=&quot;2&quot; fill=&quot;${c}&quot;/>`];
-      case 'debugging': return [B, antenna(x, c, ['pulse']), eyes(x, 'focus', { dx: -2, dy: 1.5 }), soft(x), mouth(x, 'wavy'),
-        !compact &amp;&amp; `<g transform=&quot;translate(8 0)&quot;><g class=&quot;crawl&quot;><g transform=&quot;translate(-4 104)&quot;>
-           <g stroke=&quot;${C.ink}&quot; stroke-width=&quot;1.3&quot; stroke-linecap=&quot;round&quot;><path d=&quot;M-6 -2 l-3 -2 M-6 1 l-3.5 0 M-6 4 l-3 2 M6 -2 l3 -2 M6 1 l3.5 0 M6 4 l3 2 M-2 -7 l-2 -3 M2 -7 l2 -3&quot;/></g>
-           <circle cx=&quot;0&quot; cy=&quot;-5.5&quot; r=&quot;3&quot; fill=&quot;${C.ink}&quot;/><ellipse cx=&quot;0&quot; cy=&quot;1&quot; rx=&quot;6.2&quot; ry=&quot;6.6&quot; fill=&quot;#EF5A4C&quot;/>
-           <line x1=&quot;0&quot; y1=&quot;-5&quot; x2=&quot;0&quot; y2=&quot;7.5&quot; stroke=&quot;${C.ink}&quot; stroke-width=&quot;1&quot;/><circle cx=&quot;-2.6&quot; cy=&quot;0&quot; r=&quot;1.2&quot; fill=&quot;${C.ink}&quot;/><circle cx=&quot;2.8&quot; cy=&quot;3&quot; r=&quot;1.2&quot; fill=&quot;${C.ink}&quot;/>
-         </g></g>
-         <line x1=&quot;5&quot; y1=&quot;93&quot; x2=&quot;12&quot; y2=&quot;86&quot; stroke=&quot;${C.ink}&quot; stroke-width=&quot;3.6&quot; stroke-linecap=&quot;round&quot;/>
-         <circle cx=&quot;-3&quot; cy=&quot;101&quot; r=&quot;11&quot; fill=&quot;${c}&quot; fill-opacity=&quot;.1&quot; stroke=&quot;${C.ink}&quot; stroke-width=&quot;2.6&quot;/></g>`,
-        !compact &amp;&amp; hand(x, 22, 85),
-        !compact &amp;&amp; `<path class=&quot;sweat&quot; d=&quot;M97 38 q3.5 5 0 7 q-3.5 -2 0 -7z&quot; fill=&quot;#9CCBF5&quot;/>`];
-      case 'collab': return [
-        !compact &amp;&amp; `<path class=&quot;flow&quot; d=&quot;M60 19 Q0 10 -9.6 77&quot; fill=&quot;none&quot; stroke=&quot;${c}&quot; stroke-width=&quot;1.6&quot;/>
-         <path class=&quot;flow&quot; d=&quot;M60 19 Q120 10 129.6 77&quot; fill=&quot;none&quot; stroke=&quot;${c}&quot; stroke-width=&quot;1.6&quot;/>
-         <circle r=&quot;2.4&quot; fill=&quot;${c}&quot;><animateMotion dur=&quot;1.6s&quot; repeatCount=&quot;indefinite&quot; path=&quot;M60 19 Q0 10 -9.6 77&quot;/></circle>
-         <circle r=&quot;2.4&quot; fill=&quot;${c}&quot;><animateMotion dur=&quot;1.6s&quot; begin=&quot;.8s&quot; repeatCount=&quot;indefinite&quot; path=&quot;M60 19 Q120 10 129.6 77&quot;/></circle>`,
-        B, antenna(x, c, ['pulse']), eyes(x, 'normal', { cls: 'lookLR' }), soft(x), mouth(x, 'smile'),
-        !compact &amp;&amp; mini(x, -30, 70, '#8B7CF6', 'mini1'), !compact &amp;&amp; mini(x, 109.2, 70, x.P.accent, 'mini2')];
+      // 调试：右侧代码卡，一行报错（红色波浪线）被替换成修好的一行
+      case 'debugging': return [B, antenna(x, c, ['pulse']), eyes(x, 'focus', { dx: 1.5, dy: 1 }), soft(x), mouth(x, 'wavy'),
+        !compact &amp;&amp; `<rect x=&quot;96&quot; y=&quot;38&quot; width=&quot;40&quot; height=&quot;46&quot; rx=&quot;6&quot; fill=&quot;#fff&quot; filter=&quot;url(#ps${x.u})&quot;/>
+         <g fill=&quot;${tint(c, .72)}&quot;>${[47, 53, 71, 77].map((y, i) => `<rect x=&quot;101&quot; y=&quot;${y}&quot; width=&quot;${[24, 18, 26, 14][i]}&quot; height=&quot;2.6&quot; rx=&quot;1.3&quot;/>`).join('')}</g>
+         <rect x=&quot;99&quot; y=&quot;58&quot; width=&quot;34&quot; height=&quot;10&quot; rx=&quot;3&quot; fill=&quot;#EF5A4C&quot; opacity=&quot;.1&quot; class=&quot;flash&quot;/>
+         <rect x=&quot;101&quot; y=&quot;60&quot; width=&quot;22&quot; height=&quot;2.6&quot; rx=&quot;1.3&quot; fill=&quot;#EF5A4C&quot; opacity=&quot;.85&quot;/>
+         <path d=&quot;M101 65.4 q1.4 -1.6 2.8 0 t2.8 0 t2.8 0 t2.8 0 t2.8 0 t2.8 0 t2.8 0&quot; fill=&quot;none&quot; stroke=&quot;#EF5A4C&quot; stroke-width=&quot;1&quot; stroke-linecap=&quot;round&quot;/>
+         <rect class=&quot;code&quot; x=&quot;101&quot; y=&quot;60&quot; width=&quot;22&quot; height=&quot;2.6&quot; rx=&quot;1.3&quot; fill=&quot;${c}&quot;/>`];
+      // 协作：两只迷你分身在两侧，细连线 + 流动的数据点
+      case 'collab': {
+        const L = [-0.8, 66], Rr = [121.2, 66], from = [60, 18];
+        const path = ([tx, ty]) => `M${from[0]} ${from[1]} Q${(from[0] + tx) / 2} ${from[1] - 4} ${tx} ${ty}`;
+        return [
+          !compact &amp;&amp; [L, Rr].map((p, k) => `<path d=&quot;${path(p)}&quot; fill=&quot;none&quot; stroke=&quot;${c}&quot; stroke-opacity=&quot;.35&quot; stroke-width=&quot;1&quot; stroke-dasharray=&quot;1.5 3&quot;/>
+           <circle r=&quot;1.8&quot; fill=&quot;${c}&quot;><animateMotion dur=&quot;2s&quot; begin=&quot;${k}s&quot; repeatCount=&quot;indefinite&quot; path=&quot;${path(p)}&quot;/></circle>`).join(''),
+          B, antenna(x, c, ['pulse']), eyes(x, 'normal', { cls: 'lookLR' }), soft(x), mouth(x, 'smile'),
+          !compact &amp;&amp; mini(x, -21.2, 58, '#8B7CF6', 'mini1'), !compact &amp;&amp; mini(x, 100.8, 58, x.P.accent, 'mini2')];
+      }
       case 'awaiting': return [B, antenna(x, c, ['flash']), eyes(x, 'wide'), blush(x), mouth(x, 'o'),
         !compact &amp;&amp; `<g class=&quot;wave&quot;><path d=&quot;M91 68 Q103 62 106 50&quot; fill=&quot;none&quot; stroke=&quot;${x.P.side}&quot; stroke-width=&quot;7&quot; stroke-linecap=&quot;round&quot;/><circle cx=&quot;106.5&quot; cy=&quot;47&quot; r=&quot;5.2&quot; fill=&quot;${x.P.hand}&quot;/></g>
          <g class=&quot;pulse&quot;><circle cx=&quot;126&quot; cy=&quot;32&quot; r=&quot;8.5&quot; fill=&quot;${c}&quot;/><rect x=&quot;124.6&quot; y=&quot;26.5&quot; width=&quot;2.8&quot; height=&quot;7&quot; rx=&quot;1.4&quot; fill=&quot;#fff&quot;/><circle cx=&quot;126&quot; cy=&quot;36.6&quot; r=&quot;1.6&quot; fill=&quot;#fff&quot;/></g>`];
@@ -758,6 +769,32 @@ fieldset+fieldset{margin-top:var(--openbitfun-space-3)}
     return isDeep(cat, palette) ? CAT[cat].deep : CAT[cat].color;
   }
 
+  /* ---------- 点缀：替代卡通道具的线框小标记（opt.accent） ---------- */
+  // 线框图形本身，坐标范围约 ±10；bg=true 时线宽不随缩放变粗，用于大尺寸背景纹样
+  function accentGlyph(id, c, bg = false) {
+    const L = `fill=&quot;none&quot; stroke=&quot;${c}&quot; stroke-width=&quot;${bg ? 1.3 : 1.6}&quot;${bg ? ' vector-effect=&quot;non-scaling-stroke&quot;' : ''} stroke-linecap=&quot;round&quot; stroke-linejoin=&quot;round&quot;`;
+    const k = bg ? .5 : 1; // 背景版：实心点缩小，保持线稿感
+    return {
+      idle: `<circle r=&quot;7&quot; ${L} opacity=&quot;.35&quot;/><circle class=&quot;ac-breathe&quot; r=&quot;${3 * k}&quot; fill=&quot;${c}&quot;/>`,
+      listening: [-6, -2, 2, 6].map((x, i) => `<line class=&quot;eq ${['', 'e2', 'e3', 'e2'][i]}&quot; x1=&quot;${x}&quot; y1=&quot;-7&quot; x2=&quot;${x}&quot; y2=&quot;7&quot; ${L}/>`).join(''),
+      thinking: [-6, 0, 6].map((x, i) => `<circle class=&quot;dot ${['', 'd2', 'd3'][i]}&quot; cx=&quot;${x}&quot; cy=&quot;0&quot; r=&quot;${1.9 * k}&quot; fill=&quot;${c}&quot;/>`).join(''),
+      reasoning: `<g class=&quot;ac-spin&quot;><path d=&quot;M0 -8 A8 8 0 0 1 8 0&quot; ${L}/><path d=&quot;M0 8 A8 8 0 0 1 -8 0&quot; ${L}/></g><g class=&quot;ac-spin-r&quot;><path d=&quot;M4 0 A4 4 0 0 1 0 4&quot; ${L} opacity=&quot;.55&quot;/><path d=&quot;M-4 0 A4 4 0 0 1 0 -4&quot; ${L} opacity=&quot;.55&quot;/></g>`,
+      planning: [-6, 0, 6].map((y, i) => `<path class=&quot;chk ${['', 'k2', 'k3'][i]}&quot; d=&quot;M-8 ${y} l1.6 1.6 l2.8 -3&quot; ${L}/><line x1=&quot;-1&quot; y1=&quot;${y}&quot; x2=&quot;${[8, 5, 7][i]}&quot; y2=&quot;${y}&quot; ${L} opacity=&quot;.45&quot;/>`).join(''),
+      coding: `<path d=&quot;M-4 -6 L-9 0 L-4 6 M4 -6 L9 0 L4 6&quot; ${L}/><line class=&quot;caret&quot; x1=&quot;1.4&quot; y1=&quot;-6&quot; x2=&quot;-1.4&quot; y2=&quot;6&quot; ${L}/>`,
+      searching: `<g class=&quot;sweep&quot;><circle cx=&quot;-2&quot; cy=&quot;-2&quot; r=&quot;5.2&quot; ${L}/><line x1=&quot;1.8&quot; y1=&quot;1.8&quot; x2=&quot;6&quot; y2=&quot;6&quot; ${L}/></g>`,
+      running: bg ? `<line x1=&quot;-9&quot; y1=&quot;0&quot; x2=&quot;9&quot; y2=&quot;0&quot; ${L} opacity=&quot;.3&quot;/><line class=&quot;prog&quot; x1=&quot;-9&quot; y1=&quot;0&quot; x2=&quot;9&quot; y2=&quot;0&quot; ${L}/>` : `<rect x=&quot;-9&quot; y=&quot;-1.6&quot; width=&quot;18&quot; height=&quot;3.2&quot; rx=&quot;1.6&quot; fill=&quot;${c}&quot; opacity=&quot;.2&quot;/><rect class=&quot;prog&quot; x=&quot;-9&quot; y=&quot;-1.6&quot; width=&quot;18&quot; height=&quot;3.2&quot; rx=&quot;1.6&quot; fill=&quot;${c}&quot;/>`,
+      debugging: `<circle r=&quot;6.5&quot; ${L}/><path d=&quot;M0 -9.5 V-5 M0 5 V9.5 M-9.5 0 H-5 M5 0 H9.5&quot; ${L}/><circle class=&quot;ac-breathe&quot; r=&quot;${1.8 * k}&quot; fill=&quot;${c}&quot;/>`,
+      collab: `<path d=&quot;M-7 5 L0 -6 L7 5 Z&quot; ${L} opacity=&quot;.4&quot;/>${[[-7, 5], [0, -6], [7, 5]].map(([x, y]) => `<circle cx=&quot;${x}&quot; cy=&quot;${y}&quot; r=&quot;${2.3 * k}&quot; fill=&quot;${c}&quot;/>`).join('')}<circle r=&quot;${1.4 * k}&quot; fill=&quot;${c}&quot;><animateMotion dur=&quot;2.4s&quot; repeatCount=&quot;indefinite&quot; path=&quot;M0 -6 L7 5 L-7 5 Z&quot;/></circle>`,
+      awaiting: `<circle class=&quot;ac-ping&quot; r=&quot;9&quot; ${L}/><circle r=&quot;${3.2 * k}&quot; fill=&quot;${c}&quot;/>`,
+      done: `<path class=&quot;ac-draw&quot; d=&quot;M-7 0 L-2 5 L8 -6&quot; ${L} stroke-width=&quot;2&quot;/>`,
+      error: `<path d=&quot;M0 -8 L8.5 7 H-8.5 Z&quot; ${L}/><line x1=&quot;0&quot; y1=&quot;-2&quot; x2=&quot;0&quot; y2=&quot;2.4&quot; ${L}/><circle cx=&quot;0&quot; cy=&quot;4.8&quot; r=&quot;.9&quot; fill=&quot;${c}&quot;/>`,
+      sleeping: `<path d=&quot;M3 -8 A8 8 0 1 0 8 4 A6 6 0 1 1 3 -8 Z&quot; ${L}/><path class=&quot;zz&quot; d=&quot;M-9 -9 h3.5 l-3.5 4 h3.5&quot; ${L} stroke-width=&quot;1.3&quot;/>`
+    }[id];
+  }
+  function accent(id, c) {
+    return `<g transform=&quot;translate(118 26)&quot;><circle r=&quot;14&quot; fill=&quot;${c}&quot; opacity=&quot;.08&quot;/>${accentGlyph(id, c)}</g>`;
+  }
+
   /* ---------- 渲染 ---------- */
   function render(id, opt = {}) {
     const st = STATES.find(s => s.id === id);
@@ -765,17 +802,17 @@ fieldset+fieldset{margin-top:var(--openbitfun-space-3)}
     const x = { P, u: 'b' + (++UID), plush: opt.finish === 'plush', metal: opt.finish === 'metal', cute: opt.face === 'cute', flat: opt.view === 'flat' || !!opt.tiny, tiny: !!opt.tiny };
     if (x.flat) { x.plush = false; x.metal = false; } // 平面只有一种：纯平、简化
     const color = statusColor(st.cat, opt.palette);
-    const compact = !!opt.compact || !!opt.tiny;
-    const list = parts(id, x, color, compact).filter(Boolean).join('');
-    const wrap = st.wrap === 'hop' &amp;&amp; compact ? 'f' : st.wrap;
-    const vb = x.tiny ? '20 13 80 90' : compact ? '9 1 102 107' : '0 0 160 136';
+    const compact = !!opt.compact || !!opt.tiny, ac = !!opt.accent &amp;&amp; !x.tiny;
+    const list = parts(id, x, color, compact || ac).filter(Boolean).join('');
+    const wrap = st.wrap === 'hop' &amp;&amp; (compact || ac) ? 'f' : st.wrap;
+    const vb = x.tiny ? '20 13 80 90' : ac ? '34 6 122 120' : compact ? '9 1 102 107' : '0 0 160 136';
     const shadow = x.flat ? '' : false ? `<ellipse cx=&quot;60&quot; cy=&quot;104&quot; rx=&quot;27&quot; ry=&quot;2.6&quot; fill=&quot;#000&quot; opacity=&quot;.07&quot;/>` : `<ellipse cx=&quot;60&quot; cy=&quot;103.5&quot; rx=&quot;30&quot; ry=&quot;4.2&quot; fill=&quot;url(#sh${x.u})&quot;/>`;
-    const inner = compact ? `${shadow}<g class=&quot;${wrap}&quot;>${list}</g>` : `<g transform=&quot;translate(20 12)&quot;>${shadow}<g class=&quot;${wrap}&quot;>${list}</g></g>`;
+    const inner = compact &amp;&amp; !ac ? `${shadow}<g class=&quot;${wrap}&quot;>${list}</g>` : `<g transform=&quot;translate(20 12)&quot;>${shadow}<g class=&quot;${wrap}&quot;>${list}</g>${ac ? accent(id, color) : ''}</g>`;
     const style = opt.noStyle ? '' : `<style>${STYLE}</style>`;
     return `<svg class=&quot;bf&quot; xmlns=&quot;http://www.w3.org/2000/svg&quot; viewBox=&quot;${vb}&quot; role=&quot;img&quot; aria-label=&quot;毕方 · ${st.name}&quot;>${style}${defs(x)}${inner}</svg>`;
   }
 
-  root.BF = { STATES, CAT, PALETTES, BASE, STYLE, render, statusColor, isDeep, hueOf, hueDist };
+  root.BF = { STATES, CAT, PALETTES, BASE, STYLE, render, accentGlyph, statusColor, isDeep, hueOf, hueDist };
   if (typeof module !== 'undefined') module.exports = root.BF;
 })(typeof window !== 'undefined' ? window : globalThis);
 
@@ -1215,6 +1252,16 @@ a{color:var(--openbitfun-color-link-default)}
 @keyframes bf-flow{to{stroke-dashoffset:-12}}
 .bf .mini1{animation:bf-f 2.6s ease-in-out infinite}
 .bf .mini2{animation:bf-f 2.6s ease-in-out -1.3s infinite}
+.bf .ac-breathe{animation:bf-acb 3.2s ease-in-out infinite;transform-origin:center}
+@keyframes bf-acb{0%,100%{opacity:.45;transform:scale(.85)}50%{opacity:1;transform:scale(1)}}
+.bf .ac-ping{animation:bf-acp 1.8s ease-out infinite;transform-origin:center}
+@keyframes bf-acp{0%{opacity:.8;transform:scale(.4)}100%{opacity:0;transform:scale(1.25)}}
+.bf .ac-draw{stroke-dasharray:30;animation:bf-acd 2.6s ease-in-out infinite both}
+@keyframes bf-acd{0%{stroke-dashoffset:30}35%,85%{stroke-dashoffset:0;opacity:1}100%{stroke-dashoffset:0;opacity:0}}
+.bf .ac-travel{animation:bf-act 2s ease-in-out infinite}
+@keyframes bf-act{0%,100%{transform:translateX(-5px)}50%{transform:translateX(5px)}}
+.bf .ac-spin{animation:bf-spin 3s linear infinite;transform-origin:center}
+.bf .ac-spin-r{animation:bf-spin 4.5s linear infinite reverse;transform-origin:center}
 @media (prefers-reduced-motion: reduce){.bf *{animation:none!important}}
 `;
 
@@ -1446,23 +1493,24 @@ a{color:var(--openbitfun-color-link-default)}
          <rect class=&quot;caret&quot; x=&quot;107.5&quot; y=&quot;60&quot; width=&quot;6&quot; height=&quot;1.8&quot; rx=&quot;.9&quot; fill=&quot;#E8EAEE&quot;/>
          <rect x=&quot;101&quot; y=&quot;69&quot; width=&quot;30&quot; height=&quot;4&quot; rx=&quot;2&quot; fill=&quot;#3A3F4B&quot;/>
          <rect class=&quot;prog&quot; x=&quot;101&quot; y=&quot;69&quot; width=&quot;30&quot; height=&quot;4&quot; rx=&quot;2&quot; fill=&quot;${c}&quot;/>`];
-      case 'debugging': return [B, antenna(x, c, ['pulse']), eyes(x, 'focus', { dx: -2, dy: 1.5 }), soft(x), mouth(x, 'wavy'),
-        !compact &amp;&amp; `<g transform=&quot;translate(8 0)&quot;><g class=&quot;crawl&quot;><g transform=&quot;translate(-4 104)&quot;>
-           <g stroke=&quot;${C.ink}&quot; stroke-width=&quot;1.3&quot; stroke-linecap=&quot;round&quot;><path d=&quot;M-6 -2 l-3 -2 M-6 1 l-3.5 0 M-6 4 l-3 2 M6 -2 l3 -2 M6 1 l3.5 0 M6 4 l3 2 M-2 -7 l-2 -3 M2 -7 l2 -3&quot;/></g>
-           <circle cx=&quot;0&quot; cy=&quot;-5.5&quot; r=&quot;3&quot; fill=&quot;${C.ink}&quot;/><ellipse cx=&quot;0&quot; cy=&quot;1&quot; rx=&quot;6.2&quot; ry=&quot;6.6&quot; fill=&quot;#EF5A4C&quot;/>
-           <line x1=&quot;0&quot; y1=&quot;-5&quot; x2=&quot;0&quot; y2=&quot;7.5&quot; stroke=&quot;${C.ink}&quot; stroke-width=&quot;1&quot;/><circle cx=&quot;-2.6&quot; cy=&quot;0&quot; r=&quot;1.2&quot; fill=&quot;${C.ink}&quot;/><circle cx=&quot;2.8&quot; cy=&quot;3&quot; r=&quot;1.2&quot; fill=&quot;${C.ink}&quot;/>
-         </g></g>
-         <line x1=&quot;5&quot; y1=&quot;93&quot; x2=&quot;12&quot; y2=&quot;86&quot; stroke=&quot;${C.ink}&quot; stroke-width=&quot;3.6&quot; stroke-linecap=&quot;round&quot;/>
-         <circle cx=&quot;-3&quot; cy=&quot;101&quot; r=&quot;11&quot; fill=&quot;${c}&quot; fill-opacity=&quot;.1&quot; stroke=&quot;${C.ink}&quot; stroke-width=&quot;2.6&quot;/></g>`,
-        !compact &amp;&amp; hand(x, 22, 85),
-        !compact &amp;&amp; `<path class=&quot;sweat&quot; d=&quot;M97 38 q3.5 5 0 7 q-3.5 -2 0 -7z&quot; fill=&quot;#9CCBF5&quot;/>`];
-      case 'collab': return [
-        !compact &amp;&amp; `<path class=&quot;flow&quot; d=&quot;M60 19 Q0 10 -9.6 77&quot; fill=&quot;none&quot; stroke=&quot;${c}&quot; stroke-width=&quot;1.6&quot;/>
-         <path class=&quot;flow&quot; d=&quot;M60 19 Q120 10 129.6 77&quot; fill=&quot;none&quot; stroke=&quot;${c}&quot; stroke-width=&quot;1.6&quot;/>
-         <circle r=&quot;2.4&quot; fill=&quot;${c}&quot;><animateMotion dur=&quot;1.6s&quot; repeatCount=&quot;indefinite&quot; path=&quot;M60 19 Q0 10 -9.6 77&quot;/></circle>
-         <circle r=&quot;2.4&quot; fill=&quot;${c}&quot;><animateMotion dur=&quot;1.6s&quot; begin=&quot;.8s&quot; repeatCount=&quot;indefinite&quot; path=&quot;M60 19 Q120 10 129.6 77&quot;/></circle>`,
-        B, antenna(x, c, ['pulse']), eyes(x, 'normal', { cls: 'lookLR' }), soft(x), mouth(x, 'smile'),
-        !compact &amp;&amp; mini(x, -30, 70, '#8B7CF6', 'mini1'), !compact &amp;&amp; mini(x, 109.2, 70, x.P.accent, 'mini2')];
+      // 调试：右侧代码卡，一行报错（红色波浪线）被替换成修好的一行
+      case 'debugging': return [B, antenna(x, c, ['pulse']), eyes(x, 'focus', { dx: 1.5, dy: 1 }), soft(x), mouth(x, 'wavy'),
+        !compact &amp;&amp; `<rect x=&quot;96&quot; y=&quot;38&quot; width=&quot;40&quot; height=&quot;46&quot; rx=&quot;6&quot; fill=&quot;#fff&quot; filter=&quot;url(#ps${x.u})&quot;/>
+         <g fill=&quot;${tint(c, .72)}&quot;>${[47, 53, 71, 77].map((y, i) => `<rect x=&quot;101&quot; y=&quot;${y}&quot; width=&quot;${[24, 18, 26, 14][i]}&quot; height=&quot;2.6&quot; rx=&quot;1.3&quot;/>`).join('')}</g>
+         <rect x=&quot;99&quot; y=&quot;58&quot; width=&quot;34&quot; height=&quot;10&quot; rx=&quot;3&quot; fill=&quot;#EF5A4C&quot; opacity=&quot;.1&quot; class=&quot;flash&quot;/>
+         <rect x=&quot;101&quot; y=&quot;60&quot; width=&quot;22&quot; height=&quot;2.6&quot; rx=&quot;1.3&quot; fill=&quot;#EF5A4C&quot; opacity=&quot;.85&quot;/>
+         <path d=&quot;M101 65.4 q1.4 -1.6 2.8 0 t2.8 0 t2.8 0 t2.8 0 t2.8 0 t2.8 0 t2.8 0&quot; fill=&quot;none&quot; stroke=&quot;#EF5A4C&quot; stroke-width=&quot;1&quot; stroke-linecap=&quot;round&quot;/>
+         <rect class=&quot;code&quot; x=&quot;101&quot; y=&quot;60&quot; width=&quot;22&quot; height=&quot;2.6&quot; rx=&quot;1.3&quot; fill=&quot;${c}&quot;/>`];
+      // 协作：两只迷你分身在两侧，细连线 + 流动的数据点
+      case 'collab': {
+        const L = [-0.8, 66], Rr = [121.2, 66], from = [60, 18];
+        const path = ([tx, ty]) => `M${from[0]} ${from[1]} Q${(from[0] + tx) / 2} ${from[1] - 4} ${tx} ${ty}`;
+        return [
+          !compact &amp;&amp; [L, Rr].map((p, k) => `<path d=&quot;${path(p)}&quot; fill=&quot;none&quot; stroke=&quot;${c}&quot; stroke-opacity=&quot;.35&quot; stroke-width=&quot;1&quot; stroke-dasharray=&quot;1.5 3&quot;/>
+           <circle r=&quot;1.8&quot; fill=&quot;${c}&quot;><animateMotion dur=&quot;2s&quot; begin=&quot;${k}s&quot; repeatCount=&quot;indefinite&quot; path=&quot;${path(p)}&quot;/></circle>`).join(''),
+          B, antenna(x, c, ['pulse']), eyes(x, 'normal', { cls: 'lookLR' }), soft(x), mouth(x, 'smile'),
+          !compact &amp;&amp; mini(x, -21.2, 58, '#8B7CF6', 'mini1'), !compact &amp;&amp; mini(x, 100.8, 58, x.P.accent, 'mini2')];
+      }
       case 'awaiting': return [B, antenna(x, c, ['flash']), eyes(x, 'wide'), blush(x), mouth(x, 'o'),
         !compact &amp;&amp; `<g class=&quot;wave&quot;><path d=&quot;M91 68 Q103 62 106 50&quot; fill=&quot;none&quot; stroke=&quot;${x.P.side}&quot; stroke-width=&quot;7&quot; stroke-linecap=&quot;round&quot;/><circle cx=&quot;106.5&quot; cy=&quot;47&quot; r=&quot;5.2&quot; fill=&quot;${x.P.hand}&quot;/></g>
          <g class=&quot;pulse&quot;><circle cx=&quot;126&quot; cy=&quot;32&quot; r=&quot;8.5&quot; fill=&quot;${c}&quot;/><rect x=&quot;124.6&quot; y=&quot;26.5&quot; width=&quot;2.8&quot; height=&quot;7&quot; rx=&quot;1.4&quot; fill=&quot;#fff&quot;/><circle cx=&quot;126&quot; cy=&quot;36.6&quot; r=&quot;1.6&quot; fill=&quot;#fff&quot;/></g>`];
@@ -1497,6 +1545,32 @@ a{color:var(--openbitfun-color-link-default)}
     return isDeep(cat, palette) ? CAT[cat].deep : CAT[cat].color;
   }
 
+  /* ---------- 点缀：替代卡通道具的线框小标记（opt.accent） ---------- */
+  // 线框图形本身，坐标范围约 ±10；bg=true 时线宽不随缩放变粗，用于大尺寸背景纹样
+  function accentGlyph(id, c, bg = false) {
+    const L = `fill=&quot;none&quot; stroke=&quot;${c}&quot; stroke-width=&quot;${bg ? 1.3 : 1.6}&quot;${bg ? ' vector-effect=&quot;non-scaling-stroke&quot;' : ''} stroke-linecap=&quot;round&quot; stroke-linejoin=&quot;round&quot;`;
+    const k = bg ? .5 : 1; // 背景版：实心点缩小，保持线稿感
+    return {
+      idle: `<circle r=&quot;7&quot; ${L} opacity=&quot;.35&quot;/><circle class=&quot;ac-breathe&quot; r=&quot;${3 * k}&quot; fill=&quot;${c}&quot;/>`,
+      listening: [-6, -2, 2, 6].map((x, i) => `<line class=&quot;eq ${['', 'e2', 'e3', 'e2'][i]}&quot; x1=&quot;${x}&quot; y1=&quot;-7&quot; x2=&quot;${x}&quot; y2=&quot;7&quot; ${L}/>`).join(''),
+      thinking: [-6, 0, 6].map((x, i) => `<circle class=&quot;dot ${['', 'd2', 'd3'][i]}&quot; cx=&quot;${x}&quot; cy=&quot;0&quot; r=&quot;${1.9 * k}&quot; fill=&quot;${c}&quot;/>`).join(''),
+      reasoning: `<g class=&quot;ac-spin&quot;><path d=&quot;M0 -8 A8 8 0 0 1 8 0&quot; ${L}/><path d=&quot;M0 8 A8 8 0 0 1 -8 0&quot; ${L}/></g><g class=&quot;ac-spin-r&quot;><path d=&quot;M4 0 A4 4 0 0 1 0 4&quot; ${L} opacity=&quot;.55&quot;/><path d=&quot;M-4 0 A4 4 0 0 1 0 -4&quot; ${L} opacity=&quot;.55&quot;/></g>`,
+      planning: [-6, 0, 6].map((y, i) => `<path class=&quot;chk ${['', 'k2', 'k3'][i]}&quot; d=&quot;M-8 ${y} l1.6 1.6 l2.8 -3&quot; ${L}/><line x1=&quot;-1&quot; y1=&quot;${y}&quot; x2=&quot;${[8, 5, 7][i]}&quot; y2=&quot;${y}&quot; ${L} opacity=&quot;.45&quot;/>`).join(''),
+      coding: `<path d=&quot;M-4 -6 L-9 0 L-4 6 M4 -6 L9 0 L4 6&quot; ${L}/><line class=&quot;caret&quot; x1=&quot;1.4&quot; y1=&quot;-6&quot; x2=&quot;-1.4&quot; y2=&quot;6&quot; ${L}/>`,
+      searching: `<g class=&quot;sweep&quot;><circle cx=&quot;-2&quot; cy=&quot;-2&quot; r=&quot;5.2&quot; ${L}/><line x1=&quot;1.8&quot; y1=&quot;1.8&quot; x2=&quot;6&quot; y2=&quot;6&quot; ${L}/></g>`,
+      running: bg ? `<line x1=&quot;-9&quot; y1=&quot;0&quot; x2=&quot;9&quot; y2=&quot;0&quot; ${L} opacity=&quot;.3&quot;/><line class=&quot;prog&quot; x1=&quot;-9&quot; y1=&quot;0&quot; x2=&quot;9&quot; y2=&quot;0&quot; ${L}/>` : `<rect x=&quot;-9&quot; y=&quot;-1.6&quot; width=&quot;18&quot; height=&quot;3.2&quot; rx=&quot;1.6&quot; fill=&quot;${c}&quot; opacity=&quot;.2&quot;/><rect class=&quot;prog&quot; x=&quot;-9&quot; y=&quot;-1.6&quot; width=&quot;18&quot; height=&quot;3.2&quot; rx=&quot;1.6&quot; fill=&quot;${c}&quot;/>`,
+      debugging: `<circle r=&quot;6.5&quot; ${L}/><path d=&quot;M0 -9.5 V-5 M0 5 V9.5 M-9.5 0 H-5 M5 0 H9.5&quot; ${L}/><circle class=&quot;ac-breathe&quot; r=&quot;${1.8 * k}&quot; fill=&quot;${c}&quot;/>`,
+      collab: `<path d=&quot;M-7 5 L0 -6 L7 5 Z&quot; ${L} opacity=&quot;.4&quot;/>${[[-7, 5], [0, -6], [7, 5]].map(([x, y]) => `<circle cx=&quot;${x}&quot; cy=&quot;${y}&quot; r=&quot;${2.3 * k}&quot; fill=&quot;${c}&quot;/>`).join('')}<circle r=&quot;${1.4 * k}&quot; fill=&quot;${c}&quot;><animateMotion dur=&quot;2.4s&quot; repeatCount=&quot;indefinite&quot; path=&quot;M0 -6 L7 5 L-7 5 Z&quot;/></circle>`,
+      awaiting: `<circle class=&quot;ac-ping&quot; r=&quot;9&quot; ${L}/><circle r=&quot;${3.2 * k}&quot; fill=&quot;${c}&quot;/>`,
+      done: `<path class=&quot;ac-draw&quot; d=&quot;M-7 0 L-2 5 L8 -6&quot; ${L} stroke-width=&quot;2&quot;/>`,
+      error: `<path d=&quot;M0 -8 L8.5 7 H-8.5 Z&quot; ${L}/><line x1=&quot;0&quot; y1=&quot;-2&quot; x2=&quot;0&quot; y2=&quot;2.4&quot; ${L}/><circle cx=&quot;0&quot; cy=&quot;4.8&quot; r=&quot;.9&quot; fill=&quot;${c}&quot;/>`,
+      sleeping: `<path d=&quot;M3 -8 A8 8 0 1 0 8 4 A6 6 0 1 1 3 -8 Z&quot; ${L}/><path class=&quot;zz&quot; d=&quot;M-9 -9 h3.5 l-3.5 4 h3.5&quot; ${L} stroke-width=&quot;1.3&quot;/>`
+    }[id];
+  }
+  function accent(id, c) {
+    return `<g transform=&quot;translate(118 26)&quot;><circle r=&quot;14&quot; fill=&quot;${c}&quot; opacity=&quot;.08&quot;/>${accentGlyph(id, c)}</g>`;
+  }
+
   /* ---------- 渲染 ---------- */
   function render(id, opt = {}) {
     const st = STATES.find(s => s.id === id);
@@ -1504,17 +1578,17 @@ a{color:var(--openbitfun-color-link-default)}
     const x = { P, u: 'b' + (++UID), plush: opt.finish === 'plush', metal: opt.finish === 'metal', cute: opt.face === 'cute', flat: opt.view === 'flat' || !!opt.tiny, tiny: !!opt.tiny };
     if (x.flat) { x.plush = false; x.metal = false; } // 平面只有一种：纯平、简化
     const color = statusColor(st.cat, opt.palette);
-    const compact = !!opt.compact || !!opt.tiny;
-    const list = parts(id, x, color, compact).filter(Boolean).join('');
-    const wrap = st.wrap === 'hop' &amp;&amp; compact ? 'f' : st.wrap;
-    const vb = x.tiny ? '20 13 80 90' : compact ? '9 1 102 107' : '0 0 160 136';
+    const compact = !!opt.compact || !!opt.tiny, ac = !!opt.accent &amp;&amp; !x.tiny;
+    const list = parts(id, x, color, compact || ac).filter(Boolean).join('');
+    const wrap = st.wrap === 'hop' &amp;&amp; (compact || ac) ? 'f' : st.wrap;
+    const vb = x.tiny ? '20 13 80 90' : ac ? '34 6 122 120' : compact ? '9 1 102 107' : '0 0 160 136';
     const shadow = x.flat ? '' : false ? `<ellipse cx=&quot;60&quot; cy=&quot;104&quot; rx=&quot;27&quot; ry=&quot;2.6&quot; fill=&quot;#000&quot; opacity=&quot;.07&quot;/>` : `<ellipse cx=&quot;60&quot; cy=&quot;103.5&quot; rx=&quot;30&quot; ry=&quot;4.2&quot; fill=&quot;url(#sh${x.u})&quot;/>`;
-    const inner = compact ? `${shadow}<g class=&quot;${wrap}&quot;>${list}</g>` : `<g transform=&quot;translate(20 12)&quot;>${shadow}<g class=&quot;${wrap}&quot;>${list}</g></g>`;
+    const inner = compact &amp;&amp; !ac ? `${shadow}<g class=&quot;${wrap}&quot;>${list}</g>` : `<g transform=&quot;translate(20 12)&quot;>${shadow}<g class=&quot;${wrap}&quot;>${list}</g>${ac ? accent(id, color) : ''}</g>`;
     const style = opt.noStyle ? '' : `<style>${STYLE}</style>`;
     return `<svg class=&quot;bf&quot; xmlns=&quot;http://www.w3.org/2000/svg&quot; viewBox=&quot;${vb}&quot; role=&quot;img&quot; aria-label=&quot;毕方 · ${st.name}&quot;>${style}${defs(x)}${inner}</svg>`;
   }
 
-  root.BF = { STATES, CAT, PALETTES, BASE, STYLE, render, statusColor, isDeep, hueOf, hueDist };
+  root.BF = { STATES, CAT, PALETTES, BASE, STYLE, render, accentGlyph, statusColor, isDeep, hueOf, hueDist };
   if (typeof module !== 'undefined') module.exports = root.BF;
 })(typeof window !== 'undefined' ? window : globalThis);
 
@@ -1838,28 +1912,27 @@ section{margin-top:64px}
 .group-title{display:flex;align-items:center;gap:10px;margin:34px 0 14px;font-weight:600}
 .group-title i{width:10px;height:10px;border-radius:50%}
 .group-title small{font-weight:400;color:var(--mute)}
-.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:16px}
-@media (max-width:1100px){.grid{grid-template-columns:repeat(3,1fr)}}
-@media (max-width:820px){.grid{grid-template-columns:repeat(2,1fr)}}
-.card{background:var(--card);border:1px solid var(--line);border-radius:var(--openbitfun-radius-2xl);overflow:hidden;display:flex;flex-direction:column;transition:box-shadow var(--openbitfun-motion-duration-base,.22s),transform var(--openbitfun-motion-duration-base,.22s)}
-.card:hover{box-shadow:0 12px 28px rgba(16,26,39,.08);transform:translateY(-2px)}
-.stage{--sc:#888;position:relative;display:grid;place-items:center;padding:44px 0 50px;overflow:hidden;
-  background:radial-gradient(70% 55% at 50% 34%,color-mix(in srgb,var(--sc) 16%,transparent),transparent 72%),linear-gradient(180deg,color-mix(in srgb,var(--sc) 5%,var(--openbitfun-color-surface-tertiary)),var(--openbitfun-color-surface-tertiary))}
-.stage svg{width:80%;overflow:visible;position:relative}
-.stage .cat{position:absolute;left:12px;top:12px;display:inline-flex;align-items:center;gap:6px;height:22px;padding:0 9px 0 7px;border-radius:999px;font-size:11.5px;font-weight:500;
-  color:color-mix(in srgb,var(--sc) 62%,var(--ink));background:color-mix(in srgb,var(--sc) 13%,var(--card));box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--sc) 22%,transparent)}
-.stage .cat i{width:6px;height:6px;border-radius:50%;background:var(--sc);box-shadow:0 0 0 3px color-mix(in srgb,var(--sc) 22%,transparent)}
-.stage .no{position:absolute;right:14px;top:14px;font-family:var(--openbitfun-font-family-mono);font-size:11px;letter-spacing:.04em;color:var(--mute)}
-.stage .pill{position:absolute;bottom:14px;left:50%;transform:translateX(-50%)}
-.meta{padding:16px 18px 18px;display:flex;flex-direction:column;gap:10px;border-top:1px solid var(--line)}
-.meta .t{display:flex;align-items:baseline;gap:8px}
-.meta .t b{font-size:16px;font-weight:600;letter-spacing:-.01em}
-.meta .t span{color:var(--mute);font-size:12px}
-.meta dl{margin:0;display:grid;gap:8px}
-.meta dt{font-size:11px;letter-spacing:.06em;color:var(--mute);margin-bottom:2px}
-.meta dd{margin:0;font-size:13px;line-height:1.6}
-.meta dd.when{color:var(--ink)}
-.meta dd.notes{color:var(--sub)}
+.stagebar{display:flex;align-items:center;gap:10px;margin:0 0 14px;font-size:13px;color:var(--mute)}
+.stagebar .seg2{display:inline-flex;gap:2px;background:var(--openbitfun-color-surface-workbench);border-radius:999px;padding:3px}
+.stagebar button{font:inherit;font-size:13px;border:0;background:none;color:var(--sub);padding:5px 14px;border-radius:999px;cursor:pointer}
+.stagebar button[aria-pressed=true]{background:var(--card);color:var(--ink);box-shadow:0 1px 3px rgba(0,0,0,.12)}
+.sgrid{--frame:#f3f3f5;--tile:#fbfbfc;--tink:#171717;--tsub:#6a6a6a;--tmute:#8f8f92;--tline:rgba(16,26,39,.08);--top:rgba(255,255,255,.95);--bloom:16%;--hi:rgba(255,255,255,.9);--edge:rgba(16,26,39,.06);
+  display:grid;grid-template-columns:repeat(4,1fr);gap:10px;background:var(--frame);padding:10px;border-radius:28px;transition:background .25s}
+.sgrid[data-t=dark]{--frame:#0a0a0b;--tile:#141416;--tink:#ededed;--tsub:#9a9a9f;--tmute:#77777c;--tline:rgba(255,255,255,.1);--top:rgba(255,255,255,.07);--bloom:26%;--hi:rgba(255,255,255,.06);--edge:rgba(255,255,255,.06)}
+@media (max-width:1100px){.sgrid{grid-template-columns:repeat(3,1fr)}}
+@media (max-width:820px){.sgrid{grid-template-columns:repeat(2,1fr)}}
+.scell{position:relative;border-radius:20px;overflow:hidden;color:var(--tink);box-shadow:inset 0 0 0 1px var(--edge),inset 0 1px 0 var(--hi);
+  background:radial-gradient(60% 46% at 50% 33%,color-mix(in srgb,var(--c) var(--bloom),transparent),transparent 72%),radial-gradient(120% 70% at 50% 0%,var(--top),transparent 60%),var(--tile)}
+.scell .fig{width:100%;margin:14px auto 0}.scell .fig svg{display:block;width:100%;overflow:visible}
+.scell .no{position:absolute;right:16px;top:14px;font:500 11px/1 var(--openbitfun-font-family-mono);color:var(--tmute)}
+.scell .cat{position:absolute;left:14px;top:12px;display:inline-flex;align-items:center;gap:6px;font-size:11.5px;color:var(--tsub)}
+.scell .cat i{width:6px;height:6px;border-radius:50%;background:var(--c)}
+.smeta{padding:4px 18px 18px}
+.smeta .name{font-size:16px;font-weight:600}.smeta .en{font:500 10px/1.7 var(--openbitfun-font-family-mono);letter-spacing:.14em;color:var(--tmute);text-transform:uppercase}
+.smeta dl{margin:10px 0 0;display:grid;gap:8px;padding-top:10px;border-top:1px solid var(--tline)}
+.smeta dt{font-size:11px;letter-spacing:.06em;color:var(--tmute);margin-bottom:2px}
+.smeta dd{margin:0;font-size:12.5px;line-height:1.6;color:var(--tsub)}
+.smeta dd.when{color:var(--tink)}
 
 /* status pill */
 .pill{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 12px 0 4px;background:var(--card);border:1px solid var(--line);border-radius:999px;font-size:12.5px;white-space:nowrap;box-shadow:0 2px 8px rgba(20,24,33,.05)}
@@ -2023,8 +2096,9 @@ button.sel{border-color:var(--ink)}
 
   <section>
     <h2>状态全集</h2>
-    <p class=&quot;sec-desc&quot;>按天线颜色分为 7 类，共 14 个状态。每张卡的底色、标签和道具里的线条都取自该状态当前的天线球颜色，切换配色时一起变化；底部是产品里配套的状态胶囊。</p>
+    <p class=&quot;sec-desc&quot;>按天线颜色分为 7 类，共 14 个状态。每张卡是一个小舞台：顶部一束光，状态色在天线球附近晕开，道具里的线条也取状态色，随上方的视图、质感、配色切换一起变化；舞台可切换浅色 / 深色。</p>
     <div class=&quot;legend&quot; id=&quot;legend&quot;></div>
+    <div class=&quot;stagebar&quot;>舞台<span class=&quot;seg2&quot; id=&quot;stageT&quot;><button data-v=&quot;light&quot; aria-pressed=&quot;true&quot;>浅色</button><button data-v=&quot;dark&quot; aria-pressed=&quot;false&quot;>深色</button></span></div>
     <div id=&quot;groups&quot;></div>
   </section>
 
@@ -2188,6 +2262,16 @@ button.sel{border-color:var(--ink)}
 @keyframes bf-flow{to{stroke-dashoffset:-12}}
 .bf .mini1{animation:bf-f 2.6s ease-in-out infinite}
 .bf .mini2{animation:bf-f 2.6s ease-in-out -1.3s infinite}
+.bf .ac-breathe{animation:bf-acb 3.2s ease-in-out infinite;transform-origin:center}
+@keyframes bf-acb{0%,100%{opacity:.45;transform:scale(.85)}50%{opacity:1;transform:scale(1)}}
+.bf .ac-ping{animation:bf-acp 1.8s ease-out infinite;transform-origin:center}
+@keyframes bf-acp{0%{opacity:.8;transform:scale(.4)}100%{opacity:0;transform:scale(1.25)}}
+.bf .ac-draw{stroke-dasharray:30;animation:bf-acd 2.6s ease-in-out infinite both}
+@keyframes bf-acd{0%{stroke-dashoffset:30}35%,85%{stroke-dashoffset:0;opacity:1}100%{stroke-dashoffset:0;opacity:0}}
+.bf .ac-travel{animation:bf-act 2s ease-in-out infinite}
+@keyframes bf-act{0%,100%{transform:translateX(-5px)}50%{transform:translateX(5px)}}
+.bf .ac-spin{animation:bf-spin 3s linear infinite;transform-origin:center}
+.bf .ac-spin-r{animation:bf-spin 4.5s linear infinite reverse;transform-origin:center}
 @media (prefers-reduced-motion: reduce){.bf *{animation:none!important}}
 `;
 
@@ -2419,23 +2503,24 @@ button.sel{border-color:var(--ink)}
          <rect class=&quot;caret&quot; x=&quot;107.5&quot; y=&quot;60&quot; width=&quot;6&quot; height=&quot;1.8&quot; rx=&quot;.9&quot; fill=&quot;#E8EAEE&quot;/>
          <rect x=&quot;101&quot; y=&quot;69&quot; width=&quot;30&quot; height=&quot;4&quot; rx=&quot;2&quot; fill=&quot;#3A3F4B&quot;/>
          <rect class=&quot;prog&quot; x=&quot;101&quot; y=&quot;69&quot; width=&quot;30&quot; height=&quot;4&quot; rx=&quot;2&quot; fill=&quot;${c}&quot;/>`];
-      case 'debugging': return [B, antenna(x, c, ['pulse']), eyes(x, 'focus', { dx: -2, dy: 1.5 }), soft(x), mouth(x, 'wavy'),
-        !compact &amp;&amp; `<g transform=&quot;translate(8 0)&quot;><g class=&quot;crawl&quot;><g transform=&quot;translate(-4 104)&quot;>
-           <g stroke=&quot;${C.ink}&quot; stroke-width=&quot;1.3&quot; stroke-linecap=&quot;round&quot;><path d=&quot;M-6 -2 l-3 -2 M-6 1 l-3.5 0 M-6 4 l-3 2 M6 -2 l3 -2 M6 1 l3.5 0 M6 4 l3 2 M-2 -7 l-2 -3 M2 -7 l2 -3&quot;/></g>
-           <circle cx=&quot;0&quot; cy=&quot;-5.5&quot; r=&quot;3&quot; fill=&quot;${C.ink}&quot;/><ellipse cx=&quot;0&quot; cy=&quot;1&quot; rx=&quot;6.2&quot; ry=&quot;6.6&quot; fill=&quot;#EF5A4C&quot;/>
-           <line x1=&quot;0&quot; y1=&quot;-5&quot; x2=&quot;0&quot; y2=&quot;7.5&quot; stroke=&quot;${C.ink}&quot; stroke-width=&quot;1&quot;/><circle cx=&quot;-2.6&quot; cy=&quot;0&quot; r=&quot;1.2&quot; fill=&quot;${C.ink}&quot;/><circle cx=&quot;2.8&quot; cy=&quot;3&quot; r=&quot;1.2&quot; fill=&quot;${C.ink}&quot;/>
-         </g></g>
-         <line x1=&quot;5&quot; y1=&quot;93&quot; x2=&quot;12&quot; y2=&quot;86&quot; stroke=&quot;${C.ink}&quot; stroke-width=&quot;3.6&quot; stroke-linecap=&quot;round&quot;/>
-         <circle cx=&quot;-3&quot; cy=&quot;101&quot; r=&quot;11&quot; fill=&quot;${c}&quot; fill-opacity=&quot;.1&quot; stroke=&quot;${C.ink}&quot; stroke-width=&quot;2.6&quot;/></g>`,
-        !compact &amp;&amp; hand(x, 22, 85),
-        !compact &amp;&amp; `<path class=&quot;sweat&quot; d=&quot;M97 38 q3.5 5 0 7 q-3.5 -2 0 -7z&quot; fill=&quot;#9CCBF5&quot;/>`];
-      case 'collab': return [
-        !compact &amp;&amp; `<path class=&quot;flow&quot; d=&quot;M60 19 Q0 10 -9.6 77&quot; fill=&quot;none&quot; stroke=&quot;${c}&quot; stroke-width=&quot;1.6&quot;/>
-         <path class=&quot;flow&quot; d=&quot;M60 19 Q120 10 129.6 77&quot; fill=&quot;none&quot; stroke=&quot;${c}&quot; stroke-width=&quot;1.6&quot;/>
-         <circle r=&quot;2.4&quot; fill=&quot;${c}&quot;><animateMotion dur=&quot;1.6s&quot; repeatCount=&quot;indefinite&quot; path=&quot;M60 19 Q0 10 -9.6 77&quot;/></circle>
-         <circle r=&quot;2.4&quot; fill=&quot;${c}&quot;><animateMotion dur=&quot;1.6s&quot; begin=&quot;.8s&quot; repeatCount=&quot;indefinite&quot; path=&quot;M60 19 Q120 10 129.6 77&quot;/></circle>`,
-        B, antenna(x, c, ['pulse']), eyes(x, 'normal', { cls: 'lookLR' }), soft(x), mouth(x, 'smile'),
-        !compact &amp;&amp; mini(x, -30, 70, '#8B7CF6', 'mini1'), !compact &amp;&amp; mini(x, 109.2, 70, x.P.accent, 'mini2')];
+      // 调试：右侧代码卡，一行报错（红色波浪线）被替换成修好的一行
+      case 'debugging': return [B, antenna(x, c, ['pulse']), eyes(x, 'focus', { dx: 1.5, dy: 1 }), soft(x), mouth(x, 'wavy'),
+        !compact &amp;&amp; `<rect x=&quot;96&quot; y=&quot;38&quot; width=&quot;40&quot; height=&quot;46&quot; rx=&quot;6&quot; fill=&quot;#fff&quot; filter=&quot;url(#ps${x.u})&quot;/>
+         <g fill=&quot;${tint(c, .72)}&quot;>${[47, 53, 71, 77].map((y, i) => `<rect x=&quot;101&quot; y=&quot;${y}&quot; width=&quot;${[24, 18, 26, 14][i]}&quot; height=&quot;2.6&quot; rx=&quot;1.3&quot;/>`).join('')}</g>
+         <rect x=&quot;99&quot; y=&quot;58&quot; width=&quot;34&quot; height=&quot;10&quot; rx=&quot;3&quot; fill=&quot;#EF5A4C&quot; opacity=&quot;.1&quot; class=&quot;flash&quot;/>
+         <rect x=&quot;101&quot; y=&quot;60&quot; width=&quot;22&quot; height=&quot;2.6&quot; rx=&quot;1.3&quot; fill=&quot;#EF5A4C&quot; opacity=&quot;.85&quot;/>
+         <path d=&quot;M101 65.4 q1.4 -1.6 2.8 0 t2.8 0 t2.8 0 t2.8 0 t2.8 0 t2.8 0 t2.8 0&quot; fill=&quot;none&quot; stroke=&quot;#EF5A4C&quot; stroke-width=&quot;1&quot; stroke-linecap=&quot;round&quot;/>
+         <rect class=&quot;code&quot; x=&quot;101&quot; y=&quot;60&quot; width=&quot;22&quot; height=&quot;2.6&quot; rx=&quot;1.3&quot; fill=&quot;${c}&quot;/>`];
+      // 协作：两只迷你分身在两侧，细连线 + 流动的数据点
+      case 'collab': {
+        const L = [-0.8, 66], Rr = [121.2, 66], from = [60, 18];
+        const path = ([tx, ty]) => `M${from[0]} ${from[1]} Q${(from[0] + tx) / 2} ${from[1] - 4} ${tx} ${ty}`;
+        return [
+          !compact &amp;&amp; [L, Rr].map((p, k) => `<path d=&quot;${path(p)}&quot; fill=&quot;none&quot; stroke=&quot;${c}&quot; stroke-opacity=&quot;.35&quot; stroke-width=&quot;1&quot; stroke-dasharray=&quot;1.5 3&quot;/>
+           <circle r=&quot;1.8&quot; fill=&quot;${c}&quot;><animateMotion dur=&quot;2s&quot; begin=&quot;${k}s&quot; repeatCount=&quot;indefinite&quot; path=&quot;${path(p)}&quot;/></circle>`).join(''),
+          B, antenna(x, c, ['pulse']), eyes(x, 'normal', { cls: 'lookLR' }), soft(x), mouth(x, 'smile'),
+          !compact &amp;&amp; mini(x, -21.2, 58, '#8B7CF6', 'mini1'), !compact &amp;&amp; mini(x, 100.8, 58, x.P.accent, 'mini2')];
+      }
       case 'awaiting': return [B, antenna(x, c, ['flash']), eyes(x, 'wide'), blush(x), mouth(x, 'o'),
         !compact &amp;&amp; `<g class=&quot;wave&quot;><path d=&quot;M91 68 Q103 62 106 50&quot; fill=&quot;none&quot; stroke=&quot;${x.P.side}&quot; stroke-width=&quot;7&quot; stroke-linecap=&quot;round&quot;/><circle cx=&quot;106.5&quot; cy=&quot;47&quot; r=&quot;5.2&quot; fill=&quot;${x.P.hand}&quot;/></g>
          <g class=&quot;pulse&quot;><circle cx=&quot;126&quot; cy=&quot;32&quot; r=&quot;8.5&quot; fill=&quot;${c}&quot;/><rect x=&quot;124.6&quot; y=&quot;26.5&quot; width=&quot;2.8&quot; height=&quot;7&quot; rx=&quot;1.4&quot; fill=&quot;#fff&quot;/><circle cx=&quot;126&quot; cy=&quot;36.6&quot; r=&quot;1.6&quot; fill=&quot;#fff&quot;/></g>`];
@@ -2470,6 +2555,32 @@ button.sel{border-color:var(--ink)}
     return isDeep(cat, palette) ? CAT[cat].deep : CAT[cat].color;
   }
 
+  /* ---------- 点缀：替代卡通道具的线框小标记（opt.accent） ---------- */
+  // 线框图形本身，坐标范围约 ±10；bg=true 时线宽不随缩放变粗，用于大尺寸背景纹样
+  function accentGlyph(id, c, bg = false) {
+    const L = `fill=&quot;none&quot; stroke=&quot;${c}&quot; stroke-width=&quot;${bg ? 1.3 : 1.6}&quot;${bg ? ' vector-effect=&quot;non-scaling-stroke&quot;' : ''} stroke-linecap=&quot;round&quot; stroke-linejoin=&quot;round&quot;`;
+    const k = bg ? .5 : 1; // 背景版：实心点缩小，保持线稿感
+    return {
+      idle: `<circle r=&quot;7&quot; ${L} opacity=&quot;.35&quot;/><circle class=&quot;ac-breathe&quot; r=&quot;${3 * k}&quot; fill=&quot;${c}&quot;/>`,
+      listening: [-6, -2, 2, 6].map((x, i) => `<line class=&quot;eq ${['', 'e2', 'e3', 'e2'][i]}&quot; x1=&quot;${x}&quot; y1=&quot;-7&quot; x2=&quot;${x}&quot; y2=&quot;7&quot; ${L}/>`).join(''),
+      thinking: [-6, 0, 6].map((x, i) => `<circle class=&quot;dot ${['', 'd2', 'd3'][i]}&quot; cx=&quot;${x}&quot; cy=&quot;0&quot; r=&quot;${1.9 * k}&quot; fill=&quot;${c}&quot;/>`).join(''),
+      reasoning: `<g class=&quot;ac-spin&quot;><path d=&quot;M0 -8 A8 8 0 0 1 8 0&quot; ${L}/><path d=&quot;M0 8 A8 8 0 0 1 -8 0&quot; ${L}/></g><g class=&quot;ac-spin-r&quot;><path d=&quot;M4 0 A4 4 0 0 1 0 4&quot; ${L} opacity=&quot;.55&quot;/><path d=&quot;M-4 0 A4 4 0 0 1 0 -4&quot; ${L} opacity=&quot;.55&quot;/></g>`,
+      planning: [-6, 0, 6].map((y, i) => `<path class=&quot;chk ${['', 'k2', 'k3'][i]}&quot; d=&quot;M-8 ${y} l1.6 1.6 l2.8 -3&quot; ${L}/><line x1=&quot;-1&quot; y1=&quot;${y}&quot; x2=&quot;${[8, 5, 7][i]}&quot; y2=&quot;${y}&quot; ${L} opacity=&quot;.45&quot;/>`).join(''),
+      coding: `<path d=&quot;M-4 -6 L-9 0 L-4 6 M4 -6 L9 0 L4 6&quot; ${L}/><line class=&quot;caret&quot; x1=&quot;1.4&quot; y1=&quot;-6&quot; x2=&quot;-1.4&quot; y2=&quot;6&quot; ${L}/>`,
+      searching: `<g class=&quot;sweep&quot;><circle cx=&quot;-2&quot; cy=&quot;-2&quot; r=&quot;5.2&quot; ${L}/><line x1=&quot;1.8&quot; y1=&quot;1.8&quot; x2=&quot;6&quot; y2=&quot;6&quot; ${L}/></g>`,
+      running: bg ? `<line x1=&quot;-9&quot; y1=&quot;0&quot; x2=&quot;9&quot; y2=&quot;0&quot; ${L} opacity=&quot;.3&quot;/><line class=&quot;prog&quot; x1=&quot;-9&quot; y1=&quot;0&quot; x2=&quot;9&quot; y2=&quot;0&quot; ${L}/>` : `<rect x=&quot;-9&quot; y=&quot;-1.6&quot; width=&quot;18&quot; height=&quot;3.2&quot; rx=&quot;1.6&quot; fill=&quot;${c}&quot; opacity=&quot;.2&quot;/><rect class=&quot;prog&quot; x=&quot;-9&quot; y=&quot;-1.6&quot; width=&quot;18&quot; height=&quot;3.2&quot; rx=&quot;1.6&quot; fill=&quot;${c}&quot;/>`,
+      debugging: `<circle r=&quot;6.5&quot; ${L}/><path d=&quot;M0 -9.5 V-5 M0 5 V9.5 M-9.5 0 H-5 M5 0 H9.5&quot; ${L}/><circle class=&quot;ac-breathe&quot; r=&quot;${1.8 * k}&quot; fill=&quot;${c}&quot;/>`,
+      collab: `<path d=&quot;M-7 5 L0 -6 L7 5 Z&quot; ${L} opacity=&quot;.4&quot;/>${[[-7, 5], [0, -6], [7, 5]].map(([x, y]) => `<circle cx=&quot;${x}&quot; cy=&quot;${y}&quot; r=&quot;${2.3 * k}&quot; fill=&quot;${c}&quot;/>`).join('')}<circle r=&quot;${1.4 * k}&quot; fill=&quot;${c}&quot;><animateMotion dur=&quot;2.4s&quot; repeatCount=&quot;indefinite&quot; path=&quot;M0 -6 L7 5 L-7 5 Z&quot;/></circle>`,
+      awaiting: `<circle class=&quot;ac-ping&quot; r=&quot;9&quot; ${L}/><circle r=&quot;${3.2 * k}&quot; fill=&quot;${c}&quot;/>`,
+      done: `<path class=&quot;ac-draw&quot; d=&quot;M-7 0 L-2 5 L8 -6&quot; ${L} stroke-width=&quot;2&quot;/>`,
+      error: `<path d=&quot;M0 -8 L8.5 7 H-8.5 Z&quot; ${L}/><line x1=&quot;0&quot; y1=&quot;-2&quot; x2=&quot;0&quot; y2=&quot;2.4&quot; ${L}/><circle cx=&quot;0&quot; cy=&quot;4.8&quot; r=&quot;.9&quot; fill=&quot;${c}&quot;/>`,
+      sleeping: `<path d=&quot;M3 -8 A8 8 0 1 0 8 4 A6 6 0 1 1 3 -8 Z&quot; ${L}/><path class=&quot;zz&quot; d=&quot;M-9 -9 h3.5 l-3.5 4 h3.5&quot; ${L} stroke-width=&quot;1.3&quot;/>`
+    }[id];
+  }
+  function accent(id, c) {
+    return `<g transform=&quot;translate(118 26)&quot;><circle r=&quot;14&quot; fill=&quot;${c}&quot; opacity=&quot;.08&quot;/>${accentGlyph(id, c)}</g>`;
+  }
+
   /* ---------- 渲染 ---------- */
   function render(id, opt = {}) {
     const st = STATES.find(s => s.id === id);
@@ -2477,17 +2588,17 @@ button.sel{border-color:var(--ink)}
     const x = { P, u: 'b' + (++UID), plush: opt.finish === 'plush', metal: opt.finish === 'metal', cute: opt.face === 'cute', flat: opt.view === 'flat' || !!opt.tiny, tiny: !!opt.tiny };
     if (x.flat) { x.plush = false; x.metal = false; } // 平面只有一种：纯平、简化
     const color = statusColor(st.cat, opt.palette);
-    const compact = !!opt.compact || !!opt.tiny;
-    const list = parts(id, x, color, compact).filter(Boolean).join('');
-    const wrap = st.wrap === 'hop' &amp;&amp; compact ? 'f' : st.wrap;
-    const vb = x.tiny ? '20 13 80 90' : compact ? '9 1 102 107' : '0 0 160 136';
+    const compact = !!opt.compact || !!opt.tiny, ac = !!opt.accent &amp;&amp; !x.tiny;
+    const list = parts(id, x, color, compact || ac).filter(Boolean).join('');
+    const wrap = st.wrap === 'hop' &amp;&amp; (compact || ac) ? 'f' : st.wrap;
+    const vb = x.tiny ? '20 13 80 90' : ac ? '34 6 122 120' : compact ? '9 1 102 107' : '0 0 160 136';
     const shadow = x.flat ? '' : false ? `<ellipse cx=&quot;60&quot; cy=&quot;104&quot; rx=&quot;27&quot; ry=&quot;2.6&quot; fill=&quot;#000&quot; opacity=&quot;.07&quot;/>` : `<ellipse cx=&quot;60&quot; cy=&quot;103.5&quot; rx=&quot;30&quot; ry=&quot;4.2&quot; fill=&quot;url(#sh${x.u})&quot;/>`;
-    const inner = compact ? `${shadow}<g class=&quot;${wrap}&quot;>${list}</g>` : `<g transform=&quot;translate(20 12)&quot;>${shadow}<g class=&quot;${wrap}&quot;>${list}</g></g>`;
+    const inner = compact &amp;&amp; !ac ? `${shadow}<g class=&quot;${wrap}&quot;>${list}</g>` : `<g transform=&quot;translate(20 12)&quot;>${shadow}<g class=&quot;${wrap}&quot;>${list}</g>${ac ? accent(id, color) : ''}</g>`;
     const style = opt.noStyle ? '' : `<style>${STYLE}</style>`;
     return `<svg class=&quot;bf&quot; xmlns=&quot;http://www.w3.org/2000/svg&quot; viewBox=&quot;${vb}&quot; role=&quot;img&quot; aria-label=&quot;毕方 · ${st.name}&quot;>${style}${defs(x)}${inner}</svg>`;
   }
 
-  root.BF = { STATES, CAT, PALETTES, BASE, STYLE, render, statusColor, isDeep, hueOf, hueDist };
+  root.BF = { STATES, CAT, PALETTES, BASE, STYLE, render, accentGlyph, statusColor, isDeep, hueOf, hueDist };
   if (typeof module !== 'undefined') module.exports = root.BF;
 })(typeof window !== 'undefined' ? window : globalThis);
 
@@ -2544,8 +2655,12 @@ button.sel{border-color:var(--ink)}
   // groups
   const order = ['idle','think','work','ask','ok','err','off'];
   const sorted = order.flatMap(k => STATES.filter(s => s.cat === k));
-  function drawGroups(){ document.getElementById('groups').innerHTML = `<div class=&quot;grid&quot;>${sorted.map((s, n) => { const c = Object.assign({}, CAT[s.cat], {color: colorOf(s.id)}); return `<div class=&quot;card&quot;><div class=&quot;stage&quot; style=&quot;--sc:${c.color}&quot;><span class=&quot;cat&quot;><i></i>${c.name}</span><span class=&quot;no&quot;>${String(n+1).padStart(2,'0')}</span>${R(s.id)}${pill(s.id)}</div>
-      <div class=&quot;meta&quot;><div class=&quot;t&quot;><b>${s.name}</b><span>${s.en}</span></div><dl><div><dt>出现时机</dt><dd class=&quot;when&quot;>${s.when}</dd></div><div><dt>设计要点</dt><dd class=&quot;notes&quot;>${s.notes}</dd></div></dl></div></div>`; }).join('')}</div>`; }
+  // 状态全集：舞台卡片（顶光 + 状态色光晕 + 道具），浅色 / 深色舞台可切换；深色时道具卡换成深色玻璃
+  let stageT = 'light';
+  const glass = v => stageT !== 'dark' ? v : v.replace(/fill=&quot;#fff&quot; filter=/g,'fill=&quot;#24242a&quot; stroke=&quot;rgba(255,255,255,.08)&quot; filter=').replace(/fill=&quot;#F3F4F6&quot;/g,'fill=&quot;#24242a&quot;').replace(/fill=&quot;#D9DDE3&quot;/g,'fill=&quot;#3a3a42&quot;').replace(/stroke=&quot;#2A2D35&quot;/g,'stroke=&quot;#c9cbd1&quot;');
+  document.getElementById('stageT').onclick = e => { const b = e.target.closest('button'); if (!b) return; stageT = b.dataset.v; [...e.currentTarget.children].forEach(x => x.setAttribute('aria-pressed', String(x === b))); drawGroups(); };
+  function drawGroups(){ document.getElementById('groups').innerHTML = `<div class=&quot;sgrid&quot; data-t=&quot;${stageT}&quot;>${sorted.map((s, n) => { const col = colorOf(s.id); return `<div class=&quot;scell&quot; id=&quot;st-${s.id}&quot; style=&quot;--c:${col}&quot;><span class=&quot;cat&quot;><i></i>${CAT[s.cat].name}</span><span class=&quot;no&quot;>${String(n+1).padStart(2,'0')}</span><div class=&quot;fig&quot;>${glass(R(s.id))}</div>
+      <div class=&quot;smeta&quot;><div class=&quot;name&quot;>${s.name}</div><div class=&quot;en&quot;>${s.en}</div><dl><div><dt>出现时机</dt><dd class=&quot;when&quot;>${s.when}</dd></div><div><dt>设计要点</dt><dd>${s.notes}</dd></div></dl></div></div>`; }).join('')}</div>`; }
 
   // sizes
   const sizes = [56, 32, 22, 18];
@@ -2596,7 +2711,7 @@ addEventListener('load',send);new ResizeObserver(send).observe(document.body);se
 "></iframe>
 </section>
 
-<footer>由 src/build.js 生成，请勿手工修改本文件；源码见仓库 mascot-states/src。生成时间 2026-11-25。</footer>
+<footer>由 src/build.js 生成，请勿手工修改本文件；源码见仓库 mascot-states/src。生成时间 2026-11-26。</footer>
 
 <script>
 (function(){
