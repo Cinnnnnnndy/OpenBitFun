@@ -1,7 +1,7 @@
 /* 毕方 BitFun · 多状态形象生成器 v1.0
  * 形象来源：等距视角的圆角方块 + 顶面中心白色短天线 + 球；右侧面两只白色竖椭圆小眼（参考 飞书20261116 视频）。
  * 语义：天线球 = 状态灯（颜色区分大类），眼睛 = 注意力/情绪，道具 = 具体任务（仅大尺寸），胶囊 = 精确进度。
- * 选项：finish = smooth（光滑，视频原版）| plush（毛绒）；palette = PALETTES 中的配色。
+ * 选项：finish = smooth（光滑，视频原版）| metal（金属）| plush（毛绒：羽绒质感 + 尾羽，毕方为《山海经》神鸟）；palette = PALETTES 中的配色。
  */
 (function (root) {
   const C = { line: '#E3E5EA', sub: '#C9CED6', ink: '#2A2D35' };
@@ -151,6 +151,7 @@
 <linearGradient id="mf${u}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff" stop-opacity=".6"/><stop offset=".3" stop-color="#fff" stop-opacity="0"/><stop offset=".8" stop-color="#fff" stop-opacity="0"/><stop offset="1" stop-color="#fff" stop-opacity=".3"/></linearGradient>
 <linearGradient id="bs${u}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff" stop-opacity=".22"/><stop offset=".45" stop-color="#fff" stop-opacity="0"/><stop offset="1" stop-color="#000" stop-opacity=".28"/></linearGradient>
 <filter color-interpolation-filters="sRGB" id="tb${u}" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="${x.plush ? 3.6 : 2.6}"/></filter>
+<filter color-interpolation-filters="sRGB" id="pf${u}" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation=".55"/></filter>
 <filter color-interpolation-filters="sRGB" id="hl${u}" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="3"/></filter>
 <filter color-interpolation-filters="sRGB" id="fz${u}" x="-25%" y="-25%" width="150%" height="150%"><feTurbulence type="fractalNoise" baseFrequency=".62" numOctaves="2" seed="5" result="n"/><feDisplacementMap in="SourceGraphic" in2="n" scale="1.7" xChannelSelector="R" yChannelSelector="G" result="d"/><feGaussianBlur in="d" stdDeviation=".28"/></filter>
 <filter color-interpolation-filters="sRGB" id="fur${u}" x="-30%" y="-30%" width="160%" height="160%"><feTurbulence type="fractalNoise" baseFrequency="1.5 2.4" numOctaves="3" seed="9" result="n"/><feColorMatrix in="n" type="matrix" values="0 0 0 0 ${fr} 0 0 0 0 ${fg} 0 0 0 0 ${fb} 0 0 0 2.2 -.95" result="a"/><feGaussianBlur in="a" stdDeviation=".55" result="ab"/><feComposite in="ab" in2="SourceAlpha" operator="in"/></filter>
@@ -161,6 +162,57 @@
   const shadeHex = (h, k) => '#' + [1, 3, 5].map(i => Math.round(parseInt(h.substr(i, 2), 16) * (1 - k)).toString(16).padStart(2, '0')).join('');
   // 浅色（接近白）的身体 / 球放在浅底上会消失：自动加一圈同色系的细轮廓
   const edgeOf = h => /^#[0-9a-f]{6}$/i.test(h) && relLum(h) > .72 ? shadeHex(h, .2) : null;
+
+  /* ---------- 毛绒：毕方是《山海经》里的神鸟，毛绒做成羽绒——表面一层顺向的绒羽，边缘一圈蓬松的绒毛 ---------- */
+  const rng = seed => () => { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
+  const f2 = n => n.toFixed(2);
+  function down(x) {
+    const { P, u } = x, r = rng(7), lum = relLum(P.side), lite = tint(P.side, lum < .05 ? .32 : .6), dark = shadeHex(P.side, lum < .05 ? 0 : .12);
+    const lerp = (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+    const at = (q, s, t) => lerp(lerp(q[0], q[1], s), lerp(q[3], q[2], s), t);
+    // 表面：交错排列的小绒簇（每簇三根短绒，顺着面向下倒伏），轻微模糊，像鸟胸前的绒羽
+    const faces = [
+      { q: [[60, 38], [87, 53.6], [60, 69.2], [33, 53.6]], cols: 8, rows: 8, dir: [0, 1] },
+      { q: [[33, 53.6], [60, 69.2], [60, 93.2], [33, 77.6]], cols: 7, rows: 7, dir: [.2, 1] },
+      { q: [[60, 69.2], [87, 53.6], [87, 77.6], [60, 93.2]], cols: 7, rows: 7, dir: [-.2, 1] }
+    ];
+    let o = '';
+    for (const f of faces) for (let rI = 0; rI < f.rows; rI++) for (let c = 0; c < f.cols; c++) {
+      const su = (c + (rI % 2 ? .5 : .1) + (r() - .5) * .5) / f.cols, sv = (rI + .2 + (r() - .5) * .5) / f.rows;
+      if (su > 1 || su < 0 || sv > 1) continue;
+      const p = at(f.q, su, sv), L = 2.4 + r() * 1.6, light = r() < .62;
+      for (let k = -1; k <= 1; k++) {
+        const ang = Math.atan2(f.dir[1], f.dir[0]) + k * .38 + (r() - .5) * .2;
+        const e = [p[0] + Math.cos(ang) * L, p[1] + Math.sin(ang) * L], m = [p[0] + Math.cos(ang) * L * .5 + k * .5, p[1] + Math.sin(ang) * L * .5];
+        o += `<path d="M${f2(p[0])} ${f2(p[1])}Q${f2(m[0])} ${f2(m[1])} ${f2(e[0])} ${f2(e[1])}" stroke="${light ? lite : dark}"/>`;
+      }
+    }
+    // 边缘：一圈重叠的绒团，轮廓变得圆鼓蓬松
+    const poly = [[60, 38], [87, 53.6], [87, 77.6], [60, 93.2], [33, 77.6], [33, 53.6]], cx = 60, cy = 65.6;
+    let puff = '';
+    const add = (px, py, nx, ny) => { const rr = 2.4 + r() * 1.3, off = 7.4 + r() * .8; puff += `<circle cx="${f2(px + nx * off)}" cy="${f2(py + ny * off)}" r="${f2(rr)}"/>`; };
+    for (let k = 0; k < 6; k++) {
+      const a = poly[k], b = poly[(k + 1) % 6], seg = Math.hypot(b[0] - a[0], b[1] - a[1]), nx = (b[1] - a[1]) / seg, ny = -(b[0] - a[0]) / seg;
+      const steps = Math.round(seg / 3);
+      for (let i = 0; i <= steps; i++) { const p = lerp(a, b, i / steps); add(p[0], p[1], nx, ny); }
+      const vx = b[0] - cx, vy = b[1] - cy, vl = Math.hypot(vx, vy);
+      for (let j = -1; j <= 1; j++) { const ang = Math.atan2(vy, vx) + j * .45; add(b[0], b[1], Math.cos(ang), Math.sin(ang)); }
+    }
+    return `<g fill="${P.side}" filter="url(#pf${u})">${puff}</g><g clip-path="url(#cl${u})"><g fill="none" stroke-width=".75" stroke-linecap="round" stroke-opacity="${lum < .05 ? .22 : .42}" filter="url(#pf${u})">${o}</g></g>`;
+  }
+  // 头顶羽冠：三根向后弯的羽毛，立在天线后方，呼应《山海经》“其状如鹤”
+  // 尾羽：从身体左后方伸出三根上扬的长羽（画在身体后面），呼应《山海经》里“其状如鹤”的毕方
+  function crest(x) {
+    const { P, u } = x, c = P.accent, dk = shadeHex(P.accent, .3), lt = tint(P.accent, .5);
+    // 圆头羽片：一个沿方向拉长的椭圆，中间一条羽轴，上沿一道亮边
+    const plume = (len, ang, w) => {
+      const bx = 38, by = 57, a = ang * Math.PI / 180, cx = bx + Math.cos(a) * len * .5, cy = by + Math.sin(a) * len * .5;
+      return `<g transform="translate(${f2(cx)} ${f2(cy)}) rotate(${ang})"><ellipse rx="${f2(len / 2)}" ry="${f2(w)}" fill="${c}"/>
+        <path d="M${f2(-len / 2 + 1)} 0 L${f2(len / 2 - 1.5)} 0" stroke="${dk}" stroke-opacity=".45" stroke-width=".6"/>
+        <path d="M${f2(-len / 2 + 3)} ${f2(-w * .55)} Q0 ${f2(-w * .95)} ${f2(len / 2 - 2.5)} ${f2(-w * .35)}" stroke="${lt}" stroke-width=".9" fill="none" stroke-linecap="round"/></g>`;
+    };
+    return `<g class="tail" filter="url(#pf${u})">${plume(26, 200, 3.6)}${plume(31, 220, 4)}${plume(24, 240, 3.5)}</g>`;
+  }
 
   function body(x) {
     const { P, u, plush } = x, sw = plush ? 20 : 18;
@@ -186,8 +238,9 @@
 <path d="M60 71.4 L60 92" fill="none" stroke="#fff" stroke-opacity=".5" stroke-width="1" filter="url(#hb${u})"/>`;
     if (plush) g += `<path d="${SIL}" fill="#000" stroke="#000" stroke-width="${sw}" stroke-linejoin="round" filter="url(#fur${u})" opacity="${P.furOp}"/>
 <mask id="m${u}"><path d="${SIL}" fill="#fff" stroke="#fff" stroke-width="${sw}" stroke-linejoin="round"/></mask>
-<rect x="0" y="20" width="120" height="100" fill="url(#ao${u})" mask="url(#m${u})"/>`;
-    return plush ? `<g filter="url(#fz${u})">${g}</g>` : g;
+<rect x="0" y="20" width="120" height="100" fill="url(#ao${u})" mask="url(#m${u})"/>
+<clipPath id="cl${u}"><path d="${SIL}" stroke="#000" stroke-width="${sw - 2}" stroke-linejoin="round"/></clipPath>${down(x)}`;
+    return plush ? `${crest(x)}<g filter="url(#fz${u})">${g}</g>` : g;
   }
 
   function eyes(x, type, o = {}) {
