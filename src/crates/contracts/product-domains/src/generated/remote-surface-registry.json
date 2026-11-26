@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "digest": "fnv1a64:0b686be0f5103ef5",
+  "digest": "fnv1a64:bbde1d4e263a15c2",
   "retiredCommandPrefixes": [
     {
       "prefix": "lsp_",
@@ -945,6 +945,18 @@
       }
     },
     {
+      "id": "clean_snapshot_storage",
+      "surface": "tauri_command",
+      "remoteWorkspace": "WorkspaceAgnostic",
+      "peer": {
+        "kind": "controller_local"
+      },
+      "cliPeer": {
+        "kind": "unsupported",
+        "reason": "the controller keeps this command; peer hosts refuse it before dispatch"
+      }
+    },
+    {
       "id": "cleanup_invalid_workspaces",
       "surface": "tauri_command",
       "remoteWorkspace": "LegacyUnaudited",
@@ -1711,6 +1723,18 @@
       "id": "desktop_card_set_visible",
       "surface": "tauri_command",
       "remoteWorkspace": "LocalOnly",
+      "peer": {
+        "kind": "controller_local"
+      },
+      "cliPeer": {
+        "kind": "unsupported",
+        "reason": "the controller keeps this command; peer hosts refuse it before dispatch"
+      }
+    },
+    {
+      "id": "desktop_external_control",
+      "surface": "tauri_command",
+      "remoteWorkspace": "WorkspaceAgnostic",
       "peer": {
         "kind": "controller_local"
       },
@@ -4099,6 +4123,18 @@
       },
       "cliPeer": {
         "kind": "handled"
+      }
+    },
+    {
+      "id": "inspect_snapshot_storage",
+      "surface": "tauri_command",
+      "remoteWorkspace": "WorkspaceAgnostic",
+      "peer": {
+        "kind": "controller_local"
+      },
+      "cliPeer": {
+        "kind": "unsupported",
+        "reason": "the controller keeps this command; peer hosts refuse it before dispatch"
       }
     },
     {
