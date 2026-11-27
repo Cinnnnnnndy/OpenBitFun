@@ -203,7 +203,7 @@ a{color:var(--openbitfun-color-link-default)}
     const d = DOTS.map(([h]) => `<span class="sw"><i style="background:${h}"></i><code>${h}</code></span>`).join('');
     return `<div class="swbox"><div class="swrow"><span class="swlab">BitFun</span>${g}</div><div class="swrow"><span class="swlab">Dots 参考</span>${d}</div></div>`;
   }
-  const svg = (id,P,o) => render(id, Object.assign({palette:P,compact:1,finish:P.finish||S.finish,noStyle:true}, o||{}));
+  const svg = (id,P,o) => render(id, Object.assign({palette:P,compact:1,finish:P.finish||S.finish,noStyle:true,lod:.45}, o||{})); // 卡片较小，毛绒用较低密度
   function card(g,P,i){
     const no = g.k+(i+1);
     const origin = P.from ? `<span>原 ${P.from} · ${P.tok ? P.tok : '非 token'}</span>` : `<span>${P.note}</span>`;

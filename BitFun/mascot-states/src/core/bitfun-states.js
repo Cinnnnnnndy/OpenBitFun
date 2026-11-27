@@ -18,7 +18,8 @@
     mint:     { name: '开心果', note: '亮绿 + 莓果', side: '#C4F2DA', sideL: '#A9E9C8', top0: '#D6F8E7', top1: '#F6FFFA', eye: '#0F3526', stem: '#93D3B2', accent: '#F27BD3', hand: '#B6EDD1', blush: '#FFA9C6', seam: '#9EDDBC', fur: '#4C9A74', furOp: .12, rim: .95, shade: .3 },
     sky:      { name: '天空蓝', note: '亮蓝 + 青', side: '#C7E3FF', sideL: '#ADD4FF', top0: '#D8ECFF', top1: '#F7FBFF', eye: '#0E2848', stem: '#97C1EE', accent: '#2FCFC4', hand: '#BADCFF', blush: '#FFB0C8', seam: '#A2CBF6', fur: '#4F7FB8', furOp: .12, rim: .95, shade: .3 },
     lavender: { name: '香芋紫', note: '亮紫 + 青柠', side: '#E0D3FF', sideL: '#CCBBFF', top0: '#E9DFFF', top1: '#FBF8FF', eye: '#271B55', stem: '#B6A3EE', accent: '#95D84E', hand: '#D6C8FF', blush: '#FFA8D2', seam: '#C4B1F7', fur: '#7A64C2', furOp: .12, rim: .95, shade: .3 },
-    peach:    { name: '蜜桃', note: '亮桃 + 青', side: '#FFDACA', sideL: '#FFC6AE', top0: '#FFE5D9', top1: '#FFF9F5', eye: '#47200F', stem: '#EDB49C', accent: '#2FCFC4', hand: '#FFD0BC', blush: '#FF9283', seam: '#F6BFA8', fur: '#B97A60', furOp: .12, rim: .95, shade: .3 }
+    peach:    { name: '蜜桃', note: '亮桃 + 青', side: '#FFDACA', sideL: '#FFC6AE', top0: '#FFE5D9', top1: '#FFF9F5', eye: '#47200F', stem: '#EDB49C', accent: '#2FCFC4', hand: '#FFD0BC', blush: '#FF9283', seam: '#F6BFA8', fur: '#B97A60', furOp: .12, rim: .95, shade: .3 },
+    bifang:   { name: '毕方', note: '山海经特别版 · 青质赤文白喙', side: '#2E8C86', sideL: '#287B76', top0: '#329690', top1: '#7CC7C0', eye: '#FFFFFF', stem: '#F4F1EA', accent: '#F4F1EA', hand: '#2A847E', blush: '#E0533A', seam: '#5BB0A9', fur: '#FFFFFF', furOp: .2, rim: .5, shade: .7, bifang: true },
   };
 
   const CAT = {
@@ -166,58 +167,76 @@
   /* ---------- 毛绒：毕方是《山海经》里的神鸟，毛绒做成羽绒——表面一层顺向的绒羽，边缘一圈蓬松的绒毛 ---------- */
   const rng = seed => () => { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
   const f2 = n => n.toFixed(2);
-  // 毛绒：长毛绒玩具质感——密而细的长绒顺势倒伏，边缘一圈细长绒毛向外散开
+  // 毛绒：参考 3D 渲染的长毛——绒毛成簇（一簇 6 根从根部散开、向尖端收拢），根暗尖亮；
+  // 颜色按受光位置取（左上方来光，顶面亮、右侧暗、越往下越暗），全部不透明。先画所有暗根，再画亮尖。
   function down(x) {
-    const { P, u } = x, r = rng(7), lum = relLum(P.side);
-    const lite = tint(P.side, lum < .05 ? .28 : .55), dark = shadeHex(P.side, lum < .05 ? 0 : .14);
+    const { P, u } = x, r = rng(7), black = relLum(P.side) < .05;
+    const hi = black ? '#55555e' : tint(P.side, .62), lo = black ? '#000000' : shadeHex(P.side, .34);
+    const mixc = (a, b, t) => '#' + [1, 3, 5].map(i => Math.round(parseInt(a.substr(i, 2), 16) * (1 - t) + parseInt(b.substr(i, 2), 16) * t).toString(16).padStart(2, '0')).join('');
+    const N = 12, tones = Array.from({ length: N }, (_, k) => { const t = k / (N - 1); return t < .5 ? mixc(lo, P.side, t * 2) : mixc(P.side, hi, (t - .5) * 2); });
+    const roots = Array.from({ length: N }, () => ''), tips = Array.from({ length: N }, () => '');
+    const bin = v => Math.max(0, Math.min(N - 1, Math.round(v * (N - 1))));
     const lerp = (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
-    const at = (q, s, t) => lerp(lerp(q[0], q[1], s), lerp(q[3], q[2], s), t);
-    const strand = (x0, y0, ang, len, curl) => {
-      const ex = x0 + Math.cos(ang) * len, ey = y0 + Math.sin(ang) * len;
-      const mx = x0 + Math.cos(ang) * len * .5 - Math.sin(ang) * curl, my = y0 + Math.sin(ang) * len * .5 + Math.cos(ang) * curl;
-      return `M${f2(x0)} ${f2(y0)}Q${f2(mx)} ${f2(my)} ${f2(ex)} ${f2(ey)}`;
-    };
-    // 表面长绒：顶面从中心向外放射，两个侧面向下倒伏
-    const faces = [
-      { q: [[60, 38], [87, 53.6], [60, 69.2], [33, 53.6]], n: 650, top: true },
-      { q: [[33, 53.6], [60, 69.2], [60, 93.2], [33, 77.6]], n: 560, d: 1.35 },
-      { q: [[60, 69.2], [87, 53.6], [87, 77.6], [60, 93.2]], n: 560, d: 1.79 }
-    ];
-    let li = '', dk = '';
-    for (const f of faces) for (let i = 0; i < f.n; i++) {
-      const p = at(f.q, r(), r());
-      const ang = f.top ? Math.atan2(p[1] - 53.6, p[0] - 60) + (r() - .5) * .5 : f.d + (r() - .5) * .45;
-      const d = strand(p[0], p[1], ang, 3.6 + r() * 3.4, (r() - .5) * 2.2);
-      if (r() < .6) li += d; else dk += d;
+    const at = (q, s2, t) => lerp(lerp(q[0], q[1], s2), lerp(q[3], q[2], s2), t);
+    const light = (px, py, base) => Math.max(0, Math.min(1, base - (py - 53) * .011 - (px - 60) * .004 + (r() - .5) * .1));
+    function clump(px, py, ang, L, w, shade, n = 6) {
+      const ux = Math.cos(ang), uy = Math.sin(ang), vx = -uy, vy = ux, tipT = (r() - .5) * .6;
+      const tx = px + ux * L + vx * tipT, ty = py + uy * L + vy * tipT, bend = (r() - .5) * 2.6;
+      const rb = bin(shade - .26), tb = bin(shade + .26);
+      for (let j = 0; j < n; j++) {
+        const t = (j / (n - 1) - .5) * 2, ax = px + vx * t * w, ay = py + vy * t * w;
+        const ex = tx + vx * t * w * .18 + (r() - .5) * .5, ey = ty + vy * t * w * .18 + (r() - .5) * .5;
+        const cx = (ax + ex) / 2 + vx * bend, cy = (ay + ey) / 2 + vy * bend;
+        roots[rb] += `M${f2(ax)} ${f2(ay)}Q${f2(cx)} ${f2(cy)} ${f2(ex)} ${f2(ey)}`;
+        // 尖端一段（贝塞尔 0.5→1）用亮色压在上面
+        const mx = .25 * ax + .5 * cx + .25 * ex, my = .25 * ay + .5 * cy + .25 * ey, qx = (cx + ex) / 2, qy = (cy + ey) / 2;
+        tips[tb] += `M${f2(mx)} ${f2(my)}Q${f2(qx)} ${f2(qy)} ${f2(ex)} ${f2(ey)}`;
+      }
     }
-    // 边缘长毛：沿外轮廓向外，长短不一
+    const faces = [
+      { q: [[60, 38], [87, 53.6], [60, 69.2], [33, 53.6]], n: 260, top: true, base: 1.02 },
+      { q: [[33, 53.6], [60, 69.2], [60, 93.2], [33, 77.6]], n: 220, d: 1.35, base: .74 },
+      { q: [[60, 69.2], [87, 53.6], [87, 77.6], [60, 93.2]], n: 220, d: 1.79, base: .58 }
+    ];
+    for (const f of faces) for (let i = 0, m = Math.round(f.n * x.lod); i < m; i++) {
+      const p = at(f.q, r(), r());
+      const ang = f.top ? Math.atan2(p[1] - 53.6, p[0] - 60) + (r() - .5) * .6 : f.d + (r() - .5) * .5;
+      clump(p[0], p[1], ang, 4.5 + r() * 4, .45 + r() * .45, light(p[0], p[1], f.base), 5);
+    }
     const poly = [[60, 38], [87, 53.6], [87, 77.6], [60, 93.2], [33, 77.6], [33, 53.6]], cx = 60, cy = 65.6;
-    let fr = '', frl = '';
     for (let k = 0; k < 6; k++) {
       const a = poly[k], b = poly[(k + 1) % 6], seg = Math.hypot(b[0] - a[0], b[1] - a[1]), nx = (b[1] - a[1]) / seg, ny = -(b[0] - a[0]) / seg;
-      const n = Math.round(seg * 7);
-      for (let i = 0; i < n; i++) {
-        const p = lerp(a, b, r()), off = 4.5 + r() * 3.5, sx = p[0] + nx * off, sy = p[1] + ny * off;
-        const ang = Math.atan2(ny, nx) + (r() - .5) * 1.1;
-        const d = strand(sx, sy, ang, 2.6 + r() * 3.6, (r() - .5) * 3);
-        if (r() < .85) fr += d; else frl += d;
-      }
-      // 圆角过渡带（面和外缘之间）也铺满绒毛，避免边缘一圈发空
-      for (let i = 0, m = Math.round(seg * 6); i < m; i++) {
+      const base = ny < -.3 ? 1.02 : nx < -.5 ? .74 : nx > .5 ? .58 : .46;
+      // 圆角过渡带
+      for (let i = 0, m = Math.round(seg * 2.4 * x.lod); i < m; i++) {
         const p = lerp(a, b, r()), off = r() * 6, sx = p[0] + nx * off, sy = p[1] + ny * off;
-        const ang = Math.atan2(ny, nx) * .5 + Math.PI / 2 * .5 + (r() - .5) * .9;
-        const d = strand(sx, sy, ang, 3 + r() * 3, (r() - .5) * 2.4);
-        if (r() < .6) li += d; else dk += d;
+        clump(sx, sy, Math.atan2(ny, nx) * .5 + Math.PI / 4 + (r() - .5) * .8, 4.5 + r() * 3.5, .45 + r() * .4, light(sx, sy, base), 5);
+      }
+      // 外缘向外支出的毛簇
+      for (let i = 0, m = Math.round(seg * 2.6 * x.lod); i < m; i++) {
+        const p = lerp(a, b, r()), off = 4 + r() * 3, sx = p[0] + nx * off, sy = p[1] + ny * off;
+        clump(sx, sy, Math.atan2(ny, nx) + (r() - .5) * 1, 3 + r() * 4.5, .4 + r() * .4, light(sx, sy, base - .04), 4);
       }
       const vx = b[0] - cx, vy = b[1] - cy, vl = Math.hypot(vx, vy);
-      for (let i = 0; i < 14; i++) {
-        const ang = Math.atan2(vy, vx) + (r() - .5) * 1.6, off = 5 + r() * 3;
-        fr += strand(b[0] + vx / vl * off, b[1] + vy / vl * off, ang, 3 + r() * 4.5, (r() - .5) * 2.4);
+      for (let i = 0; i < 9; i++) {
+        const sx = b[0] + vx / vl * (4 + r() * 3), sy = b[1] + vy / vl * (4 + r() * 3);
+        clump(sx, sy, Math.atan2(vy, vx) + (r() - .5) * 1.4, 3 + r() * 4.5, .4 + r() * .4, light(sx, sy, base), 4);
       }
     }
-    return `<g fill="none" stroke-linecap="round" filter="url(#pf${u})">
-      <path d="${fr}" stroke="${P.side}" stroke-width=".6"/><path d="${frl}" stroke="${lite}" stroke-width=".45" stroke-opacity="${lum < .05 ? .35 : .7}"/>
-      <g><path d="${dk}" stroke="${dark}" stroke-width=".4" stroke-opacity="${lum < .05 ? .5 : .32}"/><path d="${li}" stroke="${lite}" stroke-width=".4" stroke-opacity="${lum < .05 ? .32 : .55}"/></g></g>`;
+    const paths = arr => arr.map((d, k) => d ? `<path d="${d}" stroke="${tones[k]}"/>` : '').join('');
+    return `<g fill="none" stroke-linecap="round" stroke-width=".34" filter="url(#pf${u})">${paths(roots)}${paths(tips)}</g>`;
+  }
+
+  // 毕方特别版：《山海经》“其状如鹤，一足，赤文青质而白喙”——青色身体上几道红色羽纹，眼睛下方一只白喙；方块上的天线就是那“一足”
+  function bifangMarks(x) {
+    const red = '#D8452E', beak = '#F4F1EA', u = x.u;
+    if (x.flat) return `<g fill="none" stroke="${red}" stroke-linecap="round" stroke-width="${x.tiny ? 3 : 2.2}"><path d="M31 88 Q38 82 46 86"/><path d="M74 86 Q82 82 89 88"/>${x.tiny ? '' : '<path d="M33 94 Q39 90 45 93"/><path d="M75 93 Q81 90 87 94"/>'}</g>
+      <path d="M57.4 ${x.tiny ? 72 : 70} L62.6 ${x.tiny ? 72 : 70} L60 ${x.tiny ? 77 : 75.5}Z" fill="${beak}" stroke="${beak}" stroke-width="1.2" stroke-linejoin="round"/>`;
+    const L = 'matrix(1 .577 0 1 33 53.6)';
+    const stripe = (d, w) => `<path d="${d}" fill="none" stroke="${red}" stroke-width="${w}" stroke-linecap="round"/>`;
+    return `<g${x.plush ? ` filter="url(#fz${u})"` : ''} opacity="${x.plush ? .92 : 1}">
+      <g transform="${L}">${stripe('M3 7 Q12 3 22 8', 2.2)}${stripe('M2 13 Q12 9 24 14', 2.2)}${stripe('M4 19 Q13 16 21 20', 1.8)}</g></g>
+      <g transform="${FACE}"><path d="M13.6 15.2 Q17 14.2 20.6 15.2 L17.4 21Z" fill="${beak}" stroke="${beak}" stroke-width="1.2" stroke-linejoin="round"/><path d="M14.4 15.6 Q17 15 19.8 15.6" stroke="#cfc6b4" stroke-width=".55" fill="none"/></g>`;
   }
 
   function body(x) {
@@ -376,7 +395,7 @@
   ];
 
   function parts(id, x, c, compact) {
-    const B = body(x);
+    const B = body(x) + (x.P.bifang ? bifangMarks(x) : '');
     switch (id) {
       case 'idle': return [B, antenna(x, c, [], 'ant-idle'), eyes(x, 'normal'), soft(x), mouth(x, 'cat')];
       case 'listening': return [B, antenna(x, c, ['ripple']), eyes(x, 'wide'), soft(x), mouth(x, 'smile'),
@@ -496,7 +515,7 @@
   function render(id, opt = {}) {
     const st = STATES.find(s => s.id === id);
     const P = typeof opt.palette === 'object' ? opt.palette : PALETTES[opt.palette || 'obsidian'];
-    const x = { P, u: 'b' + (++UID), plush: opt.finish === 'plush', metal: opt.finish === 'metal', cute: opt.face === 'cute', flat: opt.view === 'flat' || !!opt.tiny, tiny: !!opt.tiny };
+    const x = { P, u: 'b' + (++UID), plush: opt.finish === 'plush', metal: opt.finish === 'metal', cute: opt.face === 'cute', lod: opt.lod || 1, flat: opt.view === 'flat' || !!opt.tiny, tiny: !!opt.tiny };
     if (x.flat) { x.plush = false; x.metal = false; } // 平面只有一种：纯平、简化
     const color = statusColor(st.cat, opt.palette);
     const compact = !!opt.compact || !!opt.tiny, ac = !!opt.accent && !x.tiny;
