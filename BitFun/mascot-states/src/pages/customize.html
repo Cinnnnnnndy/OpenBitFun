@@ -131,36 +131,19 @@ fieldset+fieldset{margin-top:var(--openbitfun-space-3)}
   /* ---- 可选颜色：主推方案 R 的身体色 + 常用球色 ---- */
   const S = { eye:'auto', finish:'smooth', bg:'tertiary', scheme:'light', body:{tok:'color.identity.project.cyan'}, ball:{tok:'color.control.highlight.background'} };
   const t = n => TK[n][S.scheme];
-  // 一张色卡：按“中性 → 色相 → 深色”排列。相近色（OKLab 距离 < 0.07）已合并，保留 token 那个：
-  // 紫 ← 电光紫、蓝 ← 电光蓝、午夜 ← 深空紫、纯白 ← 纸灰
-  const BODIES = [
-    {name:'纯白', hex:'#F7F7F7'}, {name:'中灰', hex:'#7B7B7B'}, {name:'终端黑', hex:'#0B0B0B'},
-    {name:'红', tok:'color.identity.project.red'}, {name:'番茄', hex:'#FF4A2E'}, {name:'橙', tok:'color.identity.project.orange'},
-    {name:'黄', tok:'color.identity.project.yellow'}, {name:'荧光柠', hex:'#D9F23F'}, {name:'绿', tok:'color.identity.project.green'},
-    {name:'酞菁绿', hex:'#123E34'}, {name:'青', tok:'color.identity.project.cyan'}, {name:'蓝', tok:'color.identity.project.blue'},
-    {name:'午夜', hex:'#17213A'}, {name:'数字薰衣草', hex:'#DCD2F7'}, {name:'紫', tok:'color.identity.project.purple'},
-    {name:'粉', tok:'color.identity.project.pink'}, {name:'热粉', hex:'#FF4FA7'}
-  ];
-  const BALLS = [
-    { tok:'color.control.highlight.background', name:'设计系统高亮（token）' },
-    { hex:'#2FCFD8', name:'青' }, { hex:'#9AD94A', name:'青柠' }, { hex:'#E66FE0', name:'莓果' },
-    { hex:'#2E323A', name:'石墨' }, { hex:'#F4F3EE', name:'珍珠白' }, { same:true, name:'和身体同色（浅一档）' }
-  ];
+  // 统一色板：身体色和天线球色都来自生成器里的 BF.BOARD，全文件共用这一份
+  const BODIES = BF.BOARD.bodies.map(b => Object.assign({}, b));
+  const BALLS = BF.BOARD.balls.map(b => Object.assign({}, b));
   const hexOf = o => o.tok ? t(o.tok) : o.hex;
   const bodyHex = () => hexOf(S.body);
   const ballHex = () => S.ball.same ? (toHsl(bodyHex())[2] < 20 ? adj(bodyHex(), 22) : adj(bodyHex(), 12, 4)) : hexOf(S.ball);
 
   /* ---- 由身体色 + 球色得到整套配色 ---- */
   function palette(){
-    const body = bodyHex(), ball = ballHex(), W = t('color.content.onDark'), K = t('color.content.onLight');
-    const [, , L] = toHsl(body), dark = L < 40, solid = !dark && chroma(body) > .35;
-    const eye = S.eye === 'white' ? W : S.eye === 'black' ? K : (okL(body) < EYE_SPLIT ? W : K);
-    return { side: body, sideL: adj(body, dark ? -2 : -5, dark ? 0 : 6), top0: adj(body, 3), top1: dark ? adj(body, 16) : adj(body, 9, -10),
-      eye, stem: dark ? '#e9ecf0' : adj(body, -22, 4), accent: ball, hand: adj(body, -3), blush: body, seam: body,
-      fur: dark || solid ? '#ffffff' : adj(body, -40), furOp: dark ? .2 : solid ? .18 : .12, rim: dark ? .25 : solid ? .45 : .9, shade: dark ? 1 : solid ? .7 : .3,
-      ring: solid || dark ? t('color.surface.raised') : null,
+    const b = S.body;
+    return BF.makePalette(bodyHex(), ballHex(), { eye: S.eye, bifang: b.bifang, name: b.name, onDark: t('color.content.onDark'), onLight: t('color.content.onLight'), ring: t('color.surface.raised'),
       status: { think: t('color.accent.secondary'), work: t('color.status.info.emphasis'), ask: t('color.status.warning.emphasis'),
-        ok: t('color.status.success.emphasis'), err: t('color.status.danger.emphasis'), off: t('color.content.muted') } };
+        ok: t('color.status.success.emphasis'), err: t('color.status.danger.emphasis'), off: t('color.content.muted') } });
   }
 
   /* ---- 检查 ---- */
@@ -186,7 +169,7 @@ fieldset+fieldset{margin-top:var(--openbitfun-space-3)}
   const sw = (o, kind) => { const c = o.same ? bodyHex() : hexOf(o); const on = kind === 'body' ? S.body === o : S.ball === o;
     return `<button type="button" class="swatch${o.same ? ' same' : ''}" style="--c:${c}" data-kind="${kind}" data-i="${o._i}" aria-pressed="${on}"${o.tok ? ' data-tok' : ''} title="${o.name}${o.tok ? ' · ' + o.tok : ''} · ${c}" aria-label="${o.name}"></button>`; };
   const ALL_BODIES = BODIES; BODIES.forEach((o,i) => o._i = i); BALLS.forEach((o,i) => o._i = i);
-  S.body = ALL_BODIES.find(o => o.tok === 'color.identity.project.cyan'); S.ball = BALLS.find(o => o.name === '珍珠白'); // 默认搭配要能通过全部检查
+  S.body = ALL_BODIES.find(o => o.key === 'cyan'); S.ball = BALLS.find(o => o.name === '珍珠白'); // 默认搭配要能通过全部检查
   const opt = (P, o) => Object.assign({ palette:P, noStyle:true, finish:S.finish }, o);
 
   function draw(){

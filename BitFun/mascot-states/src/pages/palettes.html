@@ -44,7 +44,7 @@ a{color:var(--openbitfun-color-link-default)}
 .swrow{display:flex;gap:var(--openbitfun-space-3);flex-wrap:wrap;padding:var(--openbitfun-space-2) 0}
 .swlab{width:var(--openbitfun-space-16);flex:none;font-size:var(--openbitfun-type-body-sm-font-size);color:var(--openbitfun-color-content-muted)}
 .sw{display:flex;flex-direction:column;align-items:center;width:var(--openbitfun-space-16);font-size:var(--openbitfun-type-meta-font-size)}
-.sw i{width:var(--openbitfun-space-12);height:var(--openbitfun-space-12);border-radius:var(--openbitfun-radius-pill);margin-bottom:var(--openbitfun-space-1)}
+.sw i{width:var(--openbitfun-space-12);height:var(--openbitfun-space-12);border-radius:var(--openbitfun-radius-pill);margin-bottom:var(--openbitfun-space-1);box-shadow:inset 0 0 0 1px var(--openbitfun-color-border-default)}
 .sw code{font-family:var(--openbitfun-font-family-mono);font-size:var(--openbitfun-type-micro-font-size);color:var(--openbitfun-color-content-muted)}
 .alt{margin-top:var(--openbitfun-space-12);border-top:var(--openbitfun-border-width-default) solid var(--openbitfun-color-border-subtle)}
 .alt summary{cursor:pointer;padding:var(--openbitfun-space-4) 0;font-size:var(--openbitfun-type-heading-section-font-size);font-weight:var(--openbitfun-type-heading-section-font-weight);color:var(--openbitfun-color-content-secondary)}
@@ -54,8 +54,8 @@ a{color:var(--openbitfun-color-link-default)}
 </head>
 <body>
 <div class="page" id="root" data-openbitfun-design-system-root data-color-scheme="light"><div class="wrap">
-  <h1>毕方 · 配色探索</h1>
-  <p class="lead">主推方案 R 是 L、G、I、M 合成的一组，放在最上面；其他方向（A、B、C、E、F、H、J、K）收进下面的“备选方案”，点开才显示。双色拼接（原 D 组，以及其他组里顶面和侧面不同色的款）已删除。页面背景、文字、描边、圆角、间距都用 OpenBitFun 设计系统 token。每张卡左边是 3D，右边是平面，下排是天线球的 6 个状态。</p>
+  <h1>毕方 · 统一色板</h1>
+  <p class="lead">全文件只用这一套色板：18 种身体色（其中 8 种是 OpenBitFun 设计系统身份色 token，最后一种是《山海经》毕方特别版）和 7 种天线球色。“自己搭配”、本页和“形象与状态”读的都是同一份数据。每张卡左边 3D、右边平面，下排是天线球在 6 个状态下的颜色。</p>
 
   <form class="bar" id="bar">
     <fieldset><legend>质感</legend><label><input type="radio" name="finish" value="smooth" checked>光滑</label><label><input type="radio" name="finish" value="metal">金属</label><label><input type="radio" name="finish" value="plush">毛绒</label></fieldset>
@@ -65,8 +65,6 @@ a{color:var(--openbitfun-color-link-default)}
 
   <div id="groups"></div>
 
-  <div class="note" ><b>H–M 的趋势依据：</b>Pantone 2026 年度色 Cloud Dancer（首次选白）；“宁静底色 + 大胆亮点”；AI 产品深色优先、紫 + 青与数字薰衣草；Apple Liquid Glass 与液态金属虹彩；“不完美 / 有人味”的大地色反潮流；开发者工具的 Technical Mono；以及高饱和复兴与新野兽派。参考：<a href="https://time.com/7338176/pantone-color-of-the-year-2026/">TIME · Pantone 2026</a>、<a href="https://coloracci.ai/blog/tech-startup-color-trends-2026">Coloracci · Tech Startup Color Trends 2026</a>、<a href="https://medium.com/design-bootcamp/aesthetics-in-the-ai-era-visual-web-design-trends-for-2026-5a0f75a10e98">Aesthetics in the AI era</a>、<a href="https://uxpilot.ai/blogs/product-design-trends">UX Pilot · Product Design Trends 2026</a>、<a href="https://brightnation.studio/blog/web-design-color-trends-2026-2027">Brightnation · Color Trends 2026–27</a>、<a href="https://www.sohu.com/a/995036881_121247870">2026 CMF 趋势预测</a>、<a href="https://rar.design/posts/2026-design-trends">RAR · 2026 設計趨勢</a>。</div>
-  <div class="note"><b>待命球的颜色：</b>非 token 的配色里带彩色的待命球只用青、青柠、莓果或石墨，尽量避开状态色；F 组的待命球是身体的浅一档，会和同色系的状态色接近（例如红身体和“异常”）。G 组统一用 color.control.highlight.background。</div>
 </div></div>
 
 <script>
@@ -77,152 +75,31 @@ a{color:var(--openbitfun-color-link-default)}
   const {render, STYLE, statusColor} = BF;
   const st = document.createElement('style'); st.textContent = STYLE; document.head.appendChild(st);
 
-  /* ---- 颜色工具 ---- */
-  const toHsl = h => { let [r,g,b] = [1,3,5].map(i => parseInt(h.substr(i,2),16)/255); const M=Math.max(r,g,b), m=Math.min(r,g,b), l=(M+m)/2, d=M-m;
-    if(!d) return [0,0,l*100]; const s=d/(1-Math.abs(2*l-1)); let hh = M===r?((g-b)/d)%6 : M===g?(b-r)/d+2 : (r-g)/d+4; return [(hh*60+360)%360, s*100, l*100]; };
-  const toHex = (h,s,l) => { s=Math.max(0,Math.min(100,s))/100; l=Math.max(0,Math.min(100,l))/100; const k=n=>(n+h/30)%12, a=s*Math.min(l,1-l), f=n=>l-a*Math.max(-1,Math.min(k(n)-3,Math.min(9-k(n),1)));
-    return '#'+[f(0),f(8),f(4)].map(v=>Math.round(v*255).toString(16).padStart(2,'0')).join('').toUpperCase(); };
-  const adj = (hex, dl, ds=0) => { const [h,s,l] = toHsl(hex); return toHex(h, s < 4 ? s : s+ds, l+dl); };
-
-  // 由“身体色 + 待命主色 + 眼睛色”推导整套配色
-  function mk(name, note, body, accent, eye, o = {}) {
-    const dark = toHsl(body)[2] < 40;
-    const top = o.top || body;
-    return { name, note, side: body, sideL: o.sideL || adj(body, dark ? -2 : -5, dark ? 0 : 6),
-      top0: adj(top, dark ? 3 : 3), top1: o.top ? adj(top, dark ? 14 : 4) : (dark ? adj(top, 16) : adj(top, 9, -10)),
-      eye, stem: dark ? '#E9ECF0' : adj(body, -22, 4), accent, hand: adj(body, -3), blush: '#FFA8C6', softOp: .6,
-      seam: adj(body, -10), crisp: !!o.top, ring: o.ring || null, fur: dark || o.solid ? '#FFFFFF' : adj(body, -40), furOp: dark ? .2 : o.solid ? .18 : .12, rim: dark ? .25 : o.solid ? .45 : .9, shade: dark ? 1 : o.solid ? .7 : .3, dark };
-  }
-  const CY = '#2FCFD8', LI = '#9AD94A', MG = '#E66FE0', GR = '#2E323A', PW = '#F4F3EE';
-
-  const PEARL = '#F7F6F2';
-  const dots = (name, hex) => mk(name, 'Dots 色卡 ' + hex, hex, toHsl(hex)[2] < 20 ? '#4A4A50' : adj(hex, 12, 4), '#FFFFFF', { solid: true, ring: '#FFFFFF' });
+  const { BOARD, makePalette } = BF;
   const TK = /*__TOKENS_JSON__*/{};
   const S = { finish:'smooth', bg:'tertiary', scheme:'light' };
   const t = n => TK[n][S.scheme];
-  const lum = h => { const c=[1,3,5].map(i=>{ const x=parseInt(h.substr(i,2),16)/255; return x<=.03928?x/12.92:((x+.055)/1.055)**2.4; }); return .2126*c[0]+.7152*c[1]+.0722*c[2]; };
-  const contrast = (a,b) => { const x=lum(a)+.05, y=lum(b)+.05; return Math.max(x,y)/Math.min(x,y); };
-  const mix = (a,b,k) => '#'+[1,3,5].map(i=>Math.round(parseInt(a.substr(i,2),16)*(1-k)+parseInt(b.substr(i,2),16)*k).toString(16).padStart(2,'0')).join('');
-  // 编号沿用上一版 G1–G12；没有对应 token 的不补色，标“待确认”
-  const BITFUN = [['墨',null,'深色模式下 action.primary.background 是半透明白，不能当身体色；没有专用的深色角色色。'],['可可',null,'catalog 里没有棕色角色色。'],['红','red'],['橙','orange'],['黄','yellow'],
-    ['青柠',null,'catalog 里没有青柠角色色。'],['绿','green'],['青','cyan'],['蓝','blue'],['紫','purple'],['粉','pink'],['灰',null,'中性 token 都是文字 / 表面角色，没有灰色角色色。']];
-  function tokenPalette(name, key) {
-    const tok = 'color.identity.project.'+key, body = t(tok), W = t('color.content.onDark'), K = t('color.content.onLight');
-    const okL = h => { const f = i => { const v = parseInt(h.substr(i,2),16)/255; return v<=.04045 ? v/12.92 : ((v+.055)/1.055)**2.4; }; const [r,g,b] = [f(1),f(3),f(5)];
-      return .2104542553*Math.cbrt(.4122214708*r+.5363325363*g+.0514459929*b) + .793617785*Math.cbrt(.2119034982*r+.6806995451*g+.1073969566*b) - .0040720468*Math.cbrt(.0883024619*r+.2817188376*g+.6299787005*b); };
-    const eyeTok = okL(body) < .70 ? 'color.content.onDark' : 'color.content.onLight'; // 深色身体白眼，浅色身体黑眼
-    return { name, note: tok, tok, eyeTok, side: body, sideL: mix(body,K,.1), top0: mix(body,W,.08), top1: mix(body,W,.3), eye: t(eyeTok), stem: body,
-      accent: t('color.control.highlight.background'), hand: mix(body,K,.12), blush: body, seam: body, fur: W, furOp: .18, rim: .4, shade: .7, ring: t('color.surface.raised'),
-      status: { think: t('color.accent.secondary'), work: t('color.status.info.emphasis'), ask: t('color.status.warning.emphasis'), ok: t('color.status.success.emphasis'), err: t('color.status.danger.emphasis'), off: t('color.content.muted') } };
-  }
-  const DOTS = [['#000000'],['#996E42'],['#E74347'],['#EC7332'],['#E8983A'],['#59BE77'],['#55B5A3'],['#4184F4'],['#885CF1'],['#E54896'],['#959595']];
-  const solid = (name, note, hex, accent) => mk(name, note, hex, accent, '#FFFFFF', { solid: true, ring: '#FFFFFF' });
-  const GROUPS = [
-    { k:'G', t:'BitFun 色卡 · 提案', swatch: true, d:'身体只用 color.identity.project.*（设计系统里给用户选的 8 个身份色）。待命球用 control.highlight.background；执行 / 需要你 / 完成 / 异常用 status.info / warning / success / danger 的 emphasis；离线用 content.muted。眼睛在 content.onDark 和 onLight 里取对比 ≥ 3:1 的那个。两处待确认：“思考”没有对应状态 token，暂用 accent.secondary；G1、G2、G6、G12 没有对应角色色。',
-      get items(){ return BITFUN.map(([n,k,why]) => k ? tokenPalette(n,k) : { tbc:true, name:n, why }); } },
-    { k:'F', t:'参考 Dots 色卡 · 实色身体', d:'直接取自 Dots 的 11 个角色色。身体是实色，眼睛统一白色；待命球用同色系的浅一档（和身体是一个颜色，像 Dots 那样单色），一有状态就变色；所有球加一圈白描边，在同色系身体上（如绿身体 + 完成绿）也能分开。', items:[
-      dots('墨黑','#000000'), dots('可可','#996E42'), dots('番茄红','#E74347'), dots('橘子','#EC7332'), dots('琥珀','#E8983A'), dots('草绿','#59BE77'),
-      dots('青瓷','#55B5A3'), dots('湖蓝','#4184F4'), dots('葡萄紫','#885CF1'), dots('玫红','#E54896'), dots('雾灰','#959595') ]},
-    { k:'H', t:'趋势 · Cloud Dancer 柔白', d:'Pantone 2026 年度色是一种柔白 Cloud Dancer（PANTONE 11-4201，屏幕色值为近似），也是它第一次选白色。配色思路是“宁静底色 + 大胆亮点”：身体用暖调柔白，只靠天线球给一点颜色，最安静、最耐看。', items:[
-      mk('云舞白 · 青','柔白 + 青','#F0EEE9',CY,'#24221F'),
-      mk('云舞白 · 石墨','柔白 + 石墨球','#F0EEE9',GR,'#24221F'),
-      mk('云舞白 · 莓果','柔白 + 莓果','#F0EEE9',MG,'#24221F'),
-      mk('云舞白 · 青柠','柔白 + 青柠','#F0EEE9',LI,'#24221F'),
-      mk('云舞白 · 墨顶','柔白身 + 墨色顶','#F0EEE9',CY,'#24221F',{top:'#2A2826'}) ]},
-    { k:'I', t:'趋势 · AI 光晕（数字薰衣草 + 电光紫）', d:'多份 2026 趋势报告都把薰衣草 / 紫 + 青当作“AI 界面色”：聊天类产品的柔光、深色模式里的电光紫（#7C3AED 被称为年度旗舰紫）。辨识度高，但和“思考紫”状态色同色系，会自动换加深版。', items:[
-      mk('数字薰衣草','淡紫 + 青','#DCD2F7',CY,'#271B55'),
-      mk('极光','青顶 + 淡紫身','#D9CFF5',MG,'#271B55',{top:'#CDF2F4'}),
-      solid('电光紫','实色紫 + 青柠','#7C3AED',LI),
-      mk('深空紫','深紫 + 青','#1E1A3A',CY,'#EDEBFA'),
-      mk('午夜 + 薰衣草','深蓝 + 青柠','#17213A',LI,'#EEF3FA') ]},
-    { k:'J', t:'趋势 · 液态金属 / 液态玻璃', d:'受 Apple Liquid Glass 和 AI 生成的“Liquid Metal”虹彩渐变影响：珍珠、钛、银、玫瑰金这类有反光的中性色。本组固定用金属质感展示。', items:[
-      Object.assign(mk('珍珠虹彩','粉紫顶 + 冰青身','#E2F0F5',MG,'#1E2633',{top:'#EDE4FA'}),{finish:'metal'}),
-      Object.assign(mk('液态银','银 + 青','#D8DCE2',CY,'#1F2530'),{finish:'metal'}),
-      Object.assign(mk('钛金','原色钛 + 青','#CBC3B5',CY,'#2B2620'),{finish:'metal'}),
-      Object.assign(mk('玫瑰金','玫瑰金 + 青柠','#E6C6B8',LI,'#3A2420'),{finish:'metal'}),
-      Object.assign(mk('黑钛','深钛 + 青','#2B2C30',CY,'#F2F2EE'),{finish:'metal'}) ]},
-    { k:'K', t:'趋势 · 大地疗愈（反 AI 的人味）', d:'另一股明显的趋势是“别再用发光蓝和铬色”：用暖沙、鼠尾草、灰莓、钢蓝、摩卡这类大地色让 AI 产品显得更温暖、可信（2025 年度色是摩卡 Mocha Mousse）。', items:[
-      mk('暖沙','沙色 + 青','#E2CFAF',CY,'#3A2E1E'),
-      solid('鼠尾草','实色灰绿 + 莓果','#7E9E88',MG),
-      solid('灰莓','实色灰紫 + 青柠','#A07C96',LI),
-      solid('钢蓝','实色钢蓝 + 青柠','#4A6A80',LI),
-      solid('摩卡','实色摩卡 + 青','#A47864',CY) ]},
-    { k:'L', t:'趋势 · 技术单色（Technical Mono）', d:'开发者工具常见的黑 / 白 / 灰极简风：网格、等宽字、几乎无彩色。形象只剩明度对比，状态色因此最醒目——很适合 BitFun 这种面向开发者的产品。', items:[
-      mk('纯白 · 墨球','白身 + 墨色球','#F7F7F7','#141414','#141414'),
-      mk('纸灰 · 墨球','浅灰 + 墨色球','#E4E4E2','#141414','#141414'),
-      mk('终端黑 · 白球','黑身 + 白球','#0B0B0B',PW,'#F5F5F5'),
-      solid('中灰 · 白球','中灰 + 白球','#7B7B7B',PW),
-      mk('黑白拼','黑顶 + 白身','#F2F2F2','#141414','#141414',{top:'#141414'}) ]},
-    { k:'M', t:'趋势 · 饱和复兴 / 新野兽派', d:'和“静奢”柔色相反的另一极：高饱和、强对比、单一大色块做品牌声明（Neobrutalism）。最有冲击力，适合运营和年轻化场景；网友票选的“民间年度色”是酞菁绿。', items:[
-      solid('电光蓝','实色蓝 + 青柠','#2F5BFF',LI),
-      mk('荧光柠','荧光黄绿 + 莓果','#D9F23F',MG,'#1E2A05'),
-      solid('番茄','实色番茄 + 青','#FF4A2E',CY),
-      solid('酞菁绿','深绿 + 莓果','#123E34',MG),
-      solid('热粉','实色热粉 + 青','#FF4FA7',CY) ]},
-    { k:'A', t:'冷调科技', d:'冷白、银、冰蓝。最“工具感”的方向，和 OpenBitFun 现在的黑白界面最贴。', items:[
-      mk('冰川白','冷白 + 青','#EEF2F7',CY,'#1B2433'),
-      mk('月光银','银灰 + 石墨球','#E2E6EC',GR,'#1F2530'),
-      mk('冰薄荷','冰绿 + 莓果','#D5F3EA',MG,'#10332B'),
-      mk('晴空','冰蓝 + 青柠','#D3E9FB',LI,'#12304F'),
-      mk('极光紫','冰紫 + 青','#E5DEFB',CY,'#27204F') ]},
-    { k:'B', t:'暖调柔和', d:'奶油、燕麦、杏桃。最温和、最“生活感”，适合陪伴、轻松的场景。', items:[
-      mk('奶油','暖白 + 青','#FBF3E4',CY,'#3A2E1E'),
-      mk('燕麦奶','燕麦 + 石墨球','#EFE6DA',GR,'#3A2E22'),
-      mk('杏桃','杏桃 + 青','#FFE3D3',CY,'#47220F'),
-      mk('樱花雾','淡樱 + 青柠','#FBE3EA',LI,'#4A1F2C'),
-      mk('柠檬冰','淡黄 + 莓果','#FBF3C4',MG,'#3D3418') ]},
-    { k:'C', t:'明亮马卡龙', d:'饱和度再高一档，最可爱、最有记忆点，适合运营、贴纸、周边。', items:[
-      mk('开心果','亮绿 + 莓果','#BFF0D6',MG,'#0F3526'),
-      mk('天空蓝','亮蓝 + 青柠','#C2E0FF',LI,'#0E2848'),
-      mk('香芋紫','亮紫 + 青柠','#DCCCFF',LI,'#271B55'),
-      mk('蜜桃','亮桃 + 青','#FFD4C2',CY,'#47200F'),
-      mk('青柠苏打','青柠 + 莓果','#DDF5BE',MG,'#24360F') ]},
-    { k:'E', t:'深色高级', d:'深底 + 亮球，状态色最醒目，适合深色模式、发布会、硬件。', items:[
-      mk('曜石黑','视频原版','#0B0B0D','#22C3DF','#F7F7F5'),
-      mk('午夜蓝','深蓝 + 青','#1E2A44',CY,'#EEF3FA'),
-      mk('石墨灰','深灰 + 青柠','#33363D',LI,'#F2F2EE'),
-      mk('深海绿','墨绿 + 莓果','#173A35',MG,'#EAF5F1') ]}
-  ];
-
-  // 主推组：L 单色 + G 设计系统身份色 + I AI 光晕 + M 高饱和，按“中性 → 色相 → 深色”排成一组
-  const MAIN_ORDER = [['L',1],['L',2],['L',4],['L',3],
-    ['G',3],['M',3],['G',4],['G',5],['M',2],['G',7],['G',8],['G',9],['M',1],['I',1],['G',10],['I',3],['G',11],['M',5],
-    ['M',4],['I',5],['I',4]];
-  const MERGED = ['G','I','L','M'];
-  const byKey = k => GROUPS.find(g => g.k === k);
-  const MAIN = { k:'R', t:'主推方案 · 单色 + 身份色 + AI 光晕 + 高饱和', main: true,
-    d:'把 L（技术单色）、G（设计系统身份色）、I（AI 光晕）、M（高饱和）合成一组，按“中性 → 色相 → 深色”排列，去掉了双色拼接的款（原 I2、L5）。每张卡标了原编号；只有来自 G 的颜色是 token，L / I / M 的颜色还没有对应 token，进产品前需要补进设计系统或替换（标“非 token”）。G 里没有对应 token 的 G1、G2、G6、G12 没放进来。',
-    get items(){ return MAIN_ORDER.map(([k,n]) => Object.assign(Object.create(byKey(k).items[n-1]), { from: k+n })); } };
+  const hexOf = o => o.tok ? t(o.tok) : o.hex;
+  const status = () => ({ think: t('color.accent.secondary'), work: t('color.status.info.emphasis'), ask: t('color.status.warning.emphasis'), ok: t('color.status.success.emphasis'), err: t('color.status.danger.emphasis'), off: t('color.content.muted') });
+  const pal = b => makePalette(hexOf(b), b.ball || BOARD.balls.find(x => x.key === 'pearl').hex, { name: b.name, note: b.note, bifang: b.bifang, onDark: t('color.content.onDark'), onLight: t('color.content.onLight'), ring: t('color.surface.raised'), status: status() });
   const SAMPLE = [['thinking','思考'],['coding','执行'],['awaiting','需要你'],['done','完成'],['error','异常'],['sleeping','离线']];
-
-  function mainStrip(items){
-    return `<div class="swbox"><div class="swrow">${items.map((P,i) => `<span class="sw"><i style="background:${P.side}"></i>R${i+1}<code>${P.from}</code></span>`).join('')}</div></div>`;
-  }
-  function swatches(){
-    const g = BITFUN.filter(b => b[1]).map(([n,k]) => `<span class="sw"><i style="background:var(--openbitfun-color-identity-project-${k})"></i>${n}<code>${t('color.identity.project.'+k)}</code></span>`).join('');
-    const d = DOTS.map(([h]) => `<span class="sw"><i style="background:${h}"></i><code>${h}</code></span>`).join('');
-    return `<div class="swbox"><div class="swrow"><span class="swlab">BitFun</span>${g}</div><div class="swrow"><span class="swlab">Dots 参考</span>${d}</div></div>`;
-  }
-  const svg = (id,P,o) => render(id, Object.assign({palette:P,compact:1,finish:P.finish||S.finish,noStyle:true,lod:.45}, o||{})); // 卡片较小，毛绒用较低密度
-  function card(g,P,i){
-    const no = g.k+(i+1);
-    const origin = P.from ? `<span>原 ${P.from} · ${P.tok ? P.tok : '非 token'}</span>` : `<span>${P.note}</span>`;
-    if (P.tbc) return `<div class="card tbc"><b>${no} ${P.name}</b>待确认：${P.why}</div>`;
-    const chips = P.tok ? [['身体',P.side],['眼睛',P.eye],['待命球',P.accent]].map(([l,c]) => `<i style="--c:${c}">${l} ${c}</i>`).join('') : [P.top1,P.side,P.eye,P.accent].map(c => `<i style="--c:${c}">${c}</i>`).join('');
-    return `<div class="card" id="${no}"><div class="stage"><span class="no">${no}</span>${svg('idle',P)}${svg('idle',P,{view:'flat'})}</div>
+  const svg = (id,P,o) => render(id, Object.assign({palette:P,compact:1,finish:S.finish,noStyle:true,lod:.45}, o||{})); // 卡片较小，毛绒用较低密度
+  function card(b,i){
+    const P = pal(b), no = String(i+1).padStart(2,'0');
+    const chips = [['身体',P.side],['眼睛',P.eye],['待命球',P.accent]].map(([l,c]) => `<i style="--c:${c}">${l} ${c}</i>`).join('');
+    return `<div class="card" id="${b.key}"><div class="stage"><span class="no">${no}</span>${svg('idle',P)}${svg('idle',P,{view:'flat'})}</div>
       <div class="states">${SAMPLE.map(([id,n]) => `<div>${svg(id,P)}${n}</div>`).join('')}</div>
-      <div class="meta"><b>${no} ${P.name}</b>${origin}<div class="chips">${chips}</div></div></div>`;
+      <div class="meta"><b>${no} ${b.name}</b><span>${b.tok || b.note || '非 token'}</span><div class="chips">${chips}</div></div></div>`;
   }
   function draw(){
     const root = document.getElementById('root');
     root.dataset.colorScheme = S.scheme;
     root.style.setProperty('--stage', `var(--openbitfun-color-surface-${S.bg})`);
-    const section = (g, items) => `<h2>${g.k} · ${g.t}<small>${items.filter(P => !P.tbc).length} 套</small></h2><p class="gdesc">${g.d}</p>${g.main ? mainStrip(items) : g.swatch ? swatches() : ''}<div class="grid">${items.map((P,i) => card(g,P,i)).join('')}</div>`;
-    const alt = GROUPS.filter(g => !MERGED.includes(g.k));
-    const altHtml = alt.map(g => section(g, g.items.filter(P => !P.crisp))).join('');
-    document.getElementById('groups').innerHTML = section(MAIN, MAIN.items) +
-      `<details class="alt"${S.altOpen ? ' open' : ''}><summary>备选方案（${alt.length} 组：${alt.map(g => g.k).join(' ')}，已去掉双色拼接款）</summary>${altHtml}</details>`;
-    document.querySelector('details.alt').ontoggle = e => { S.altOpen = e.target.open; };
+    const strip = (lab, arr) => `<div class="swrow"><span class="swlab">${lab}</span>${arr.map(b => `<span class="sw"><i style="background:${b.same ? 'conic-gradient(var(--openbitfun-color-content-muted) 0 50%, transparent 0)' : hexOf(b)}"></i>${b.name}<code>${b.same ? '随身体' : hexOf(b)}</code></span>`).join('')}</div>`;
+    document.getElementById('groups').innerHTML = `<h2>色板<small>${BOARD.bodies.length} 种身体色 · ${BOARD.balls.length} 种天线球色</small></h2>
+      <div class="swbox">${strip('身体', BOARD.bodies)}${strip('天线球', BOARD.balls)}</div>
+      <h2>每种身体色的默认搭配<small>天线球用色板里的默认球色，可在“自己搭配”里换</small></h2>
+      <div class="grid">${BOARD.bodies.map(card).join('')}</div>`;
   }
   document.getElementById('bar').onchange = e => { S[e.target.name] = e.target.value; draw(); };
   draw();

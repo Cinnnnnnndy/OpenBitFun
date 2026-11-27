@@ -12,15 +12,57 @@
     ink: { hex: '#171717', name: '墨 · 正文' }, muted: { hex: '#706F6A', name: '暖灰 · 次要文字' }, subtle: { hex: '#A5A39B', name: '浅暖灰 · 辅助' },
     line: { hex: '#E9E7E2', name: '分隔线' }, soft: { hex: '#F4F3F0', name: '浅底' }, sidebar: { hex: '#F8F8F9', name: '侧栏底' }, page: { hex: '#FFFFFF', name: '页面底' }
   };
-  const PALETTES = {
-    obsidian: { name: '曜石黑', note: '视频原版', side: '#0B0B0D', sideL: '#08080A', top0: '#111114', top1: '#3E3E45', eye: '#F7F7F5', stem: '#EDEDEA', accent: '#2BBFD8', hand: '#1E1E22', blush: '#FF8FAE', softOp: .7, seam: '#55555E', fur: '#FFFFFF', furOp: .2, rim: .22 },
-    cloud:    { name: '云朵白', note: '亮白 + 青', side: '#EDF2FA', sideL: '#DEE7F6', top0: '#F4F7FC', top1: '#FFFFFF', eye: '#1E2633', stem: '#C5CEDD', accent: '#3FD0D8', hand: '#E2E9F5', blush: '#FFB3CB', seam: '#CFD9EA', fur: '#8796B0', furOp: .12, rim: .95, shade: .35 },
-    mint:     { name: '开心果', note: '亮绿 + 莓果', side: '#C4F2DA', sideL: '#A9E9C8', top0: '#D6F8E7', top1: '#F6FFFA', eye: '#0F3526', stem: '#93D3B2', accent: '#F27BD3', hand: '#B6EDD1', blush: '#FFA9C6', seam: '#9EDDBC', fur: '#4C9A74', furOp: .12, rim: .95, shade: .3 },
-    sky:      { name: '天空蓝', note: '亮蓝 + 青', side: '#C7E3FF', sideL: '#ADD4FF', top0: '#D8ECFF', top1: '#F7FBFF', eye: '#0E2848', stem: '#97C1EE', accent: '#2FCFC4', hand: '#BADCFF', blush: '#FFB0C8', seam: '#A2CBF6', fur: '#4F7FB8', furOp: .12, rim: .95, shade: .3 },
-    lavender: { name: '香芋紫', note: '亮紫 + 青柠', side: '#E0D3FF', sideL: '#CCBBFF', top0: '#E9DFFF', top1: '#FBF8FF', eye: '#271B55', stem: '#B6A3EE', accent: '#95D84E', hand: '#D6C8FF', blush: '#FFA8D2', seam: '#C4B1F7', fur: '#7A64C2', furOp: .12, rim: .95, shade: .3 },
-    peach:    { name: '蜜桃', note: '亮桃 + 青', side: '#FFDACA', sideL: '#FFC6AE', top0: '#FFE5D9', top1: '#FFF9F5', eye: '#47200F', stem: '#EDB49C', accent: '#2FCFC4', hand: '#FFD0BC', blush: '#FF9283', seam: '#F6BFA8', fur: '#B97A60', furOp: .12, rim: .95, shade: .3 },
-    bifang:   { name: '毕方', note: '山海经特别版 · 青质赤文白喙', side: '#2E8C86', sideL: '#287B76', top0: '#329690', top1: '#7CC7C0', eye: '#FFFFFF', stem: '#F4F1EA', accent: '#F4F1EA', hand: '#2A847E', blush: '#E0533A', seam: '#5BB0A9', fur: '#FFFFFF', furOp: .2, rim: .5, shade: .7, bifang: true },
+  /* ---------- 统一色板：身体色 + 天线球色（“自己搭配”和全部页面共用这一份） ----------
+     tok 为 OpenBitFun 设计系统 token，hex 为它在浅色主题下的取值（页面里会按主题替换）。 */
+  const BOARD = {
+    bodies: [
+      { key: 'white',    name: '纯白',     hex: '#F7F7F7', ball: '#2FCFD8' },
+      { key: 'gray',     name: '中灰',     hex: '#7B7B7B', ball: '#F4F3EE' },
+      { key: 'black',    name: '终端黑',   hex: '#0B0B0B', ball: '#2FCFD8', note: '视频原版' },
+      { key: 'red',      name: '红',       hex: '#C95765', tok: 'color.identity.project.red' },
+      { key: 'tomato',   name: '番茄',     hex: '#FF4A2E' },
+      { key: 'orange',   name: '橙',       hex: '#D47628', tok: 'color.identity.project.orange' },
+      { key: 'yellow',   name: '黄',       hex: '#D5A910', tok: 'color.identity.project.yellow' },
+      { key: 'lime',     name: '荧光柠',   hex: '#D9F23F', ball: '#2E323A' },
+      { key: 'green',    name: '绿',       hex: '#269F70', tok: 'color.identity.project.green' },
+      { key: 'phthalo',  name: '酞菁绿',   hex: '#123E34' },
+      { key: 'cyan',     name: '青',       hex: '#07879A', tok: 'color.identity.project.cyan' },
+      { key: 'blue',     name: '蓝',       hex: '#2563EB', tok: 'color.identity.project.blue' },
+      { key: 'midnight', name: '午夜',     hex: '#17213A' },
+      { key: 'lavender', name: '数字薰衣草', hex: '#DCD2F7', ball: '#2FCFD8' },
+      { key: 'purple',   name: '紫',       hex: '#7B43F8', tok: 'color.identity.project.purple' },
+      { key: 'pink',     name: '粉',       hex: '#DB2777', tok: 'color.identity.project.pink' },
+      { key: 'hotpink',  name: '热粉',     hex: '#FF4FA7' },
+      { key: 'bifang',   name: '毕方',     hex: '#2E8C86', note: '《山海经》特别版 · 青质赤文白喙', bifang: true }
+    ],
+    balls: [
+      { key: 'highlight', name: '设计系统高亮', hex: '#059CB0', tok: 'color.control.highlight.background' },
+      { key: 'cyan',  name: '青',   hex: '#2FCFD8' }, { key: 'lime', name: '青柠', hex: '#9AD94A' }, { key: 'berry', name: '莓果', hex: '#E66FE0' },
+      { key: 'graphite', name: '石墨', hex: '#2E323A' }, { key: 'pearl', name: '珍珠白', hex: '#F4F3EE' }, { key: 'same', name: '和身体同色（浅一档）', same: true }
+    ]
   };
+  // 感知亮度（OKLab L）：L < 0.70 的身体用白眼睛，否则黑眼睛
+  const okL = h => { const f = i => { const v = parseInt(h.substr(i, 2), 16) / 255; return v <= .04045 ? v / 12.92 : ((v + .055) / 1.055) ** 2.4; };
+    const [r, g, b] = [f(1), f(3), f(5)]; return .2104542553 * Math.cbrt(.4122214708 * r + .5363325363 * g + .0514459929 * b) + .793617785 * Math.cbrt(.2119034982 * r + .6806995451 * g + .1073969566 * b) - .0040720468 * Math.cbrt(.0883024619 * r + .2817188376 * g + .6299787005 * b); };
+  const hsl = h => { const [r, g, b] = [1, 3, 5].map(i => parseInt(h.substr(i, 2), 16) / 255), M = Math.max(r, g, b), m = Math.min(r, g, b), l = (M + m) / 2, d = M - m;
+    if (!d) return [0, 0, l * 100]; const s2 = d / (1 - Math.abs(2 * l - 1)), hh = M === r ? ((g - b) / d) % 6 : M === g ? (b - r) / d + 2 : (r - g) / d + 4; return [(hh * 60 + 360) % 360, s2 * 100, l * 100]; };
+  const fromHsl = (h, s2, l) => { s2 = Math.max(0, Math.min(100, s2)) / 100; l = Math.max(0, Math.min(100, l)) / 100; const k = n => (n + h / 30) % 12, a = s2 * Math.min(l, 1 - l), f = n => l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
+    return '#' + [f(0), f(8), f(4)].map(v => Math.round(v * 255).toString(16).padStart(2, '0')).join(''); };
+  const adjust = (hex, dl, ds = 0) => { const [h, s2, l] = hsl(hex); return fromHsl(h, s2 < 4 ? s2 : s2 + ds, l + dl); };
+  // 由身体色 + 球色得到整套配色（“自己搭配”页也用它，只是另外传入主题相关的值）
+  function makePalette(body, ball, o = {}) {
+    const chroma = (() => { const v = [1, 3, 5].map(i => parseInt(body.substr(i, 2), 16) / 255); return Math.max(...v) - Math.min(...v); })();
+    const L = hsl(body)[2], dark = L < 40, solid = !dark && chroma > .35;
+    const W = o.onDark || '#ffffff', K = o.onLight || '#000000';
+    const eye = o.eye === 'white' ? W : o.eye === 'black' ? K : (okL(body) < .70 ? W : K);
+    if (ball === 'same') ball = L < 20 ? adjust(body, 22) : adjust(body, 12, 4);
+    return { name: o.name || '自定义', note: o.note || '', side: body, sideL: adjust(body, dark ? -2 : -5, dark ? 0 : 6), top0: adjust(body, 3), top1: dark ? adjust(body, 16) : adjust(body, 9, -10),
+      eye, stem: dark ? '#e9ecf0' : adjust(body, -22, 4), accent: ball, hand: adjust(body, -3), blush: body, seam: body,
+      fur: '#ffffff', furOp: .18, rim: dark ? .25 : solid ? .45 : .9, shade: dark ? 1 : solid ? .7 : .3,
+      ring: solid || dark ? (o.ring || '#ffffff') : null, status: o.status, bifang: !!o.bifang };
+  }
+  const PALETTES = Object.fromEntries(BOARD.bodies.map(b => [b.key, makePalette(b.hex, b.ball || '#F4F3EE', { name: b.name, note: b.note || (b.tok ? '设计系统身份色' : ''), bifang: b.bifang })]));
+
 
   const CAT = {
     idle:  { key: 'idle',  name: '待命',     color: '#2BBFD8', hue: '随配色', mean: '品牌主色，随配色变化，但必须避开下面 5 个状态色相' },
@@ -125,6 +167,10 @@
 @keyframes bf-act{0%,100%{transform:translateX(-5px)}50%{transform:translateX(5px)}}
 .bf .ac-spin{animation:bf-spin 3s linear infinite;transform-origin:center}
 .bf .ac-spin-r{animation:bf-spin 4.5s linear infinite reverse;transform-origin:center}
+.bf .fur{animation:bf-fur 4.2s ease-in-out infinite;transform-origin:50% 100%}
+@keyframes bf-fur{0%,100%{transform:skewX(0) scale(1,1)}50%{transform:skewX(1.2deg) scale(1.006,.996)}}
+.bf:hover .fur{animation:bf-ruffle .6s ease-in-out 2}
+@keyframes bf-ruffle{0%,100%{transform:skewX(0)}25%{transform:skewX(-3deg) translateY(-.4px)}75%{transform:skewX(3deg) translateY(-.4px)}}
 @media (prefers-reduced-motion: reduce){.bf *{animation:none!important}}
 `;
 
@@ -152,7 +198,7 @@
 <linearGradient id="mf${u}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff" stop-opacity=".6"/><stop offset=".3" stop-color="#fff" stop-opacity="0"/><stop offset=".8" stop-color="#fff" stop-opacity="0"/><stop offset="1" stop-color="#fff" stop-opacity=".3"/></linearGradient>
 <linearGradient id="bs${u}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff" stop-opacity=".22"/><stop offset=".45" stop-color="#fff" stop-opacity="0"/><stop offset="1" stop-color="#000" stop-opacity=".28"/></linearGradient>
 <filter color-interpolation-filters="sRGB" id="tb${u}" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="${x.plush ? 3.6 : 2.6}"/></filter>
-<filter color-interpolation-filters="sRGB" id="pf${u}" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation=".12"/></filter>
+<filter color-interpolation-filters="sRGB" id="pf${u}" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation=".2"/></filter>
 <filter color-interpolation-filters="sRGB" id="hl${u}" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="3"/></filter>
 <filter color-interpolation-filters="sRGB" id="fz${u}" x="-25%" y="-25%" width="150%" height="150%"><feTurbulence type="fractalNoise" baseFrequency=".62" numOctaves="2" seed="5" result="n"/><feDisplacementMap in="SourceGraphic" in2="n" scale=".7" xChannelSelector="R" yChannelSelector="G"/></filter>
 <filter color-interpolation-filters="sRGB" id="fur${u}" x="-30%" y="-30%" width="160%" height="160%"><feTurbulence type="fractalNoise" baseFrequency="1.5 2.4" numOctaves="3" seed="9" result="n"/><feColorMatrix in="n" type="matrix" values="0 0 0 0 ${fr} 0 0 0 0 ${fg} 0 0 0 0 ${fb} 0 0 0 2.2 -.95" result="a"/><feGaussianBlur in="a" stdDeviation=".55" result="ab"/><feComposite in="ab" in2="SourceAlpha" operator="in"/></filter>
@@ -169,8 +215,12 @@
   const f2 = n => n.toFixed(2);
   // 毛绒：参考 3D 渲染的长毛——绒毛成簇（一簇 6 根从根部散开、向尖端收拢），根暗尖亮；
   // 颜色按受光位置取（左上方来光，顶面亮、右侧暗、越往下越暗），全部不透明。先画所有暗根，再画亮尖。
-  function down(x) {
+  const f1 = n => (Math.round(n * 10) / 10).toString();
+  function down(x, redOnly = false) {
     const { P, u } = x, r = rng(7), black = relLum(P.side) < .05;
+    // 毕方特别版：“赤文”长在毛上——落在羽纹带里的毛簇用红色
+    const RED = ['#7a2418', '#9c3020', '#bc4028', '#d45236', '#e46e50', '#f08e70'], redRoots = RED.map(() => ''), redTips = RED.map(() => '');
+    const redBin = v => Math.max(0, Math.min(RED.length - 1, Math.round(v * (RED.length - 1))));
     const hi = black ? '#55555e' : tint(P.side, .62), lo = black ? '#000000' : shadeHex(P.side, .34);
     const mixc = (a, b, t) => '#' + [1, 3, 5].map(i => Math.round(parseInt(a.substr(i, 2), 16) * (1 - t) + parseInt(b.substr(i, 2), 16) * t).toString(16).padStart(2, '0')).join('');
     const N = 12, tones = Array.from({ length: N }, (_, k) => { const t = k / (N - 1); return t < .5 ? mixc(lo, P.side, t * 2) : mixc(P.side, hi, (t - .5) * 2); });
@@ -179,18 +229,20 @@
     const lerp = (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
     const at = (q, s2, t) => lerp(lerp(q[0], q[1], s2), lerp(q[3], q[2], s2), t);
     const light = (px, py, base) => Math.max(0, Math.min(1, base - (py - 53) * .011 - (px - 60) * .004 + (r() - .5) * .1));
-    function clump(px, py, ang, L, w, shade, n = 6) {
+    function clump(px, py, ang, L, w, shade, n = 6, red = false) {
+      if (redOnly && !red) return;
       const ux = Math.cos(ang), uy = Math.sin(ang), vx = -uy, vy = ux, tipT = (r() - .5) * .6;
       const tx = px + ux * L + vx * tipT, ty = py + uy * L + vy * tipT, bend = (r() - .5) * 2.6;
-      const rb = bin(shade - .26), tb = bin(shade + .26);
+      const rb = red ? redBin(shade - .3) : bin(shade - .2), tb = red ? redBin(shade + .15) : bin(shade + .18);
+      const RT = red ? redRoots : roots, TT = red ? redTips : tips;
       for (let j = 0; j < n; j++) {
         const t = (j / (n - 1) - .5) * 2, ax = px + vx * t * w, ay = py + vy * t * w;
         const ex = tx + vx * t * w * .18 + (r() - .5) * .5, ey = ty + vy * t * w * .18 + (r() - .5) * .5;
         const cx = (ax + ex) / 2 + vx * bend, cy = (ay + ey) / 2 + vy * bend;
-        roots[rb] += `M${f2(ax)} ${f2(ay)}Q${f2(cx)} ${f2(cy)} ${f2(ex)} ${f2(ey)}`;
+        RT[rb] += `M${f1(ax)} ${f1(ay)}Q${f1(cx)} ${f1(cy)} ${f1(ex)} ${f1(ey)}`;
         // 尖端一段（贝塞尔 0.5→1）用亮色压在上面
         const mx = .25 * ax + .5 * cx + .25 * ex, my = .25 * ay + .5 * cy + .25 * ey, qx = (cx + ex) / 2, qy = (cy + ey) / 2;
-        tips[tb] += `M${f2(mx)} ${f2(my)}Q${f2(qx)} ${f2(qy)} ${f2(ex)} ${f2(ey)}`;
+        TT[tb] += `M${f1(mx)} ${f1(my)}Q${f1(qx)} ${f1(qy)} ${f1(ex)} ${f1(ey)}`;
       }
     }
     const faces = [
@@ -198,45 +250,52 @@
       { q: [[33, 53.6], [60, 69.2], [60, 93.2], [33, 77.6]], n: 220, d: 1.35, base: .74 },
       { q: [[60, 69.2], [87, 53.6], [87, 77.6], [60, 93.2]], n: 220, d: 1.79, base: .58 }
     ];
-    for (const f of faces) for (let i = 0, m = Math.round(f.n * x.lod); i < m; i++) {
-      const p = at(f.q, r(), r());
+    // 羽纹带：左侧面三道斜向带，带的边缘按概率渐变，红毛和青毛自然交错
+    const band = (fi, su, sv) => {
+      if (!P.bifang) return false;
+      if (fi === 1) { const ph = ((sv * 3.2 - su * .9) % 1 + 1) % 1, d = Math.abs(ph - .17) / .17; return r() < Math.max(0, Math.min(1, (1.25 - d) * 1.6)); }
+      if (fi === 2) return sv > .7 && su < .36 && r() < (sv - .7) * 4;
+      return false;
+    };
+    for (const [fi, f] of faces.entries()) for (let i = 0, m = Math.round(f.n * x.lod * (redOnly ? 1.4 : 1)); i < m; i++) {
+      const su = r(), sv = r(), p = at(f.q, su, sv), red = band(fi, su, sv);
       const ang = f.top ? Math.atan2(p[1] - 53.6, p[0] - 60) + (r() - .5) * .6 : f.d + (r() - .5) * .5;
-      clump(p[0], p[1], ang, 4.5 + r() * 4, .45 + r() * .45, light(p[0], p[1], f.base), 5);
+      clump(p[0], p[1], redOnly ? f.d || ang : ang, (redOnly ? 2.2 : 3.4) + r() * (redOnly ? 1.8 : 3), .45 + r() * .45, light(p[0], p[1], f.base), 5, red);
     }
     const poly = [[60, 38], [87, 53.6], [87, 77.6], [60, 93.2], [33, 77.6], [33, 53.6]], cx = 60, cy = 65.6;
-    for (let k = 0; k < 6; k++) {
+    for (let k = 0; k < 6 && !redOnly; k++) {
       const a = poly[k], b = poly[(k + 1) % 6], seg = Math.hypot(b[0] - a[0], b[1] - a[1]), nx = (b[1] - a[1]) / seg, ny = -(b[0] - a[0]) / seg;
       const base = ny < -.3 ? 1.02 : nx < -.5 ? .74 : nx > .5 ? .58 : .46;
       // 圆角过渡带
       for (let i = 0, m = Math.round(seg * 2.4 * x.lod); i < m; i++) {
         const p = lerp(a, b, r()), off = r() * 6, sx = p[0] + nx * off, sy = p[1] + ny * off;
-        clump(sx, sy, Math.atan2(ny, nx) * .5 + Math.PI / 4 + (r() - .5) * .8, 4.5 + r() * 3.5, .45 + r() * .4, light(sx, sy, base), 5);
+        clump(sx, sy, Math.atan2(ny, nx) * .5 + Math.PI / 4 + (r() - .5) * .8, 3.6 + r() * 3, .45 + r() * .4, light(sx, sy, base), 5, P.bifang && k === 4 && r() < .35);
       }
       // 外缘向外支出的毛簇
       for (let i = 0, m = Math.round(seg * 2.6 * x.lod); i < m; i++) {
         const p = lerp(a, b, r()), off = 4 + r() * 3, sx = p[0] + nx * off, sy = p[1] + ny * off;
-        clump(sx, sy, Math.atan2(ny, nx) + (r() - .5) * 1, 3 + r() * 4.5, .4 + r() * .4, light(sx, sy, base - .04), 4);
+        clump(sx, sy, Math.atan2(ny, nx) + (r() - .5) * 1, 2.6 + r() * 3.4, .4 + r() * .4, light(sx, sy, base - .04), 4, P.bifang && k === 4 && r() < .35);
       }
       const vx = b[0] - cx, vy = b[1] - cy, vl = Math.hypot(vx, vy);
       for (let i = 0; i < 9; i++) {
         const sx = b[0] + vx / vl * (4 + r() * 3), sy = b[1] + vy / vl * (4 + r() * 3);
-        clump(sx, sy, Math.atan2(vy, vx) + (r() - .5) * 1.4, 3 + r() * 4.5, .4 + r() * .4, light(sx, sy, base), 4);
+        clump(sx, sy, Math.atan2(vy, vx) + (r() - .5) * 1.4, 2.6 + r() * 3.4, .4 + r() * .4, light(sx, sy, base), 4);
       }
     }
-    const paths = arr => arr.map((d, k) => d ? `<path d="${d}" stroke="${tones[k]}"/>` : '').join('');
-    return `<g fill="none" stroke-linecap="round" stroke-width=".34" filter="url(#pf${u})">${paths(roots)}${paths(tips)}</g>`;
+    const paths = (arr, tn) => arr.map((d, k) => d ? `<path d="${d}" stroke="${tn[k]}"/>` : '').join('');
+    const red = paths(redRoots, RED) + paths(redTips, RED);
+    if (redOnly) return `<g fill="none" stroke-linecap="round" stroke-width=".42">${red}</g>`;
+    // 毛整体是一层：平时随身体轻轻起伏，鼠标划过时快速抖一下（撸毛）
+    return `<g class="fur" fill="none" stroke-linecap="round" stroke-width=".34" filter="url(#pf${u})">${paths(roots, tones)}${paths(tips, tones)}${red}</g>`;
   }
 
   // 毕方特别版：《山海经》“其状如鹤，一足，赤文青质而白喙”——青色身体上几道红色羽纹，眼睛下方一只白喙；方块上的天线就是那“一足”
   function bifangMarks(x) {
-    const red = '#D8452E', beak = '#F4F1EA', u = x.u;
-    if (x.flat) return `<g fill="none" stroke="${red}" stroke-linecap="round" stroke-width="${x.tiny ? 3 : 2.2}"><path d="M31 88 Q38 82 46 86"/><path d="M74 86 Q82 82 89 88"/>${x.tiny ? '' : '<path d="M33 94 Q39 90 45 93"/><path d="M75 93 Q81 90 87 94"/>'}</g>
+    const beak = '#F4F1EA';
+    if (x.flat) return `<g fill="#D8452E"><path d="M30 86 q8 -6 16 -1 q-8 1 -16 5z"/><path d="M90 86 q-8 -6 -16 -1 q8 1 16 5z"/></g>
       <path d="M57.4 ${x.tiny ? 72 : 70} L62.6 ${x.tiny ? 72 : 70} L60 ${x.tiny ? 77 : 75.5}Z" fill="${beak}" stroke="${beak}" stroke-width="1.2" stroke-linejoin="round"/>`;
-    const L = 'matrix(1 .577 0 1 33 53.6)';
-    const stripe = (d, w) => `<path d="${d}" fill="none" stroke="${red}" stroke-width="${w}" stroke-linecap="round"/>`;
-    return `<g${x.plush ? ` filter="url(#fz${u})"` : ''} opacity="${x.plush ? .92 : 1}">
-      <g transform="${L}">${stripe('M3 7 Q12 3 22 8', 2.2)}${stripe('M2 13 Q12 9 24 14', 2.2)}${stripe('M4 19 Q13 16 21 20', 1.8)}</g></g>
-      <g transform="${FACE}"><path d="M13.6 15.2 Q17 14.2 20.6 15.2 L17.4 21Z" fill="${beak}" stroke="${beak}" stroke-width="1.2" stroke-linejoin="round"/><path d="M14.4 15.6 Q17 15 19.8 15.6" stroke="#cfc6b4" stroke-width=".55" fill="none"/></g>`;
+    const fur = x.plush ? '' : down(x, true);
+    return `${fur}<g transform="${FACE}"><path d="M13.6 15.2 Q17 14.2 20.6 15.2 L17.4 21Z" fill="${beak}" stroke="${beak}" stroke-width="1.2" stroke-linejoin="round"/><path d="M14.4 15.6 Q17 15 19.8 15.6" stroke="#cfc6b4" stroke-width=".55" fill="none"/></g>`;
   }
 
   function body(x) {
@@ -528,6 +587,6 @@
     return `<svg class="bf" xmlns="http://www.w3.org/2000/svg" viewBox="${vb}" role="img" aria-label="毕方 · ${st.name}">${style}${defs(x)}${inner}</svg>`;
   }
 
-  root.BF = { STATES, CAT, PALETTES, BASE, STYLE, render, accentGlyph, statusColor, isDeep, hueOf, hueDist };
+  root.BF = { STATES, CAT, BOARD, makePalette, PALETTES, BASE, STYLE, render, accentGlyph, statusColor, isDeep, hueOf, hueDist };
   if (typeof module !== 'undefined') module.exports = root.BF;
 })(typeof window !== 'undefined' ? window : globalThis);

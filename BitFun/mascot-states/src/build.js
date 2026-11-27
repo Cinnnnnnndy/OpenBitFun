@@ -54,8 +54,9 @@ const fileName = (s, i) => String(i + 1).padStart(2, '0') + '-' + s.id + '.svg';
 for (const view of ['iso', 'flat']) for (const finish of (view === 'flat' ? ['smooth'] : ['smooth', 'metal', 'plush'])) for (const palette of Object.keys(BF.PALETTES)) {
   const sub = view === 'iso' ? `3d-${finish}-${palette}` : `flat-${palette}`;
   BF.STATES.forEach((s, i) => {
-    write('svg/' + sub, fileName(s, i), BF.render(s.id, { finish, palette, view }));
-    write('svg-compact/' + sub, fileName(s, i), BF.render(s.id, { finish, palette, view, compact: true }));
+    // 毛绒文件较大：导出时降低绒毛密度，且不再单独导出 compact 版
+    write('svg/' + sub, fileName(s, i), BF.render(s.id, { finish, palette, view, lod: finish === 'plush' ? .5 : 1 }));
+    if (finish !== 'plush') write('svg-compact/' + sub, fileName(s, i), BF.render(s.id, { finish, palette, view, compact: true }));
   });
 }
 // 32px 以下用的平面图标版

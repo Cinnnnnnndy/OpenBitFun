@@ -115,7 +115,15 @@ button.sel{border-color:var(--ink)}
 .rules{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
 .rules div{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:18px;font-size:13.5px;color:var(--sub)}
 .rules b{display:block;color:var(--ink);font-size:15px;margin-bottom:4px}
-.matrix{display:grid;grid-template-columns:90px repeat(7,1fr);gap:12px;align-items:stretch}
+.matrix{display:block}
+.mboard{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px}
+.mchip{display:inline-flex;align-items:center;gap:6px;font:inherit;font-size:12.5px;border:1px solid var(--line);background:var(--card);border-radius:999px;padding:4px 12px 4px 5px;cursor:pointer;color:var(--ink)}
+.mchip i{width:18px;height:18px;border-radius:50%;position:relative;box-shadow:inset 0 0 0 1px rgba(0,0,0,.08)}
+.mchip i b{position:absolute;right:-2px;top:-2px;width:8px;height:8px;border-radius:50%;border:1.5px solid #fff}
+.mchip.on{border-color:var(--ink)}
+.mrow{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+.mrow .cell{display:flex;flex-direction:column;align-items:center;padding-bottom:10px}
+.mrow .cell span{font-size:12px;color:var(--mute)}
 .matrix .rl{display:flex;align-items:center;font-size:13px;color:var(--sub)}
 .matrix .ch{font-size:13px;text-align:center;color:var(--ink)}
 .matrix .ch small{display:block;color:var(--mute);font-size:11.5px}
@@ -176,10 +184,10 @@ button.sel{border-color:var(--ink)}
 <div class="wrap">
   <div class="eyebrow">OpenBitFun · Mascot System v1.0</div>
   <h1>毕方 · 多状态形象变体</h1>
-  <p class="lead">以视频里的方块毕方为底座（等距圆角方块、白色短天线、侧面一对竖椭圆小眼），参考 Meta Muse 的吉祥物 Jolly 的做法，让形象从“装饰”变成“Agent 正在做什么”的可视化：14 个状态，覆盖感知思考、执行、需要你、结果与离线。3D 另有光滑 / 金属 / 毛绒三种质感，平面版只有纯色一种；内置 7 套配色（视频原版曜石黑 + 5 套明亮马卡龙 + 《山海经》毕方特别版），可在下方切换。</p>
+  <p class="lead">以视频里的方块毕方为底座（等距圆角方块、白色短天线、侧面一对竖椭圆小眼），参考 Meta Muse 的吉祥物 Jolly 的做法，让形象从“装饰”变成“Agent 正在做什么”的可视化：14 个状态，覆盖感知思考、执行、需要你、结果与离线。3D 另有光滑 / 金属 / 毛绒三种质感，平面版只有纯色一种；颜色只用一套统一色板（18 种身体色 + 7 种天线球色，“自己搭配”“配色方案”同源），可在下方切换。</p>
 
   <div class="hero">
-    <div class="hero-fig"><span class="tag" id="heroTag">视频原版 · 光滑曜石黑</span><div id="heroIdle"></div></div>
+    <div class="hero-fig"><span class="tag" id="heroTag">视频原版 · 光滑终端黑</span><div id="heroIdle"></div></div>
     <div class="dna">
       <div><b>身体 = 品牌识别</b><span><i style="background:#0B0B0D"></i>矮胖的等距大圆角方块：顶面柔光、边缘一道细高光、侧面明暗过渡，天线球带玻璃高光。可爱来自比例，高级来自材质。所有状态形体一致，只允许压扁、果冻晃动这类弹性形变。</span></div>
       <div><b>天线球 = 状态灯</b><span>颜色区分大类（思考 / 执行 / 需要你 / 完成 / 异常 / 离线），动效区分细分状态。小到 18px 也认得出。</span></div>
@@ -199,12 +207,12 @@ button.sel{border-color:var(--ink)}
       <div><b>为黄帝驾车</b>《韩非子·十过》讲黄帝在泰山会合鬼神，“驾象车而六蛟龙，毕方并辖”，毕方在车旁随行护卫。</div>
       <div><b>木之精</b>《淮南子·氾论训》有“木生毕方”，汉代高诱注为“木之精也”；木能生火，正好和它与火的关系对上。</div>
     </div>
-    <p class="sec-desc" style="margin-top:16px"><b>和形象的对应：</b>方块上那根天线，像毕方用一只脚站着；天线球随状态变色，也合“一出现就预示着什么”的意象。下方配色里的“毕方”特别版按原文取色——青色身体（青质）、侧面几道红色羽纹（赤文）、眼睛下方一只白色的喙（白喙）。</p>
+    <p class="sec-desc" style="margin-top:16px"><b>和形象的对应：</b>方块上那根天线，像毕方用一只脚站着；天线球随状态变色，也合“一出现就预示着什么”的意象。统一色板里的“毕方”特别版按原文取色——青色身体（青质）、侧面几道红色羽纹（赤文）、眼睛下方一只白色的喙（白喙）。</p>
   </section>
 
   <section>
-    <h2>视图 × 质感 × 配色</h2>
-    <p class="sec-desc">同一个方块，两种视图：<b>3D</b> 等距视角用于主视觉、启动页、空状态；<b>平面</b>正视图只有一种：纯色、无质感、无阴影，用于图标、头像、状态胶囊、表情包这类小尺寸或扁平界面。三种质感只用在 3D 上，共 7 套配色（曜石黑 + 5 套明亮马卡龙 + 毕方特别版）：<b>光滑</b>还原视频里的软胶质感，适合产品内的图标与状态；<b>金属</b>是带清晰环境反射带的亮面金属外壳，适合发布会、硬件和高规格场景；<b>毛绒</b>边缘有绒毛、天线球变成毛线球，更适合周边、贴纸、运营物料和 IP 传播。点任意一格即可把整页切换到该组合。</p>
+    <h2>视图 × 质感 × 统一色板</h2>
+    <p class="sec-desc">同一个方块，两种视图：<b>3D</b> 等距视角用于主视觉、启动页、空状态；<b>平面</b>正视图只有一种：纯色、无质感、无阴影，用于图标、头像、状态胶囊、表情包这类小尺寸或扁平界面。三种质感只用在 3D 上，颜色来自统一色板：<b>光滑</b>还原视频里的软胶质感，适合产品内的图标与状态；<b>金属</b>是带清晰环境反射带的亮面金属外壳，适合发布会、硬件和高规格场景；<b>毛绒</b>参考华为鸿蒙“憨憨”的长毛绒质感，绒毛成簇、根暗尖亮，平时随身体轻轻起伏，鼠标划过时像被摸了一下（撸毛），更适合周边、贴纸、运营物料和 IP 传播。上排点选身体色，下排点选做法，整页一起切换。</p>
     <div class="matrix" id="matrix"></div>
   </section>
 
@@ -228,7 +236,7 @@ button.sel{border-color:var(--ink)}
     <h3 class="cc-h">① 产品基底 <small>取自 openbitfun-mobile 的 CSS 变量，形象周边的文字、卡片、描边都用这一组</small></h3>
     <div class="sw-row" id="ccBase"></div>
 
-    <h3 class="cc-h">② 状态色 <small>天线球专用，全配色通用；饱和度与明度统一；曜石黑与 5 套马卡龙配色内，待命色与状态色的最小色相间隔为 28°</small></h3>
+    <h3 class="cc-h">② 状态色 <small>天线球专用，全配色通用；饱和度与明度统一；默认搭配下，待命色与状态色的最小色相间隔为 28°</small></h3>
     <div class="st-row" id="ccStatus"></div>
 
     <h3 class="cc-h">③ 身体配色 <small>每套 = 身体三面 + 眼睛 + 天线杆 + 待命主色；按套使用，不拆开混搭</small></h3>
@@ -305,7 +313,7 @@ button.sel{border-color:var(--ink)}
 (function(){
   const {STATES, CAT, PALETTES, BASE, STYLE, render, statusColor} = BF;
   const st = document.createElement('style'); st.textContent = STYLE; document.head.appendChild(st);
-  const S = {finish:'smooth', palette:'obsidian', face:'refined', view:'iso'};
+  const S = {finish:'smooth', palette:'black', face:'refined', view:'iso'};
   const VIEW = {iso:'3D', flat:'平面'};
   const FACE = {refined:'克制', cute:'萌'};
   const FIN = {smooth:'光滑', metal:'金属', plush:'毛绒'};
@@ -318,10 +326,13 @@ button.sel{border-color:var(--ink)}
   // 质感 × 配色矩阵
   const PK = Object.keys(PALETTES);
   function drawMatrix(){
-    document.getElementById('matrix').innerHTML = '<div></div>' + PK.map(k => `<div class="ch">${PALETTES[k].name}<small>${PALETTES[k].note}</small></div>`).join('') +
-      [['iso','smooth'],['iso','metal'],['iso','plush'],['flat','smooth']].map(([v,f]) => `<div class="rl">${v==='flat' ? '平面' : VIEW[v] + ' · ' + FIN[f]}</div>` + PK.map(k => `<div class="cell ${S.view===v&&(v==='flat'||S.finish===f)&&S.palette===k?'on':''}" data-v="${v}" data-f="${f}" data-p="${k}">${R('idle',1,{finish:f,palette:k,view:v})}</div>`).join('')).join('');
+    const VAR = [['iso','smooth'],['iso','metal'],['iso','plush'],['flat','smooth']];
+    document.getElementById('matrix').innerHTML =
+      `<div class="mboard">${PK.map(k => { const P = PALETTES[k]; return `<button class="mchip ${S.palette===k?'on':''}" data-p="${k}" title="${P.name}"><i style="background:${P.side}"><b style="background:${P.accent}"></b></i>${P.name}</button>`; }).join('')}</div>
+      <div class="mrow">${VAR.map(([v,f]) => `<div class="cell ${S.view===v&&(v==='flat'||S.finish===f)?'on':''}" data-v="${v}" data-f="${f}" data-p="${S.palette}">${R('idle',1,{finish:f,palette:S.palette,view:v})}<span>${v==='flat' ? '平面' : VIEW[v] + ' · ' + FIN[f]}</span></div>`).join('')}</div>`;
   }
-  document.getElementById('matrix').onclick = e => { const c = e.target.closest('.cell'); if(!c) return; S.view = c.dataset.v; set(c.dataset.f, c.dataset.p); };
+  document.getElementById('matrix').addEventListener('click', e => { const b = e.target.closest('.mchip'); if (b) set(S.finish, b.dataset.p); });
+  document.getElementById('matrix').onclick = e => { const c = e.target.closest('.cell'); if(!c) return; e.stopPropagation(); S.view = c.dataset.v; set(c.dataset.f, c.dataset.p); };
   function drawBar(){
     document.getElementById('bar').innerHTML = `<span class="lab">视图</span><span class="seg">${['iso','flat'].map(v=>`<button data-v="${v}" class="${S.view===v?'on':''}">${VIEW[v]}</button>`).join('')}</span><span class="lab">表情</span><span class="seg">${['refined','cute'].map(f=>`<button data-face="${f}" class="${S.face===f?'on':''}">${FACE[f]}</button>`).join('')}</span><span class="lab">质感</span><span class="seg" style="${S.view==='flat'?'opacity:.35;pointer-events:none':''}">${['smooth','metal','plush'].map(f=>`<button data-f="${f}" class="${S.finish===f?'on':''}">${FIN[f]}</button>`).join('')}</span>
       <span class="lab">配色</span>${PK.map(k=>{const P=PALETTES[k];return `<span class="sw ${S.palette===k?'on':''}" data-p="${k}"><i style="background:${P.side}"><b style="background:${P.accent}"></b></i>${P.name}</span>`}).join('')}`;
@@ -331,7 +342,7 @@ button.sel{border-color:var(--ink)}
   function drawAll(){
     drawMatrix(); drawBar();
     document.getElementById('heroIdle').innerHTML = R('idle', 1);
-    document.getElementById('heroTag').textContent = (S.view==='iso'&&S.finish==='smooth'&&S.palette==='obsidian' ? '视频原版 · ' : '') + VIEW[S.view] + (S.view==='flat' ? '' : ' · ' + FIN[S.finish]) + ' · ' + PALETTES[S.palette].name + (S.face==='cute' ? ' · 萌' : '');
+    document.getElementById('heroTag').textContent = (S.view==='iso'&&S.finish==='smooth'&&S.palette==='black' ? '视频原版 · ' : '') + VIEW[S.view] + (S.view==='flat' ? '' : ' · ' + FIN[S.finish]) + ' · ' + PALETTES[S.palette].name + (S.face==='cute' ? ' · 萌' : '');
     document.getElementById('legend').innerHTML = Object.values(CAT).map(c => { const col = statusColor(c.key, S.palette); return `<span><i style="background:${col}"></i>${c.name}<small style="color:var(--mute)">${col}</small></span>`; }).join('');
     drawColors(); drawGroups(); drawSizes(); if (curDemo) show(curDemo.f, curDemo.i);
   }
@@ -341,12 +352,12 @@ button.sel{border-color:var(--ink)}
     document.getElementById('ccStatus').innerHTML = catKeys.map(k => { const c = CAT[k], col = statusColor(k, S.palette); return `<div class="st"><div class="dot" style="background:${col}"></div><b>${c.name}</b><code>${k==='idle'?col+' · 随配色':c.color+' / 加深 '+c.deep}</code><br>${c.hue}<br>${c.mean}</div>`; }).join('');
     const chip = (hex, lab) => `<span class="chip"><i style="background:${hex}"></i>${lab} <code>${hex}</code></span>`;
     document.getElementById('ccPal').innerHTML = PK.map(k => { const P = PALETTES[k]; const ov = Object.keys(CAT).filter(c => BF.isDeep(c,k)).map(c => chip(statusColor(c,k), CAT[c].name + '·加深')).join('');
-      return `<div class="pal"><div class="fig">${R('idle',1,{palette:k,face:'refined'})}</div><div class="nm"><b>${P.name}</b><span>${P.note}</span></div>
+      return `<div class="pal"><div class="fig">${R('idle',1,{palette:k,face:'refined',lod:.4})}</div><div class="nm"><b>${P.name}</b><span>${P.note}</span></div>
       <div class="chips">${chip(P.top1,'顶面亮')}${chip(P.side,'身体')}${chip(P.sideL,'暗面')}${chip(P.eye,'眼睛')}${chip(P.stem,'天线杆')}${chip(P.accent,'待命主色')}${ov}</div></div>`; }).join('');
     document.getElementById('ccMatrix').innerHTML = `<div class="r"><div></div>${catKeys.map(k => `<div class="h">${CAT[k].name}</div>`).join('')}</div>` +
       PK.map(k => { const P = PALETTES[k]; const rep = {idle:'idle',think:'thinking',work:'coding',ask:'awaiting',ok:'done',err:'error',off:'sleeping'};
         return `<div class="r"><div class="l">${P.name}</div>${catKeys.map(c => { const col = statusColor(c,k), adj = BF.isDeep(c,k);
-          return `<div class="c">${R(rep[c],1,{palette:k})}<code>${col}</code>${adj ? '<span class="adj">加深</span>' : ''}</div>`; }).join('')}</div>`; }).join('');
+          return `<div class="c">${R(rep[c],1,{palette:k,lod:.35})}<code>${col}</code>${adj ? '<span class="adj">加深</span>' : ''}</div>`; }).join('')}</div>`; }).join('');
   }
   function set(f, p){ S.finish = f; S.palette = p; drawAll(); }
 
