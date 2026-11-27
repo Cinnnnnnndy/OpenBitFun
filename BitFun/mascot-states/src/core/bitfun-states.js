@@ -276,6 +276,28 @@
       let w = 0; for (const [cx2, cy2] of CHEEK) { const dx = (lx - cx2) / 4, dy = (ly - cy2) / 2.6; w = Math.max(w, Math.exp(-(dx * dx + dy * dy) * 1.4)); }
       return w < .18 ? 0 : Math.min(1, (w - .18) / .5);
     };
+    // 底绒（第 4 组，不摆动）：先铺一层短而密的绒毛盖住整个身体（含圆角外沿），长毛之间不会露出光滑的底色
+    {
+      const UL = Math.max(L0, .65), hexP = [[60, 38], [87, 53.6], [87, 77.6], [60, 93.2], [33, 77.6], [33, 53.6]];
+      for (const [fi, f] of faces.entries()) {
+        const m = Math.round(f.n * 1.1 * UL), gs = Math.ceil(Math.sqrt(m));
+        for (let i = 0; i < m; i++) {
+          const su = ((i % gs) + r()) / gs, sv = Math.min(1, (Math.floor(i / gs) + r()) / Math.ceil(m / gs)), p = at(f.q, su, sv);
+          const ang = f.top ? Math.atan2(p[1] - 53.6, p[0] - 60) + (r() - .5) * .5 : f.d + (r() - .5) * .4;
+          clump(p[0], p[1], ang, 3 + r() * 2.2, .7, light(p[0], p[1], f.base) - .08, grp(), 3);
+        }
+      }
+      for (let k = 0; k < 6; k++) {
+        const a = hexP[k], b = hexP[(k + 1) % 6], seg = Math.hypot(b[0] - a[0], b[1] - a[1]), nx = (b[1] - a[1]) / seg, ny = -(b[0] - a[0]) / seg;
+        const base = ny < -.3 ? 1.0 : nx < -.5 ? .74 : nx > .5 ? .58 : .46;
+        for (let i = 0, m = Math.round(seg * 4 * UL); i < m; i++) {
+          const p = lerp(a, b, r()), off = r() * 9, sx = p[0] + nx * off, sy = p[1] + ny * off;
+          clump(sx, sy, Math.atan2(ny, nx) + (r() - .5) * .8, 3 + r() * 2.5, .7, light(sx, sy, base) - .08, grp(), 3);
+        }
+        const cx0 = 60, cy0 = 65.6, vx = b[0] - cx0, vy = b[1] - cy0, vl = Math.hypot(vx, vy);
+        for (let i = 0; i < 34; i++) { const o = r() * 10, sx = b[0] + vx / vl * o + (r() - .5) * 7, sy = b[1] + vy / vl * o + (r() - .5) * 7; clump(sx, sy, Math.atan2(vy, vx) + (r() - .5) * 1, 3 + r() * 2.5, .7, light(sx, sy, base) - .08, grp(), 3); }
+      }
+    }
     for (const [fi, f] of faces.entries()) {
       // 分层抖动采样：每个格子放一簇，分布均匀，不会一块密一块稀
       const m = Math.round(f.n * L0 * (fi === 2 ? 1.15 : 1)), gs = Math.ceil(Math.sqrt(m));
@@ -294,12 +316,12 @@
       const a = poly[k], b = poly[(k + 1) % 6], seg = Math.hypot(b[0] - a[0], b[1] - a[1]), nx = (b[1] - a[1]) / seg, ny = -(b[0] - a[0]) / seg;
       const base = ny < -.3 ? 1.0 : nx < -.5 ? .74 : nx > .5 ? .58 : .46;
       for (let i = 0, m = Math.round(seg * 2.6 * L0); i < m; i++) {
-        const p = lerp(a, b, r()), off = r() * 6, sx = p[0] + nx * off, sy = p[1] + ny * off;
+        const p = lerp(a, b, r()), off = r() * 8, sx = p[0] + nx * off, sy = p[1] + ny * off;
         clump(sx, sy, Math.atan2(ny, nx) * .5 + Math.PI / 4 + (r() - .5) * .5, 5 + r() * 3.5, .5 + r() * .3, light(sx, sy, base), grp());
       }
       // 外缘长毛：轮廓上蓬出去的那一圈最能看出“毛”，也是摆动最明显的部分
       for (let i = 0, m = Math.round(seg * 3 * L0); i < m; i++) {
-        const p = lerp(a, b, r()), off = 3.5 + r() * 3, sx = p[0] + nx * off, sy = p[1] + ny * off;
+        const p = lerp(a, b, r()), off = 5 + r() * 4, sx = p[0] + nx * off, sy = p[1] + ny * off;
         clump(sx, sy, Math.atan2(ny, nx) + (r() - .5) * .7, 5.5 + r() * 5.5, .45 + r() * .3, light(sx, sy, base - .04), grp(), 3);
       }
       const vx = b[0] - cx, vy = b[1] - cy, vl = Math.hypot(vx, vy);
@@ -310,10 +332,10 @@
     }
     // 输出：每组一层 <g>，各自按不同节奏轻摆；同组内按 根 → 中 → 尖 的顺序叠
     let out = '';
-    for (const B of buf) for (let sg = 0; sg < SEG; sg++) for (let g = 0; g < G; g++) {
+    for (const B of buf) for (let sg = 0; sg < SEG; sg++) for (let g = 0; g <= G; g++) {
       let t = '';
       for (const k in B) { const [gg, ss, col] = k.split('|'); if (+gg === g && +ss === sg) t += `<path d="${B[k]}" stroke="${col}" stroke-width="${W[sg]}"/>`; }
-      if (t) out += `<g class="fw fw${g}">${t}</g>`;
+      if (t) out += g === G ? `<g class="fwu">${t}</g>` : `<g class="fw fw${g}">${t}</g>`;
     }
     return `<g class="fur" fill="none" stroke-linecap="round">${out}</g>`;
   }
