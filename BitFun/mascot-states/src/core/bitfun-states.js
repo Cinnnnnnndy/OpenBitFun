@@ -179,9 +179,9 @@
     };
     // 表面长绒：顶面从中心向外放射，两个侧面向下倒伏
     const faces = [
-      { q: [[60, 38], [87, 53.6], [60, 69.2], [33, 53.6]], n: 300, top: true },
-      { q: [[33, 53.6], [60, 69.2], [60, 93.2], [33, 77.6]], n: 260, d: 1.35 },
-      { q: [[60, 69.2], [87, 53.6], [87, 77.6], [60, 93.2]], n: 260, d: 1.79 }
+      { q: [[60, 38], [87, 53.6], [60, 69.2], [33, 53.6]], n: 650, top: true },
+      { q: [[33, 53.6], [60, 69.2], [60, 93.2], [33, 77.6]], n: 560, d: 1.35 },
+      { q: [[60, 69.2], [87, 53.6], [87, 77.6], [60, 93.2]], n: 560, d: 1.79 }
     ];
     let li = '', dk = '';
     for (const f of faces) for (let i = 0; i < f.n; i++) {
@@ -195,12 +195,19 @@
     let fr = '', frl = '';
     for (let k = 0; k < 6; k++) {
       const a = poly[k], b = poly[(k + 1) % 6], seg = Math.hypot(b[0] - a[0], b[1] - a[1]), nx = (b[1] - a[1]) / seg, ny = -(b[0] - a[0]) / seg;
-      const n = Math.round(seg * 4);
+      const n = Math.round(seg * 7);
       for (let i = 0; i < n; i++) {
         const p = lerp(a, b, r()), off = 4.5 + r() * 3.5, sx = p[0] + nx * off, sy = p[1] + ny * off;
         const ang = Math.atan2(ny, nx) + (r() - .5) * 1.1;
         const d = strand(sx, sy, ang, 2.6 + r() * 3.6, (r() - .5) * 3);
         if (r() < .85) fr += d; else frl += d;
+      }
+      // 圆角过渡带（面和外缘之间）也铺满绒毛，避免边缘一圈发空
+      for (let i = 0, m = Math.round(seg * 6); i < m; i++) {
+        const p = lerp(a, b, r()), off = r() * 6, sx = p[0] + nx * off, sy = p[1] + ny * off;
+        const ang = Math.atan2(ny, nx) * .5 + Math.PI / 2 * .5 + (r() - .5) * .9;
+        const d = strand(sx, sy, ang, 3 + r() * 3, (r() - .5) * 2.4);
+        if (r() < .6) li += d; else dk += d;
       }
       const vx = b[0] - cx, vy = b[1] - cy, vl = Math.hypot(vx, vy);
       for (let i = 0; i < 14; i++) {
@@ -210,7 +217,7 @@
     }
     return `<g fill="none" stroke-linecap="round" filter="url(#pf${u})">
       <path d="${fr}" stroke="${P.side}" stroke-width=".6"/><path d="${frl}" stroke="${lite}" stroke-width=".45" stroke-opacity="${lum < .05 ? .35 : .7}"/>
-      <g clip-path="url(#cl${u})"><path d="${dk}" stroke="${dark}" stroke-width=".4" stroke-opacity="${lum < .05 ? .5 : .32}"/><path d="${li}" stroke="${lite}" stroke-width=".4" stroke-opacity="${lum < .05 ? .32 : .55}"/></g></g>`;
+      <g><path d="${dk}" stroke="${dark}" stroke-width=".4" stroke-opacity="${lum < .05 ? .5 : .32}"/><path d="${li}" stroke="${lite}" stroke-width=".4" stroke-opacity="${lum < .05 ? .32 : .55}"/></g></g>`;
   }
 
   function body(x) {
