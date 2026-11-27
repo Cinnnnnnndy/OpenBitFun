@@ -219,7 +219,7 @@
   function down(x, redOnly = false) {
     const { P, u } = x, r = rng(7), black = relLum(P.side) < .05;
     // 毕方特别版：“赤文”长在毛上——落在羽纹带里的毛簇用红色
-    const RED = ['#7a2418', '#9c3020', '#bc4028', '#d45236', '#e46e50', '#f08e70'], redRoots = RED.map(() => ''), redTips = RED.map(() => '');
+    const RED = ['#b9583f', '#c96a4e', '#d87d5e', '#e59270', '#efa887', '#f6bea2'] /* 赤文用偏暖的朱砂珊瑚色，避免像血 */, redRoots = RED.map(() => ''), redTips = RED.map(() => '');
     const redBin = v => Math.max(0, Math.min(RED.length - 1, Math.round(v * (RED.length - 1))));
     const hi = black ? '#55555e' : tint(P.side, .62), lo = black ? '#000000' : shadeHex(P.side, .34);
     const mixc = (a, b, t) => '#' + [1, 3, 5].map(i => Math.round(parseInt(a.substr(i, 2), 16) * (1 - t) + parseInt(b.substr(i, 2), 16) * t).toString(16).padStart(2, '0')).join('');
@@ -253,8 +253,8 @@
     // 羽纹带：左侧面三道斜向带，带的边缘按概率渐变，红毛和青毛自然交错
     const band = (fi, su, sv) => {
       if (!P.bifang) return false;
-      if (fi === 1) { const ph = ((sv * 3.2 - su * .9) % 1 + 1) % 1, d = Math.abs(ph - .17) / .17; return r() < Math.max(0, Math.min(1, (1.25 - d) * 1.6)); }
-      if (fi === 2) return sv > .7 && su < .36 && r() < (sv - .7) * 4;
+      if (fi === 1) { const ph = ((sv * 3.2 - su * .9) % 1 + 1) % 1, d = Math.abs(ph - .2) / .2; return d < .8 || (d < 1.1 && r() < (1.1 - d) / .35); }
+      if (fi === 2) return false;
       return false;
     };
     for (const [fi, f] of faces.entries()) for (let i = 0, m = Math.round(f.n * x.lod * (redOnly ? 1.4 : 1)); i < m; i++) {
@@ -269,12 +269,12 @@
       // 圆角过渡带
       for (let i = 0, m = Math.round(seg * 2.4 * x.lod); i < m; i++) {
         const p = lerp(a, b, r()), off = r() * 6, sx = p[0] + nx * off, sy = p[1] + ny * off;
-        clump(sx, sy, Math.atan2(ny, nx) * .5 + Math.PI / 4 + (r() - .5) * .8, 3.6 + r() * 3, .45 + r() * .4, light(sx, sy, base), 5, P.bifang && k === 4 && r() < .35);
+        clump(sx, sy, Math.atan2(ny, nx) * .5 + Math.PI / 4 + (r() - .5) * .8, 3.6 + r() * 3, .45 + r() * .4, light(sx, sy, base), 5);
       }
       // 外缘向外支出的毛簇
       for (let i = 0, m = Math.round(seg * 2.6 * x.lod); i < m; i++) {
         const p = lerp(a, b, r()), off = 4 + r() * 3, sx = p[0] + nx * off, sy = p[1] + ny * off;
-        clump(sx, sy, Math.atan2(ny, nx) + (r() - .5) * 1, 2.6 + r() * 3.4, .4 + r() * .4, light(sx, sy, base - .04), 4, P.bifang && k === 4 && r() < .35);
+        clump(sx, sy, Math.atan2(ny, nx) + (r() - .5) * 1, 2.6 + r() * 3.4, .4 + r() * .4, light(sx, sy, base - .04), 4);
       }
       const vx = b[0] - cx, vy = b[1] - cy, vl = Math.hypot(vx, vy);
       for (let i = 0; i < 9; i++) {
@@ -292,9 +292,14 @@
   // 毕方特别版：《山海经》“其状如鹤，一足，赤文青质而白喙”——青色身体上几道红色羽纹，眼睛下方一只白喙；方块上的天线就是那“一足”
   function bifangMarks(x) {
     const beak = '#F4F1EA';
-    if (x.flat) return `<g fill="#D8452E"><path d="M30 86 q8 -6 16 -1 q-8 1 -16 5z"/><path d="M90 86 q-8 -6 -16 -1 q8 1 16 5z"/></g>
+    if (x.flat) return `<g fill="#E08566"><path d="M30 86 q8 -6 16 -1 q-8 1 -16 5z"/><path d="M90 86 q-8 -6 -16 -1 q8 1 16 5z"/></g>
       <path d="M57.4 ${x.tiny ? 72 : 70} L62.6 ${x.tiny ? 72 : 70} L60 ${x.tiny ? 77 : 75.5}Z" fill="${beak}" stroke="${beak}" stroke-width="1.2" stroke-linejoin="round"/>`;
-    const fur = x.plush ? '' : down(x, true);
+    let fur = '';
+    if (!x.plush) {
+      const feather = (y, len, o) => `<path d="M2.5 ${y + 3} Q${len * .45} ${y - 2.2} ${len} ${y} Q${len * .5} ${y + .9} 2.5 ${y + 3}Z" fill="url(#bfg${x.u})" opacity="${o}"/><path d="M4 ${y + 2.4} Q${len * .5} ${y - .9} ${len - 1.5} ${y + .2}" stroke="#f8d2bd" stroke-width=".5" fill="none" stroke-linecap="round" opacity=".8"/>`;
+      fur = `<defs><linearGradient id="bfg${x.u}" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#c96a4e"/><stop offset="1" stop-color="#eda283"/></linearGradient></defs>
+        <g transform="matrix(1 .577 0 1 33 53.6)">${feather(6, 22, 1)}${feather(12, 24, .95)}${feather(18, 19, .9)}</g>`;
+    }
     return `${fur}<g transform="${FACE}"><path d="M13.6 15.2 Q17 14.2 20.6 15.2 L17.4 21Z" fill="${beak}" stroke="${beak}" stroke-width="1.2" stroke-linejoin="round"/><path d="M14.4 15.6 Q17 15 19.8 15.6" stroke="#cfc6b4" stroke-width=".55" fill="none"/></g>`;
   }
 
