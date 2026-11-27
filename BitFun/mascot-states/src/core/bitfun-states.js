@@ -227,7 +227,7 @@
     // 毕方“赤文”：羽根是身体的青色，往羽尖渐变成朱砂珊瑚色（像仙鹤翅尖那样，颜色长在羽毛末端）
     const CORAL = ['#b45a42', '#c76a4f', '#d67c5d', '#e2906e', '#eca683', '#f4bc9e'];
     const G = 4, SEG = 3, W = [.34, .24, .15];   // 4 组分别摆动；每根毛分根 / 中 / 尖三段，越往尖越细越亮
-    const buf = [{}, {}]; let LY = 0; const add = (g, s, col, d) => { const k = g + '|' + s + '|' + col; buf[LY][k] = (buf[LY][k] || '') + d; };  // 第 0 层是绒毛，第 1 层是毕方的羽
+    const buf = [{}, {}, {}]; let LY = 0, NOFLOW = false; const add = (g, s, col, d) => { const k = g + '|' + s + '|' + col; buf[LY][k] = (buf[LY][k] || '') + d; };  // 第 0 层是绒毛，第 1 层是毕方的羽
     const bin = v => tones[Math.max(0, Math.min(N - 1, Math.round(v * (N - 1))))];
     const cbin = v => CORAL[Math.max(0, Math.min(CORAL.length - 1, Math.round(v * (CORAL.length - 1))))];
     const lerp = (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
@@ -244,7 +244,7 @@
     };
     // 一簇毛：n 根从根部散开、向尖端收拢；coral>0 时羽尖渐变为珊瑚色
     function clump(px, py, ang, L, w, shade, g, n = 5, coral = 0) {
-      ang += flow(px, py) * .6;
+      if (!NOFLOW) ang += flow(px, py) * .6;
       const ux = Math.cos(ang), uy = Math.sin(ang), vx = -uy, vy = ux, bend = bendF(px, py) + (r() - .5) * .5;
       const tx = px + ux * L, ty = py + uy * L;
       for (let j = 0; j < n; j++) {
@@ -255,8 +255,8 @@
         // 赤文：羽根仍是身体色，越往毛尖越偏珊瑚色；coral 是 0–1 的浓度，斑块边缘自然变淡
         const cw = coral ? Math.round(coral * 4) / 4 : 0;
         add(g, 0, cw ? mixc(bin(sh - .2), cbin(sh), cw * .25) : bin(sh - .2), Q(a, c, e, 0, .45));
-        add(g, 1, cw ? mixc(bin(sh), cbin(sh + .25), cw * .7) : bin(sh), Q(a, c, e, .38, .74));
-        add(g, 2, cw ? mixc(bin(sh + .22), cbin(sh + .45), cw) : bin(sh + .22), Q(a, c, e, .68, 1));
+        add(g, 1, cw >= 1 ? mixc(cbin(.7), '#ffffff', .15) : cw ? mixc(bin(sh), cbin(sh + .25), cw * .7) : bin(sh), Q(a, c, e, .38, .74));
+        add(g, 2, cw >= 1 ? mixc(cbin(1), '#ffffff', .3) : cw ? mixc(bin(sh + .22), cbin(sh + .45), cw) : bin(sh + .22), Q(a, c, e, .68, 1));
       }
     }
     const grp = () => Math.floor(r() * G);
@@ -315,12 +315,12 @@
     for (let k = 0; k < 6; k++) {
       const a = poly[k], b = poly[(k + 1) % 6], seg = Math.hypot(b[0] - a[0], b[1] - a[1]), nx = (b[1] - a[1]) / seg, ny = -(b[0] - a[0]) / seg;
       const base = ny < -.3 ? 1.0 : nx < -.5 ? .74 : nx > .5 ? .58 : .46;
-      for (let i = 0, m = Math.round(seg * 2.6 * L0); i < m; i++) {
+      for (let i = 0, m = Math.round(seg * 3.4 * Math.max(L0, .6)); i < m; i++) {
         const p = lerp(a, b, r()), off = r() * 8, sx = p[0] + nx * off, sy = p[1] + ny * off;
         clump(sx, sy, Math.atan2(ny, nx) * .5 + Math.PI / 4 + (r() - .5) * .5, 5 + r() * 3.5, .5 + r() * .3, light(sx, sy, base), grp());
       }
       // 外缘长毛：轮廓上蓬出去的那一圈最能看出“毛”，也是摆动最明显的部分
-      for (let i = 0, m = Math.round(seg * 3 * L0); i < m; i++) {
+      for (let i = 0, m = Math.round(seg * 3.8 * Math.max(L0, .6)); i < m; i++) {
         const p = lerp(a, b, r()), off = 5 + r() * 4, sx = p[0] + nx * off, sy = p[1] + ny * off;
         clump(sx, sy, Math.atan2(ny, nx) + (r() - .5) * .7, 5.5 + r() * 5.5, .45 + r() * .3, light(sx, sy, base - .04), grp(), 3);
       }
@@ -330,23 +330,48 @@
         clump(sx, sy, Math.atan2(vy, vx) + (r() - .5) * 1.1, 4.5 + r() * 4, .45 + r() * .3, light(sx, sy, base), grp(), 3);
       }
     }
+    // 嵌入感：眼睛、腮红、喙、天线底座周围补一圈短绒毛压在它们的边缘上，像是从毛里露出来，而不是贴在毛上
+    LY = 2; NOFLOW = true;
+    {
+      const W2 = (lx, ly) => [60 + lx, 69.2 - .577 * lx + ly], D2 = (dx, dy) => Math.atan2(-.577 * dx + dy, dx);
+      for (const [ex, ey] of [[9.5, 12], [24.5, 12]]) for (let i = 0, n = 34; i < n; i++) {
+        const t = (i + r() * .6) / n * Math.PI * 2, rx = 4.5 + r() * .6, ry = 7 + r() * .8;
+        const [px, py] = W2(ex + Math.cos(t) * rx, ey + Math.sin(t) * ry);
+        clump(px, py, D2(-Math.cos(t) * .9, -Math.sin(t) * .9 + .25), 2 + r() * .9, .35, light(px, py, .6), 0, 2);
+      }
+      if (P.bifang) {
+        for (const [cx2, cy2] of [[4.5, 18.8], [27.5, 18.8]]) for (let i = 0; i < 14; i++) {
+          const a = (i + r() * .7) / 14 * Math.PI * 2, k = 1 + r() * .15, [px, py] = W2(cx2 + Math.cos(a) * 5.6 * k, cy2 + Math.sin(a) * 3.3 * k);
+          clump(px, py, D2(-Math.cos(a) * .6 + .1, -Math.sin(a) * .6 + .5), 1.4 + r() * .9, .3, light(px, py, .6), 0, 2);
+        }
+        for (let i = 0; i < 9; i++) { const [px, py] = W2(15 + i * .5 + (r() - .5) * .4, 14.1 + r() * .4); clump(px, py, D2(.1, 1), 1.6 + r() * .6, .25, light(px, py, .62), 0, 2); }
+      }
+      // 天线底座：一圈毛从外向里盖住金属托盘的边
+      for (let i = 0, n = 46; i < n; i++) {
+        const t = (i + r() * .6) / n * Math.PI * 2, px = 60 + Math.cos(t) * (8.6 + r()), py = 53.8 + Math.sin(t) * (4.5 + r() * .6);
+        clump(px, py, Math.atan2(53.8 - py, (60 - px) * .55) + (r() - .5) * .3, 2.2 + r() * 1.2, .4, light(px, py, 1.0) - (Math.sin(t) > 0 ? .02 : .1), 0, 2);
+      }
+    }
+    NOFLOW = false;
     // 输出：每组一层 <g>，各自按不同节奏轻摆；同组内按 根 → 中 → 尖 的顺序叠
     let out = '';
-    for (const B of buf) for (let sg = 0; sg < SEG; sg++) for (let g = 0; g <= G; g++) {
+    for (const B of buf.slice(0, 2)) for (let sg = 0; sg < SEG; sg++) for (let g = 0; g <= G; g++) {
       let t = '';
       for (const k in B) { const [gg, ss, col] = k.split('|'); if (+gg === g && +ss === sg) t += `<path d="${B[k]}" stroke="${col}" stroke-width="${W[sg]}"/>`; }
       if (t) out += g === G ? `<g class="fwu">${t}</g>` : `<g class="fw fw${g}">${t}</g>`;
     }
+    let ov = ''; for (let sg = 0; sg < SEG; sg++) for (const k in buf[2]) { const [, ss, col] = k.split('|'); if (+ss === sg) ov += `<path d="${buf[2][k]}" stroke="${col}" stroke-width="${W[sg] * .85}"/>`; }
+    x.furOver = `${P.bifang ? bifangBlush(x) : ''}<g class="fur-over" fill="none" stroke-linecap="round">${ov}</g>`;
     return `<g class="fur" fill="none" stroke-linecap="round">${out}</g>`;
   }
 
   // 毕方特别版：《山海经》“其状如鹤，一足，赤文青质而白喙”——青色身体、眼下一只小白喙，方块上的天线就是那“一足”。
   // “赤文”收成一对珊瑚色腮红：形状清楚、和表情结合；毛绒版另外让两颊的毛尖也泛红（见 down）
+  const bifangBlush = x => { const u = x.u, flat = x.flat, C = flat ? [[4, 20.2], [30, 20.2]] : [[4.5, 18.8], [27.5, 18.8]], rx = flat ? 3.4 : x.plush ? 5.6 : 3.8, ry = flat ? 2 : x.plush ? 3.4 : 2.3;
+    return `<defs><radialGradient id="bfb${u}"><stop offset="0" stop-color="#ef8d70" stop-opacity="${x.plush ? .92 : .85}"/><stop offset=".6" stop-color="#ef9878" stop-opacity="${x.plush ? .62 : .55}"/><stop offset="1" stop-color="#f2a588" stop-opacity="0"/></radialGradient></defs>
+      <g transform="${face(x)}" fill="url(#bfb${u})">${C.map(([cx, cy]) => `<ellipse cx="${cx}" cy="${cy}" rx="${rx}" ry="${ry}"/>`).join('')}</g>`; };
   function bifangMarks(x) {
-    const beak = '#F4F1EA', u = x.u, flat = x.flat;
-    const C = flat ? [[4, 20.2], [30, 20.2]] : [[4.5, 18.8], [27.5, 18.8]], rx = flat ? 3.4 : x.plush ? 5 : 3.8, ry = flat ? 2 : x.plush ? 3.1 : 2.3;
-    const blush = `<defs><radialGradient id="bfb${u}"><stop offset="0" stop-color="#ef8d70" stop-opacity="${x.plush ? .92 : .85}"/><stop offset=".6" stop-color="#ef9878" stop-opacity="${x.plush ? .62 : .55}"/><stop offset="1" stop-color="#f2a588" stop-opacity="0"/></radialGradient></defs>
-      <g transform="${face(x)}" fill="url(#bfb${u})">${C.map(([cx, cy]) => `<ellipse cx="${cx}" cy="${cy}" rx="${rx}" ry="${ry}"/>`).join('')}</g>`;
+    const beak = '#F4F1EA', flat = x.flat, blush = x.plush ? '' : bifangBlush(x);
     if (flat) { const t = x.tiny; return `${blush}<path d="M58.6 ${t ? 72 : 70.2} L61.4 ${t ? 72 : 70.2} L60 ${t ? 75.6 : 73}Z" fill="${beak}" stroke="${beak}" stroke-width=".9" stroke-linejoin="round"/>`; }
     return `${blush}<g transform="${FACE}"><path d="M15.2 15.7 Q17.1 15.2 19 15.7 L17.3 19Z" fill="${beak}" stroke="${beak}" stroke-width=".8" stroke-linejoin="round"/></g>`;
   }
@@ -376,7 +401,7 @@
     if (plush) g += `<path d="${SIL}" fill="#000" stroke="#000" stroke-width="${sw}" stroke-linejoin="round" filter="url(#fur${u})" opacity="${P.furOp}"/>
 <mask id="m${u}"><path d="${SIL}" fill="#fff" stroke="#fff" stroke-width="${sw}" stroke-linejoin="round"/></mask>
 <rect x="0" y="20" width="120" height="100" fill="url(#ao${u})" mask="url(#m${u})"/>
-<clipPath id="cl${u}"><path d="${SIL}" stroke="#000" stroke-width="${sw - 2}" stroke-linejoin="round"/></clipPath>${down(x)}`;
+<clipPath id="cl${u}"><path d="${SIL}" stroke="#000" stroke-width="${sw - 2}" stroke-linejoin="round"/></clipPath>${down(x)}<g transform="${FACE}" fill="#000" opacity=".22" filter="url(#hb${u})"><ellipse cx="9.5" cy="12.6" rx="4.2" ry="6.6"/><ellipse cx="24.5" cy="12.6" rx="4.2" ry="6.6"/></g>`;  // 眼窝：眼睛周围压暗一圈，像嵌进毛里
     return g;
   }
 
@@ -479,7 +504,7 @@
       notes: '左手举着清单，勾选逐条出现；视线看向清单。', wrap: 'f' },
     { id: 'coding', cat: 'work', name: '写代码', en: 'Coding', pill: '编辑 src/app.ts',
       when: 'Agent 正在生成 / 修改文件。',
-      notes: '借鉴 Muse 的“敲键盘”：双手在身前交替敲击，右侧编辑器逐行长出代码。专注眼（上眼睑压平）。', wrap: '' },
+      notes: '“敲键盘”：双手在身前交替敲击，右侧编辑器逐行长出代码。专注眼（上眼睑压平）。', wrap: '' },
     { id: 'searching', cat: 'work', name: '检索阅读', en: 'Searching', pill: '读取 12 个文件',
       when: '搜索代码库、读文件、联网查资料。',
       notes: '放大镜在文档上扫视，眼睛与放大镜同步移动——视线就是“正在看哪里”。', wrap: 'f' },
@@ -631,7 +656,7 @@
     if (x.flat) { x.plush = false; x.metal = false; } // 平面只有一种：纯平、简化
     const color = statusColor(st.cat, opt.palette);
     const compact = !!opt.compact || !!opt.tiny, ac = !!opt.accent && !x.tiny;
-    const list = parts(id, x, color, compact || ac).filter(Boolean).join('');
+    const list = parts(id, x, color, compact || ac).filter(Boolean).join('') + (x.plush && x.furOver ? x.furOver : '');
     const wrap = st.wrap === 'hop' && (compact || ac) ? 'f' : st.wrap;
     const vb = x.tiny ? '20 13 80 90' : ac ? '34 6 122 120' : compact ? '9 1 102 107' : '0 0 160 136';
     const shadow = x.flat ? '' : false ? `<ellipse cx="60" cy="104" rx="27" ry="2.6" fill="#000" opacity=".07"/>` : `<ellipse cx="60" cy="103.5" rx="30" ry="4.2" fill="url(#sh${x.u})"/>`;
