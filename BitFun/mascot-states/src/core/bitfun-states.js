@@ -202,6 +202,7 @@
 <linearGradient id="bs${u}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff" stop-opacity=".22"/><stop offset=".45" stop-color="#fff" stop-opacity="0"/><stop offset="1" stop-color="#000" stop-opacity=".28"/></linearGradient>
 <filter color-interpolation-filters="sRGB" id="tb${u}" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="${x.plush ? 3.6 : 2.6}"/></filter>
 <filter color-interpolation-filters="sRGB" id="pf${u}" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation=".2"/></filter>
+<filter color-interpolation-filters="sRGB" id="ev${u}" x="-40%" y="-40%" width="180%" height="190%"><feGaussianBlur in="SourceAlpha" stdDeviation="1.1" result="b"/><feDiffuseLighting in="b" surfaceScale="1.6" diffuseConstant="1" lighting-color="#fff" result="d"><feDistantLight azimuth="235" elevation="62"/></feDiffuseLighting><feSpecularLighting in="b" surfaceScale="1.6" specularConstant=".7" specularExponent="30" lighting-color="#fff" result="sp"><feDistantLight azimuth="235" elevation="58"/></feSpecularLighting><feComposite in="SourceGraphic" in2="d" operator="arithmetic" k1=".5" k2=".5" k3="0" k4="0" result="sh"/><feComposite in="sp" in2="SourceAlpha" operator="in" result="spc"/><feComposite in="sh" in2="spc" operator="arithmetic" k2="1" k3=".8" result="lit"/><feComposite in="lit" in2="SourceAlpha" operator="in" result="bead"/><feDropShadow in="bead" dx=".2" dy=".7" stdDeviation=".5" flood-color="#000" flood-opacity=".22"/></filter>
 <filter color-interpolation-filters="sRGB" id="hl${u}" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="3"/></filter>
 <filter color-interpolation-filters="sRGB" id="fz${u}" x="-25%" y="-25%" width="150%" height="150%"><feTurbulence type="fractalNoise" baseFrequency=".62" numOctaves="2" seed="5" result="n"/><feDisplacementMap in="SourceGraphic" in2="n" scale=".7" xChannelSelector="R" yChannelSelector="G"/></filter>
 <filter color-interpolation-filters="sRGB" id="fur${u}" x="-30%" y="-30%" width="160%" height="160%"><feTurbulence type="fractalNoise" baseFrequency="1.5 2.4" numOctaves="3" seed="9" result="n"/><feColorMatrix in="n" type="matrix" values="0 0 0 0 ${fr} 0 0 0 0 ${fg} 0 0 0 0 ${fb} 0 0 0 2.2 -.95" result="a"/><feGaussianBlur in="a" stdDeviation=".55" result="ab"/><feComposite in="ab" in2="SourceAlpha" operator="in"/></filter>
@@ -335,16 +336,7 @@
     LY = 2; NOFLOW = true;
     {
       const W2 = (lx, ly) => [60 + lx, 69.2 - .577 * lx + ly], D2 = (dx, dy) => Math.atan2(-.577 * dx + dy, dx);
-      for (const [ex, ey] of [[9.5, 12], [24.5, 12]]) for (let i = 0, n = 34; i < n; i++) {
-        const t = (i + r() * .6) / n * Math.PI * 2, rx = 4.5 + r() * .6, ry = 7 + r() * .8;
-        const [px, py] = W2(ex + Math.cos(t) * rx, ey + Math.sin(t) * ry);
-        clump(px, py, D2(-Math.cos(t) * .9, -Math.sin(t) * .9 + .25), 2 + r() * .9, .35, light(px, py, .6), 0, 2);
-      }
       if (P.bifang) {
-        for (const [cx2, cy2] of [[4.5, 18.8], [27.5, 18.8]]) for (let i = 0; i < 14; i++) {
-          const a = (i + r() * .7) / 14 * Math.PI * 2, k = 1 + r() * .15, [px, py] = W2(cx2 + Math.cos(a) * 5.6 * k, cy2 + Math.sin(a) * 3.3 * k);
-          clump(px, py, D2(-Math.cos(a) * .6 + .1, -Math.sin(a) * .6 + .5), 1.4 + r() * .9, .3, light(px, py, .6), 0, 2);
-        }
         for (let i = 0; i < 9; i++) { const [px, py] = W2(15 + i * .5 + (r() - .5) * .4, 14.1 + r() * .4); clump(px, py, D2(.1, 1), 1.6 + r() * .6, .25, light(px, py, .62), 0, 2); }
       }
       // 天线底座：一圈毛从外向里盖住金属托盘的边
@@ -402,7 +394,7 @@ ${plush ? '' : `<path d="${LEFT}" fill="url(#lf${u})" filter="url(#tb${u})"/>`}
     if (plush) g += `<path d="${SIL}" fill="#000" stroke="#000" stroke-width="${sw}" stroke-linejoin="round" filter="url(#fur${u})" opacity="${P.furOp}"/>
 <mask id="m${u}"><path d="${SIL}" fill="#fff" stroke="#fff" stroke-width="${sw}" stroke-linejoin="round"/></mask>
 <rect x="0" y="20" width="120" height="100" fill="url(#ao${u})" mask="url(#m${u})" opacity=".35"/>
-<clipPath id="cl${u}"><path d="${SIL}" stroke="#000" stroke-width="${sw - 2}" stroke-linejoin="round"/></clipPath>${down(x)}<g transform="${FACE}" fill="#000" opacity=".22" filter="url(#hb${u})"><ellipse cx="9.5" cy="12.6" rx="4.2" ry="6.6"/><ellipse cx="24.5" cy="12.6" rx="4.2" ry="6.6"/></g>`;  // 眼窝：眼睛周围压暗一圈，像嵌进毛里
+<clipPath id="cl${u}"><path d="${SIL}" stroke="#000" stroke-width="${sw - 2}" stroke-linejoin="round"/></clipPath>${down(x)}<g transform="${FACE}" fill="#000" opacity=".1" filter="url(#hb${u})"><ellipse cx="9.5" cy="13" rx="4.4" ry="6.8"/><ellipse cx="24.5" cy="13" rx="4.4" ry="6.8"/></g>`;  // 眼窝：眼睛周围压暗一圈，像嵌进毛里
     return g;
   }
 
@@ -428,7 +420,7 @@ ${plush ? '' : `<path d="${LEFT}" fill="url(#lf${u})" filter="url(#tb${u})"/>`}
       case 'xx': { const [[a, b], [c, d]] = E; s = `<path d="M${a - 1.8} ${b - 2.6} L${a + 1.8} ${b} L${a - 1.8} ${b + 2.6}" ${st(2.5)}/><path d="M${c + 1.8} ${d - 2.6} L${c - 1.8} ${d} L${c + 1.8} ${d + 2.6}" ${st(2.5)}/>`; break; }
       default: s = E.map(([a, b]) => `<g class="blink"><ellipse cx="${a}" cy="${b}" rx="2.9" ry="5.3" fill="${ec}"/>${shine(a, b)}</g>`).join('');
     }
-    return `<g transform="${face(x)}"><g transform="translate(${dx} ${dy})"><g${cls}>${s}</g></g></g>`;
+    return `<g transform="${face(x)}"${x.plush ? ` filter="url(#ev${x.u})"` : ''}><g transform="translate(${dx} ${dy})"><g${cls}>${s}</g></g></g>`;  // 毛绒：眼睛做成有体积的小珠子
   }
 
   const blush = (x, op = .75) => !x.cute || x.P.bifang ? '' : `<g transform="${face(x)}" fill="${x.P.blush}" opacity="${op}"><ellipse cx="4" cy="20.2" rx="3" ry="1.7"/><ellipse cx="30" cy="20.2" rx="3" ry="1.7"/></g>`;
