@@ -69,14 +69,14 @@ i.bl{display:inline-block;width:10px;height:10px;border-radius:50%;box-shadow:0 
 <body>
 <div class="page" id="root" data-openbitfun-design-system-root data-color-scheme="light"><div class="wrap">
   <h1>毕方 · 自己搭配</h1>
-  <p class="lead">选身体颜色和天线球颜色，右边实时预览 3D、平面、6 个状态和小图标尺寸。眼睛颜色会自动选对比度够的那个。下面的检查会提示看不清或和状态色撞色的搭配。</p>
+  <p class="lead">选颜色和五官，实时预览。</p>
 
   <div class="layout">
     <section class="panel" aria-label="选择颜色">
       <div class="group">
         <h2>身体</h2>
         <div class="swatches"><div id="bodies" style="display:contents"></div><label class="pick" id="bodyPickWrap" title="自定义身体颜色"><input type="color" id="bodyPick" aria-label="自定义身体颜色"></label></div>
-        <p class="legend"><i></i>带圆点的是设计系统 token，会随浅色 / 深色主题变化</p>
+        <p class="legend"><i></i>设计系统 token</p>
         <div class="hexrow">HEX <input class="hex" id="bodyHex" spellcheck="false" maxlength="7" aria-label="身体颜色 HEX"></div>
       </div>
       <div class="group">
@@ -107,7 +107,7 @@ i.bl{display:inline-block;width:10px;height:10px;border-radius:50%;box-shadow:0 
         <button type="button" id="dlFlat">下载平面 SVG</button>
         <button type="button" id="copy">复制配色 JSON</button>
       </div>
-      <p class="note">状态球（思考 / 执行 / 需要你 / 完成 / 异常 / 离线）固定用设计系统的状态 token，不随搭配改变，所以只能选待命时的球色。</p>
+      <p class="note">状态球颜色固定，只能改待命时的球色。</p>
     </section>
   </div>
 </div></div>
