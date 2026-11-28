@@ -365,7 +365,7 @@
       <g transform="${face(x)}" fill="url(#bfb${u})">${C.map(([cx, cy]) => `<ellipse cx="${cx}" cy="${cy}" rx="${rx}" ry="${ry}"/>`).join('')}</g>`; };
   function bifangMarks(x) {
     const beak = '#F4F1EA', flat = x.flat, blush = '';
-    if (x.mouthPick && x.mouthPick !== 'none') return '';  // 选了嘴型时，嘴替代白喙，两者不叠在一起
+    if (x.mouthPick) return '';  // 自己搭配里改过嘴型：由 render 统一处理（选“鸟嘴”时画喙，选别的嘴或“无”时不画）
     if (flat) { const t = x.tiny; return `${blush}<path d="M58.6 ${t ? 72 : 70.2} L61.4 ${t ? 72 : 70.2} L60 ${t ? 75.6 : 73}Z" fill="${beak}" stroke="${beak}" stroke-width=".9" stroke-linejoin="round"/>`; }
     return `${blush}<g transform="${FACE}"${x.plush ? ` filter="url(#ev${x.u})"` : ''}><path d="M15.2 15.7 Q17.1 15.2 19 15.7 L17.3 19Z" fill="${beak}" stroke="${beak}" stroke-width=".8" stroke-linejoin="round"/></g>`;
   }
@@ -410,8 +410,8 @@ ${plush ? '' : `<path d="${LEFT}" fill="url(#lf${u})" filter="url(#tb${u})"/>`}
       case 'wide': s = E.map(([a, b]) => `<g class="blink"><ellipse cx="${a}" cy="${b}" rx="3.5" ry="6.2" fill="${ec}"/>${shine(a, b)}</g>`).join(''); break;
       case 'focus': s = E.map(([a, b]) => `<path d="M${a - 3} ${b - 1.6} H${a + 3} A3 5.2 0 0 1 ${a - 3} ${b - 1.6}Z" fill="${ec}"/>`).join(''); break;
       case 'squint': s = E.map(([a, b]) => `<path d="M${a - 3.1} ${b - .4} H${a + 3.1} A3.1 2.9 0 0 1 ${a - 3.1} ${b - .4}Z" fill="${ec}"/>`).join(''); break;
-      // 完成：竖椭圆眼的下缘被笑意往上推成弧形（笑眯眯），实心、不挖洞
-      case 'happy': s = E.map(([a, b]) => `<path d="M${a - 3.5} ${b + 3.2} C${a - 3.5} ${b - 6.6} ${a + 3.5} ${b - 6.6} ${a + 3.5} ${b + 3.2} Q${a} ${b + 2.2} ${a - 3.5} ${b + 3.2}Z" fill="${ec}" stroke="${ec}" stroke-width=".6" stroke-linejoin="round"/>`).join(''); break;
+      // 完成：眼睛略微睁大，右上角闪一颗小星芒（眼睛本身保持干净，不挖洞、不变形）
+      case 'happy': s = E.map(([a, b]) => `<ellipse cx="${a}" cy="${b - .3}" rx="3.5" ry="6.2" fill="${ec}"/>`).join('') + `<path d="M29.6 3.2 Q30 5.4 32.2 5.8 Q30 6.2 29.6 8.4 Q29.2 6.2 27 5.8 Q29.2 5.4 29.6 3.2Z" fill="${ec}" class="spark"/>`; break;
       // 完成 · 备选：实心弯月笑眼
       case 'happyCrescent': s = E.map(([a, b]) => `<path d="M${a - 3.2} ${b + 1.8} Q${a} ${b - 5.6} ${a + 3.2} ${b + 1.8} Q${a} ${b - 1.4} ${a - 3.2} ${b + 1.8}Z" fill="${ec}" stroke="${ec}" stroke-width=".6" stroke-linejoin="round"/>`).join(''); break;
       // 离线：眼睛收成低处的一条短胶囊，像合上的眼缝
@@ -426,6 +426,12 @@ ${plush ? '' : `<path d="${LEFT}" fill="url(#lf${u})" filter="url(#tb${u})"/>`}
 
   const blush = (x, op = .75) => !x.cute || x.P.bifang || x.blushPick !== undefined ? '' : `<g transform="${face(x)}" fill="${x.P.blush}" opacity="${op}"><ellipse cx="4" cy="20.2" rx="3" ry="1.7"/><ellipse cx="30" cy="20.2" rx="3" ry="1.7"/></g>`;
   const soft = x => blush(x, x.P.softOp || .45);
+  // 鸟嘴（白喙）：毕方默认带；其他颜色在“自己搭配”里选“鸟嘴”也可以加。浅色身体上白喙看不见，改用暖黄色
+  function beakOf(x) {
+    const beak = relLum(x.P.side) > .6 ? '#F2B04E' : '#F4F1EA', t = x.tiny;
+    if (x.flat) return `<path d="M58.6 ${t ? 72 : 70.2} L61.4 ${t ? 72 : 70.2} L60 ${t ? 75.6 : 73}Z" fill="${beak}" stroke="${beak}" stroke-width=".9" stroke-linejoin="round"/>`;
+    return `<g transform="${FACE}"${x.plush ? ` filter="url(#ev${x.u})"` : ''}><path d="M15.2 15.7 Q17.1 15.2 19 15.7 L17.3 19Z" fill="${beak}" stroke="${beak}" stroke-width=".8" stroke-linejoin="round"/></g>`;
+  }
   function mouth(x, type, fixed) {
     if (x.mouthPick && !fixed) { if (x.mouthPick !== 'state') return ''; } else if (!x.cute && !fixed) return '';
     const ec = x.P.eye, st = `fill="none" stroke="${ec}" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round"`;
@@ -651,7 +657,7 @@ ${plush ? '' : `<path d="${LEFT}" fill="url(#lf${u})" filter="url(#tb${u})"/>`}
     if (x.flat) { x.plush = false; x.metal = false; } // 平面只有一种：纯平、简化
     const color = statusColor(st.cat, opt.palette);
     const compact = !!opt.compact || !!opt.tiny, ac = !!opt.accent && !x.tiny;
-    const list = parts(id, x, color, compact || ac).filter(Boolean).join('') + (x.plush && x.furOver ? x.furOver : (x.tiny ? '' : bifangBlush(x))) + (x.mouthPick && x.mouthPick !== 'state' && x.mouthPick !== 'none' && !x.tiny ? mouth(x, x.mouthPick, true) : '');
+    const list = parts(id, x, color, compact || ac).filter(Boolean).join('') + (x.plush && x.furOver ? x.furOver : (x.tiny ? '' : bifangBlush(x))) + (x.mouthPick === 'beak' ? beakOf(x) : x.mouthPick && x.mouthPick !== 'state' && x.mouthPick !== 'none' && !x.tiny ? mouth(x, x.mouthPick, true) : '');
     const wrap = st.wrap === 'hop' && (compact || ac) ? 'f' : st.wrap;
     const vb = x.tiny ? '20 13 80 90' : ac ? '34 6 122 120' : compact ? '9 1 102 107' : '0 0 160 136';
     const shadow = x.flat ? '' : false ? `<ellipse cx="60" cy="104" rx="27" ry="2.6" fill="#000" opacity=".07"/>` : `<ellipse cx="60" cy="103.5" rx="30" ry="4.2" fill="url(#sh${x.u})"/>`;

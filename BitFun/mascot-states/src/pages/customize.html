@@ -53,10 +53,16 @@ button{font:inherit;font-size:var(--openbitfun-type-body-sm-font-size);color:var
 .swatch[data-tok]::after{content:"";position:absolute;right:calc(var(--openbitfun-space-1) * -0.5);bottom:calc(var(--openbitfun-space-1) * -0.5);width:var(--openbitfun-space-3);height:var(--openbitfun-space-3);border-radius:var(--openbitfun-radius-pill);background:var(--openbitfun-color-content-primary);border:var(--openbitfun-focus-width) solid var(--openbitfun-color-surface-raised)}
 .legend{margin:var(--openbitfun-space-2) 0 0;font-size:var(--openbitfun-type-meta-font-size);color:var(--openbitfun-color-content-muted);display:flex;align-items:center;gap:var(--openbitfun-space-1)}
 .legend i{width:var(--openbitfun-space-2);height:var(--openbitfun-space-2);border-radius:var(--openbitfun-radius-pill);background:var(--openbitfun-color-content-primary)}
-fieldset{border:0;margin:0;padding:0;display:flex;flex-wrap:wrap;gap:var(--openbitfun-space-3);align-items:center;font-size:var(--openbitfun-type-body-sm-font-size)}
-legend{float:left;padding:0;margin-right:var(--openbitfun-space-2);color:var(--openbitfun-color-content-muted)}
-i.bl{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:4px;vertical-align:-1px}
+fieldset{border:0;margin:0;padding:0;display:grid;grid-template-columns:44px 1fr;align-items:start;gap:var(--openbitfun-space-3);font-size:var(--openbitfun-type-body-sm-font-size)}
 fieldset+fieldset{margin-top:var(--openbitfun-space-3)}
+legend{float:left;width:44px;padding:7px 0 0;margin:0;color:var(--openbitfun-color-content-muted)}
+.opts-row{display:flex;flex-wrap:wrap;gap:6px}
+fieldset label{position:relative;display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 12px;border-radius:var(--openbitfun-radius-pill);border:1px solid var(--openbitfun-color-border-subtle, rgba(0,0,0,.1));background:var(--openbitfun-color-surface-raised, #fff);color:var(--openbitfun-color-content-secondary);cursor:pointer;transition:background .15s,border-color .15s,color .15s;user-select:none}
+fieldset label:hover{border-color:var(--openbitfun-color-border-default, rgba(0,0,0,.22));color:var(--openbitfun-color-content-primary)}
+fieldset label input{position:absolute;opacity:0;pointer-events:none}
+fieldset label:has(input:checked){background:var(--openbitfun-color-content-primary);border-color:var(--openbitfun-color-content-primary);color:var(--openbitfun-color-surface-raised, #fff)}
+fieldset label:has(input:focus-visible){outline:2px solid var(--openbitfun-color-content-primary);outline-offset:2px}
+i.bl{display:inline-block;width:10px;height:10px;border-radius:50%;box-shadow:0 0 0 1.5px rgba(255,255,255,.7)}
 .note{margin-top:var(--openbitfun-space-6);font-size:var(--openbitfun-type-body-sm-font-size);color:var(--openbitfun-color-content-secondary)}
 </style>
 </head>
@@ -81,12 +87,12 @@ fieldset+fieldset{margin-top:var(--openbitfun-space-3)}
       <div class="group">
         <h2>显示</h2>
         <form id="opts">
-          <fieldset><legend>质感</legend><label><input type="radio" name="finish" value="smooth" checked>光滑</label><label><input type="radio" name="finish" value="metal">金属</label><label><input type="radio" name="finish" value="plush">毛绒</label></fieldset>
-          <fieldset><legend>背景</legend><label><input type="radio" name="bg" value="tertiary" checked>surface.tertiary</label><label><input type="radio" name="bg" value="scene">surface.scene</label><label><input type="radio" name="bg" value="chrome">surface.chrome</label></fieldset>
-          <fieldset><legend>眼睛</legend><label><input type="radio" name="eye" value="auto" checked>自动（深色身体白眼、浅色身体黑眼）</label><label><input type="radio" name="eye" value="white">白</label><label><input type="radio" name="eye" value="black">黑</label></fieldset>
-          <fieldset><legend>嘴</legend><label><input type="radio" name="mouth" value="auto" checked>默认</label><label><input type="radio" name="mouth" value="none">无</label><label><input type="radio" name="mouth" value="state">随状态变化</label><label><input type="radio" name="mouth" value="smile">微笑</label><label><input type="radio" name="mouth" value="cat">猫猫嘴</label><label><input type="radio" name="mouth" value="o">小圆嘴</label></fieldset>
-          <fieldset><legend>腮红</legend><label><input type="radio" name="blush" value="auto" checked>默认</label><label><input type="radio" name="blush" value="none">无</label><label><input type="radio" name="blush" value="coral"><i class="bl" style="background:#ef8d70"></i>珊瑚</label><label><input type="radio" name="blush" value="pink"><i class="bl" style="background:#ff8fab"></i>粉</label><label><input type="radio" name="blush" value="peach"><i class="bl" style="background:#ffb07c"></i>蜜桃</label><label><input type="radio" name="blush" value="rose"><i class="bl" style="background:#e8738f"></i>玫瑰</label></fieldset>
-          <fieldset><legend>主题</legend><label><input type="radio" name="scheme" value="light" checked>浅色</label><label><input type="radio" name="scheme" value="dark">深色</label></fieldset>
+          <fieldset><legend>质感</legend><div class="opts-row"><label><input type="radio" name="finish" value="smooth" checked>光滑</label><label><input type="radio" name="finish" value="metal">金属</label><label><input type="radio" name="finish" value="plush">毛绒</label></div></fieldset>
+          <fieldset><legend>背景</legend><div class="opts-row"><label><input type="radio" name="bg" value="tertiary" checked title="surface.tertiary">浅灰</label><label><input type="radio" name="bg" value="scene">场景</label><label><input type="radio" name="bg" value="chrome">窗口</label></div></fieldset>
+          <fieldset><legend>眼睛</legend><div class="opts-row"><label><input type="radio" name="eye" value="auto" checked>自动</label><label><input type="radio" name="eye" value="white">白</label><label><input type="radio" name="eye" value="black">黑</label></div></fieldset>
+          <fieldset><legend>嘴</legend><div class="opts-row"><label><input type="radio" name="mouth" value="auto" checked>默认</label><label><input type="radio" name="mouth" value="none">无</label><label><input type="radio" name="mouth" value="beak">鸟嘴</label><label><input type="radio" name="mouth" value="state">随状态</label><label><input type="radio" name="mouth" value="smile">微笑</label><label><input type="radio" name="mouth" value="cat">猫猫嘴</label><label><input type="radio" name="mouth" value="o">小圆嘴</label></div></fieldset>
+          <fieldset><legend>腮红</legend><div class="opts-row"><label><input type="radio" name="blush" value="auto" checked>默认</label><label><input type="radio" name="blush" value="none">无</label><label><input type="radio" name="blush" value="coral"><i class="bl" style="background:#ef8d70"></i>珊瑚</label><label><input type="radio" name="blush" value="pink"><i class="bl" style="background:#ff8fab"></i>粉</label><label><input type="radio" name="blush" value="peach"><i class="bl" style="background:#ffb07c"></i>蜜桃</label><label><input type="radio" name="blush" value="rose"><i class="bl" style="background:#e8738f"></i>玫瑰</label></div></fieldset>
+          <fieldset><legend>主题</legend><div class="opts-row"><label><input type="radio" name="scheme" value="light" checked>浅色</label><label><input type="radio" name="scheme" value="dark">深色</label></div></fieldset>
         </form>
       </div>
     </section>
