@@ -343,7 +343,7 @@ button.sel{border-color:var(--ink)}
   const VIEW = {iso:'3D', flat:'平面'};
   const FACE = {refined:'克制', cute:'萌'};
   const FIN = {smooth:'光滑', metal:'金属', plush:'毛绒'};
-  const R = (id, c, o) => render(id, Object.assign({noStyle:true, compact:!!c, finish:S.finish, palette:S.palette, face:S.face, view:S.view, lod:.6}, o||{})); // 毛绒在卡片尺寸下用 .6 的密度，切换更快
+  const R = (id, c, o) => render(id, Object.assign({noStyle:true, compact:!!c, finish:S.finish, palette:S.palette, face:S.face, view:S.view, lod:.4}, o||{})); // 卡片尺寸下毛绒用较低密度（毛会自动变粗补覆盖），切换更快
   const byId = id => STATES.find(s => s.id === id);
   const colorOf = id => statusColor(byId(id).cat, S.palette);
   const pill = (id, text) => `<span class="pill"><span class="av">${R(id,1,{tiny:true})}</span><span>${text || byId(id).pill}</span><span class="lv" style="background:${colorOf(id)}"></span></span>`;

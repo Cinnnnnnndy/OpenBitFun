@@ -55,7 +55,7 @@ for (const view of ['iso', 'flat']) for (const finish of (view === 'flat' ? ['sm
   const sub = view === 'iso' ? `3d-${finish}-${palette}` : `flat-${palette}`;
   BF.STATES.forEach((s, i) => {
     // 毛绒文件较大：导出时降低绒毛密度，且不再单独导出 compact 版
-    write('svg/' + sub, fileName(s, i), BF.render(s.id, { finish, palette, view, lod: finish === 'plush' ? .5 : 1 }));
+    write('svg/' + sub, fileName(s, i), BF.render(s.id, { finish, palette, view, lod: finish === 'plush' ? .4 : 1 }));
     if (finish !== 'plush') write('svg-compact/' + sub, fileName(s, i), BF.render(s.id, { finish, palette, view, compact: true }));
   });
 }

@@ -229,7 +229,8 @@
     const N = 14, tones = Array.from({ length: N }, (_, k) => { const t = k / (N - 1); return t < .5 ? mixc(lo, P.side, t * 2) : mixc(P.side, hi, (t - .5) * 2); });
     // 毕方“赤文”：羽根是身体的青色，往羽尖渐变成朱砂珊瑚色（像仙鹤翅尖那样，颜色长在羽毛末端）
     const CORAL = ['#b45a42', '#c76a4f', '#d67c5d', '#e2906e', '#eca683', '#f4bc9e'];
-    const G = 4, SEG = 3, W = [.34, .24, .15];   // 4 组分别摆动；每根毛分根 / 中 / 尖三段，越往尖越细越亮
+    // 低密度（小卡片）时毛变粗一点，覆盖率不掉，不会显得秃
+    const WS = Math.sqrt(1 / Math.max(.35, Math.min(1, x.lod))), G = 4, SEG = 3, W = [.34, .24, .15].map(v => v * WS);   // 4 组分别摆动；每根毛分根 / 中 / 尖三段，越往尖越细越亮
     const buf = [{}, {}, {}]; let LY = 0, NOFLOW = false; const add = (g, s, col, d) => { const k = g + '|' + s + '|' + col; buf[LY][k] = (buf[LY][k] || '') + d; };  // 第 0 层是绒毛，第 1 层是毕方的羽
     const bin = v => tones[Math.max(0, Math.min(N - 1, Math.round(v * (N - 1))))];
     const cbin = v => CORAL[Math.max(0, Math.min(CORAL.length - 1, Math.round(v * (CORAL.length - 1))))];
@@ -265,9 +266,9 @@
     }
     const grp = () => Math.floor(r() * G);
     const faces = [
-      { q: [[60, 38], [87, 53.6], [60, 69.2], [33, 53.6]], n: 340, top: true, base: .8 },
-      { q: [[33, 53.6], [60, 69.2], [60, 93.2], [33, 77.6]], n: 300, d: 1.4, base: .7 },
-      { q: [[60, 69.2], [87, 53.6], [87, 77.6], [60, 93.2]], n: 300, d: 1.74, base: .64 }
+      { q: [[60, 38], [87, 53.6], [60, 69.2], [33, 53.6]], n: 420, top: true, base: .8 },
+      { q: [[33, 53.6], [60, 69.2], [60, 93.2], [33, 77.6]], n: 380, d: 1.4, base: .7 },
+      { q: [[60, 69.2], [87, 53.6], [87, 77.6], [60, 93.2]], n: 380, d: 1.74, base: .64 }
     ];
     if (!x.front) {
     // 脸：右侧面两只眼睛之间。脸上的毛短一些、顺着从脸中心向外梳，表情才看得清
@@ -283,9 +284,9 @@
     };
     // 底绒（第 4 组，不摆动）：先铺一层短而密的绒毛盖住整个身体（含圆角外沿），长毛之间不会露出光滑的底色
     {
-      const UL = Math.max(L0, .65), hexP = [[60, 38], [87, 53.6], [87, 77.6], [60, 93.2], [33, 77.6], [33, 53.6]];
+      const UL = Math.max(L0, .45), hexP = [[60, 38], [87, 53.6], [87, 77.6], [60, 93.2], [33, 77.6], [33, 53.6]];
       for (const [fi, f] of faces.entries()) {
-        const m = Math.round(f.n * 1.1 * UL), gs = Math.ceil(Math.sqrt(m));
+        const m = Math.round(f.n * 1.5 * UL), gs = Math.ceil(Math.sqrt(m));
         for (let i = 0; i < m; i++) {
           const su = ((i % gs) + r()) / gs, sv = Math.min(1, (Math.floor(i / gs) + r()) / Math.ceil(m / gs)), p = at(f.q, su, sv);
           const ang = f.top ? Math.atan2(p[1] - 53.6, p[0] - 60) + (r() - .5) * .5 : f.d + (r() - .5) * .4;
@@ -320,12 +321,12 @@
     for (let k = 0; k < 6; k++) {
       const a = poly[k], b = poly[(k + 1) % 6], seg = Math.hypot(b[0] - a[0], b[1] - a[1]), nx = (b[1] - a[1]) / seg, ny = -(b[0] - a[0]) / seg;
       const base = ny < -.3 ? .8 : nx < -.5 ? .7 : nx > .5 ? .64 : .58;
-      for (let i = 0, m = Math.round(seg * 3.4 * Math.max(L0, .6)); i < m; i++) {
+      for (let i = 0, m = Math.round(seg * 3.4 * Math.max(L0, .45)); i < m; i++) {
         const p = lerp(a, b, r()), off = r() * 8, sx = p[0] + nx * off, sy = p[1] + ny * off;
         clump(sx, sy, Math.atan2(ny, nx) * .5 + Math.PI / 4 + (r() - .5) * .5, 5 + r() * 3.5, .5 + r() * .3, light(sx, sy, base), grp());
       }
       // 外缘长毛：轮廓上蓬出去的那一圈最能看出“毛”，也是摆动最明显的部分
-      for (let i = 0, m = Math.round(seg * 3.8 * Math.max(L0, .6)); i < m; i++) {
+      for (let i = 0, m = Math.round(seg * 3.8 * Math.max(L0, .45)); i < m; i++) {
         const p = lerp(a, b, r()), off = 5 + r() * 4, sx = p[0] + nx * off, sy = p[1] + ny * off;
         clump(sx, sy, Math.atan2(ny, nx) + (r() - .5) * .7, 5.5 + r() * 5.5, .45 + r() * .3, light(sx, sy, base - .04), grp(), 3);
       }
@@ -351,20 +352,21 @@
       const fl = (px, py) => Math.max(0, Math.min(1, .62 + (.8 - (py - 46) * .006 - (px - 60) * .002 - .62) * .42 + (r() - .5) * .05));
       const EYF = [[49.9, 73], [70.1, 73]];
       const fk = (px, py) => { const d = Math.min(...EYF.map(e => Math.hypot((px - e[0]) * 1.4, py - e[1]))); return Math.max(0, Math.min(1, (d - 6) / 10)); };
-      const flowAng = (px, py) => { const a = Math.atan2(py - 34, (px - 60) * 1.3); return a; };
-      const UL = Math.max(L0, .65);
+      // 顺毛方向：整体向下垂，越靠两边越向外撇；头顶一圈略向上蓬
+      const flowAng = (px, py) => { const sx = (px - 60) / 34, top = Math.max(0, (56 - py) / 10); return Math.atan2(1 - top * 1.6, sx * (1.1 + top)); };
+      const UL = Math.max(L0, .45);
       const fill = (m, fn) => { const gs = Math.ceil(Math.sqrt(m)); for (let i = 0; i < m; i++) { const px = X0 + ((i % gs) + r()) / gs * (X1 - X0), py = Y0 + (Math.floor(i / gs) + r()) / Math.ceil(m / gs) * (Y1 - Y0); if (inside(px, py)) fn(px, py); } };
-      fill(Math.round(1100 * UL), (px, py) => clump(px, py, flowAng(px, py) + (r() - .5) * .4, 3.5 + r() * 2.8, .7, fl(px, py) - .04, 4, 3));
-      fill(Math.round(1150 * L0), (px, py) => {
+      fill(Math.round(2100 * UL), (px, py) => clump(px, py, flowAng(px, py) + (r() - .5) * .4, 4 + r() * 3, .8, fl(px, py) - .03, 4, 3));
+      fill(Math.round(2000 * L0), (px, py) => {
         const k = fk(px, py); let ang = flowAng(px, py) + (r() - .5) * .3;
         if (k < 1) { const e = EYF[px < 60 ? 0 : 1], oa = Math.atan2(py - e[1], px - e[0]); ang = ang * k + oa * (1 - k); }
-        clump(px, py, ang, (7.5 + r() * 4.5) * (.45 + .55 * k), .6 + r() * .5, fl(px, py) + (1 - k) * .05, grp(), 5);
+        clump(px, py, ang, (8.5 + r() * 5) * (.45 + .55 * k), .7 + r() * .5, fl(px, py) + (1 - k) * .05, grp(), 5);
       });
       // 外缘：沿轮廓一圈向外蓬的长毛
-      for (let i = 0, m = Math.round(520 * Math.max(L0, .6)); i < m; i++) {
-        const th = r() * Math.PI * 2, dx = Math.cos(th), dy = Math.sin(th); let t = 0; while (inside(CX + dx * (t + .5), CY + dy * (t + .5)) && t < 60) t += .5;
-        const off = -3 + r() * 9, px = CX + dx * (t + off), py = CY + dy * (t + off);
-        clump(px, py, Math.atan2(dy * 1.15 + .25, dx) + (r() - .5) * .6, 5 + r() * 5.5, .5 + r() * .3, fl(px, py) - .03, off < 2 ? 4 : grp(), off < 2 ? 3 : 4);
+      for (let i = 0, m = Math.round(1100 * Math.max(L0, .45)); i < m; i++) {
+        const th = (i + r()) / m * Math.PI * 2, dx = Math.cos(th), dy = Math.sin(th); let t = 0; while (inside(CX + dx * (t + .5), CY + dy * (t + .5)) && t < 60) t += .5;
+        const off = -4 + r() * 9, px = CX + dx * (t + off), py = CY + dy * (t + off);
+        clump(px, py, Math.atan2(dy * 1.15 + .25, dx) + (r() - .5) * .5, 6 + r() * 6, .5 + r() * .3, fl(px, py) - .03, off < 2 ? 4 : grp(), off < 2 ? 3 : 4);
       }
     }
     // 输出：每组一层 <g>，各自按不同节奏轻摆；同组内按 根 → 中 → 尖 的顺序叠
