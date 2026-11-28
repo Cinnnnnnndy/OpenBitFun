@@ -222,7 +222,7 @@
   function down(x) {
     const { P, u } = x, r = rng(7), black = relLum(P.side) < .05, L0 = x.lod;
     const mixc = (a, b, t) => '#' + [1, 3, 5].map(i => Math.round(parseInt(a.substr(i, 2), 16) * (1 - t) + parseInt(b.substr(i, 2), 16) * t).toString(16).padStart(2, '0')).join('');
-    const hi = black ? '#5a5a64' : tint(P.side, .55), lo = black ? '#000000' : shadeHex(P.side, .32);
+    const hi = black ? '#3c3c44' : tint(P.side, .42), lo = black ? '#000000' : shadeHex(P.side, .26);
     const N = 14, tones = Array.from({ length: N }, (_, k) => { const t = k / (N - 1); return t < .5 ? mixc(lo, P.side, t * 2) : mixc(P.side, hi, (t - .5) * 2); });
     // 毕方“赤文”：羽根是身体的青色，往羽尖渐变成朱砂珊瑚色（像仙鹤翅尖那样，颜色长在羽毛末端）
     const CORAL = ['#b45a42', '#c76a4f', '#d67c5d', '#e2906e', '#eca683', '#f4bc9e'];
@@ -232,7 +232,8 @@
     const cbin = v => CORAL[Math.max(0, Math.min(CORAL.length - 1, Math.round(v * (CORAL.length - 1))))];
     const lerp = (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
     const at = (q, s2, t) => lerp(lerp(q[0], q[1], s2), lerp(q[3], q[2], s2), t);
-    const light = (px, py, base) => Math.max(0, Math.min(1, base - (py - 53) * .011 - (px - 60) * .004 + (r() - .5) * .05));
+    // 受光压得很弱：各面明暗只差一点点，看到的是毛本身的颜色，而不是被光照成灰/黑两截
+    const light = (px, py, base) => Math.max(0, Math.min(1, .62 + (base - (py - 53) * .011 - (px - 60) * .004 - .62) * .42 + (r() - .5) * .05));
     // 顺毛的流向场：相邻的毛方向和弯度一致，像梳过一样，而不是乱糟糟的噪点
     const flow = (px, py) => .32 * Math.sin(px * .19 + py * .11) + .18 * Math.sin(py * .27 - px * .07);
     const bendF = (px, py) => 2.2 * Math.sin(px * .15 - py * .12 + 1.3);
@@ -261,9 +262,9 @@
     }
     const grp = () => Math.floor(r() * G);
     const faces = [
-      { q: [[60, 38], [87, 53.6], [60, 69.2], [33, 53.6]], n: 340, top: true, base: 1.0 },
-      { q: [[33, 53.6], [60, 69.2], [60, 93.2], [33, 77.6]], n: 300, d: 1.4, base: .74 },
-      { q: [[60, 69.2], [87, 53.6], [87, 77.6], [60, 93.2]], n: 300, d: 1.74, base: .58 }
+      { q: [[60, 38], [87, 53.6], [60, 69.2], [33, 53.6]], n: 340, top: true, base: .8 },
+      { q: [[33, 53.6], [60, 69.2], [60, 93.2], [33, 77.6]], n: 300, d: 1.4, base: .7 },
+      { q: [[60, 69.2], [87, 53.6], [87, 77.6], [60, 93.2]], n: 300, d: 1.74, base: .64 }
     ];
     // 脸：右侧面两只眼睛之间。脸上的毛短一些、顺着从脸中心向外梳，表情才看得清
     const EYE = [[69.5, 76.2], [84.5, 67.6]], FC = [77, 72];
@@ -289,7 +290,7 @@
       }
       for (let k = 0; k < 6; k++) {
         const a = hexP[k], b = hexP[(k + 1) % 6], seg = Math.hypot(b[0] - a[0], b[1] - a[1]), nx = (b[1] - a[1]) / seg, ny = -(b[0] - a[0]) / seg;
-        const base = ny < -.3 ? 1.0 : nx < -.5 ? .74 : nx > .5 ? .58 : .46;
+        const base = ny < -.3 ? .8 : nx < -.5 ? .7 : nx > .5 ? .64 : .58;
         for (let i = 0, m = Math.round(seg * 4 * UL); i < m; i++) {
           const p = lerp(a, b, r()), off = r() * 9, sx = p[0] + nx * off, sy = p[1] + ny * off;
           clump(sx, sy, Math.atan2(ny, nx) + (r() - .5) * .8, 3 + r() * 2.5, .7, light(sx, sy, base) - .08, grp(), 3);
@@ -314,7 +315,7 @@
     const poly = [[60, 38], [87, 53.6], [87, 77.6], [60, 93.2], [33, 77.6], [33, 53.6]], cx = 60, cy = 65.6;
     for (let k = 0; k < 6; k++) {
       const a = poly[k], b = poly[(k + 1) % 6], seg = Math.hypot(b[0] - a[0], b[1] - a[1]), nx = (b[1] - a[1]) / seg, ny = -(b[0] - a[0]) / seg;
-      const base = ny < -.3 ? 1.0 : nx < -.5 ? .74 : nx > .5 ? .58 : .46;
+      const base = ny < -.3 ? .8 : nx < -.5 ? .7 : nx > .5 ? .64 : .58;
       for (let i = 0, m = Math.round(seg * 3.4 * Math.max(L0, .6)); i < m; i++) {
         const p = lerp(a, b, r()), off = r() * 8, sx = p[0] + nx * off, sy = p[1] + ny * off;
         clump(sx, sy, Math.atan2(ny, nx) * .5 + Math.PI / 4 + (r() - .5) * .5, 5 + r() * 3.5, .5 + r() * .3, light(sx, sy, base), grp());
@@ -387,10 +388,10 @@
     }
     const e = edgeOf(P.side);
     let g = `${e ? (plush ? `<path d="${SIL}" transform="translate(0 2.2)" fill="#0b1220" stroke="#0b1220" stroke-width="${sw}" stroke-linejoin="round" opacity=".13" filter="url(#hl${u})"/>` : `<path d="${SIL}" fill="${e}" stroke="${e}" stroke-width="${sw + 2.6}" stroke-linejoin="round"/>`) : ''}<path d="${SIL}" fill="${P.side}" stroke="${P.side}" stroke-width="${sw}" stroke-linejoin="round"/>
-<path d="${LEFT}" fill="${P.sideL}" filter="url(#tb${u})"/>
+<path d="${LEFT}" fill="${plush ? P.side : P.sideL}" filter="url(#tb${u})"/>
 <path d="${TOP}" fill="url(#tg${u})"${P.crisp ? '' : ` filter="url(#tb${u})"`}/>
 <path d="M60 69.2 L87 53.6 L87 77.6 L60 93.2Z" fill="url(#rf${u})" filter="url(#tb${u})"/>${e ? `<path d="M60 69.2 L87 53.6 L87 77.6 L60 93.2Z" fill="#000" opacity=".035" filter="url(#tb${u})"/><path d="${LEFT}" fill="#000" opacity=".07" filter="url(#tb${u})"/>` : ''}
-<path d="${LEFT}" fill="url(#lf${u})" filter="url(#tb${u})"/>
+${plush ? '' : `<path d="${LEFT}" fill="url(#lf${u})" filter="url(#tb${u})"/>`}
 <path d="M33.5 56 L60 71.4 L86.5 56" fill="none" stroke="#fff" stroke-opacity="${P.rim}" stroke-width="1.1" stroke-linecap="round" filter="url(#hb${u})"/>`;
     if (x.metal) g += `<mask id="mm${u}"><path d="${SIL}" fill="#fff" stroke="#fff" stroke-width="${sw}" stroke-linejoin="round"/></mask>
 <g mask="url(#mm${u})"><path d="${TOP}" fill="url(#mt${u})"/>
@@ -400,7 +401,7 @@
 <path d="M60 71.4 L60 92" fill="none" stroke="#fff" stroke-opacity=".5" stroke-width="1" filter="url(#hb${u})"/>`;
     if (plush) g += `<path d="${SIL}" fill="#000" stroke="#000" stroke-width="${sw}" stroke-linejoin="round" filter="url(#fur${u})" opacity="${P.furOp}"/>
 <mask id="m${u}"><path d="${SIL}" fill="#fff" stroke="#fff" stroke-width="${sw}" stroke-linejoin="round"/></mask>
-<rect x="0" y="20" width="120" height="100" fill="url(#ao${u})" mask="url(#m${u})"/>
+<rect x="0" y="20" width="120" height="100" fill="url(#ao${u})" mask="url(#m${u})" opacity=".35"/>
 <clipPath id="cl${u}"><path d="${SIL}" stroke="#000" stroke-width="${sw - 2}" stroke-linejoin="round"/></clipPath>${down(x)}<g transform="${FACE}" fill="#000" opacity=".22" filter="url(#hb${u})"><ellipse cx="9.5" cy="12.6" rx="4.2" ry="6.6"/><ellipse cx="24.5" cy="12.6" rx="4.2" ry="6.6"/></g>`;  // 眼窝：眼睛周围压暗一圈，像嵌进毛里
     return g;
   }
