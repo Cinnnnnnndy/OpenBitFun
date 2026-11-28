@@ -6,6 +6,7 @@
 (function (root) {
   const C = { line: '#E3E5EA', sub: '#C9CED6', ink: '#2A2D35' };
   // 道具里的内容线条用当前状态色的浅调，随配色和状态变化
+  const mixHex = (a, b, t) => '#' + [1, 3, 5].map(i => Math.round(parseInt(a.substr(i, 2), 16) * (1 - t) + parseInt(b.substr(i, 2), 16) * t).toString(16).padStart(2, '0')).join('');
   const tint = (h, k = .62) => /^#[0-9a-f]{6}$/i.test(h) ? '#' + [1, 3, 5].map(i => Math.round(parseInt(h.substr(i, 2), 16) * (1 - k) + 255 * k).toString(16).padStart(2, '0')).join('') : h;
 
   const BASE = {
@@ -203,7 +204,7 @@
 <linearGradient id="bs${u}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff" stop-opacity=".22"/><stop offset=".45" stop-color="#fff" stop-opacity="0"/><stop offset="1" stop-color="#000" stop-opacity=".28"/></linearGradient>
 <filter color-interpolation-filters="sRGB" id="tb${u}" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="${x.plush ? 3.6 : 2.6}"/></filter>
 <filter color-interpolation-filters="sRGB" id="pf${u}" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation=".2"/></filter>
-<filter color-interpolation-filters="sRGB" id="ev${u}" x="-40%" y="-40%" width="180%" height="190%"><feGaussianBlur in="SourceAlpha" stdDeviation="1.1" result="b"/><feDiffuseLighting in="b" surfaceScale="1.6" diffuseConstant="1" lighting-color="#fff" result="d"><feDistantLight azimuth="235" elevation="62"/></feDiffuseLighting><feSpecularLighting in="b" surfaceScale="1.6" specularConstant=".38" specularExponent="60" lighting-color="#fff" result="sp"><feDistantLight azimuth="235" elevation="58"/></feSpecularLighting><feComposite in="SourceGraphic" in2="d" operator="arithmetic" k1=".5" k2=".5" k3="0" k4="0" result="sh"/><feComposite in="sp" in2="SourceAlpha" operator="in" result="spc"/><feComposite in="sh" in2="spc" operator="arithmetic" k2="1" k3=".55" result="lit"/><feComposite in="lit" in2="SourceAlpha" operator="in" result="bead"/><feDropShadow in="bead" dx=".2" dy=".7" stdDeviation=".5" flood-color="#000" flood-opacity=".22"/></filter>
+<filter color-interpolation-filters="sRGB" id="ev${u}" x="-40%" y="-40%" width="180%" height="190%"><feGaussianBlur in="SourceAlpha" stdDeviation=".7"/><feOffset dx="-.3" dy="-.9" result="o"/><feComposite in="SourceAlpha" in2="o" operator="out" result="ring"/><feFlood flood-color="#000" flood-opacity=".16"/><feComposite in2="ring" operator="in" result="ish"/><feGaussianBlur in="SourceAlpha" stdDeviation=".35"/><feOffset dy=".45" result="d"/><feFlood flood-color="#000" flood-opacity=".22"/><feComposite in2="d" operator="in" result="ds"/><feMerge><feMergeNode in="ds"/><feMergeNode in="SourceGraphic"/><feMergeNode in="ish"/></feMerge></filter>
 <filter color-interpolation-filters="sRGB" id="hl${u}" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="3"/></filter>
 <filter color-interpolation-filters="sRGB" id="fz${u}" x="-25%" y="-25%" width="150%" height="150%"><feTurbulence type="fractalNoise" baseFrequency=".62" numOctaves="2" seed="5" result="n"/><feDisplacementMap in="SourceGraphic" in2="n" scale=".7" xChannelSelector="R" yChannelSelector="G"/></filter>
 <filter color-interpolation-filters="sRGB" id="fur${u}" x="-30%" y="-30%" width="160%" height="160%"><feTurbulence type="fractalNoise" baseFrequency="1.5 2.4" numOctaves="3" seed="9" result="n"/><feColorMatrix in="n" type="matrix" values="0 0 0 0 ${fr} 0 0 0 0 ${fg} 0 0 0 0 ${fb} 0 0 0 2.2 -.95" result="a"/><feGaussianBlur in="a" stdDeviation=".55" result="ab"/><feComposite in="ab" in2="SourceAlpha" operator="in"/></filter>
@@ -409,8 +410,8 @@ ${plush ? '' : `<path d="${LEFT}" fill="url(#lf${u})" filter="url(#tb${u})"/>`}
       case 'wide': s = E.map(([a, b]) => `<g class="blink"><ellipse cx="${a}" cy="${b}" rx="3.5" ry="6.2" fill="${ec}"/>${shine(a, b)}</g>`).join(''); break;
       case 'focus': s = E.map(([a, b]) => `<path d="M${a - 3} ${b - 1.6} H${a + 3} A3 5.2 0 0 1 ${a - 3} ${b - 1.6}Z" fill="${ec}"/>`).join(''); break;
       case 'squint': s = E.map(([a, b]) => `<path d="M${a - 3.1} ${b - .4} H${a + 3.1} A3.1 2.9 0 0 1 ${a - 3.1} ${b - .4}Z" fill="${ec}"/>`).join(''); break;
-      // 完成：保留竖椭圆眼，加一颗身体色的反光点和小星芒——“眼睛亮了”
-      case 'happy': s = E.map(([a, b]) => `<ellipse cx="${a}" cy="${b}" rx="3.3" ry="5.8" fill="${ec}"/><circle cx="${a - 1}" cy="${b - 2.2}" r="1.15" fill="${P.side}"/><circle cx="${a + .9}" cy="${b + 1.3}" r=".55" fill="${P.side}"/>`).join(''); break;
+      // 完成：竖椭圆眼的下缘被笑意往上推成弧形（笑眯眯），实心、不挖洞
+      case 'happy': s = E.map(([a, b]) => `<path d="M${a - 3.5} ${b + 3.2} C${a - 3.5} ${b - 6.6} ${a + 3.5} ${b - 6.6} ${a + 3.5} ${b + 3.2} Q${a} ${b + 2.2} ${a - 3.5} ${b + 3.2}Z" fill="${ec}" stroke="${ec}" stroke-width=".6" stroke-linejoin="round"/>`).join(''); break;
       // 完成 · 备选：实心弯月笑眼
       case 'happyCrescent': s = E.map(([a, b]) => `<path d="M${a - 3.2} ${b + 1.8} Q${a} ${b - 5.6} ${a + 3.2} ${b + 1.8} Q${a} ${b - 1.4} ${a - 3.2} ${b + 1.8}Z" fill="${ec}" stroke="${ec}" stroke-width=".6" stroke-linejoin="round"/>`).join(''); break;
       // 离线：眼睛收成低处的一条短胶囊，像合上的眼缝
