@@ -8,9 +8,9 @@ OpenBitFun 吉祥物“毕方”的设计稿与生成代码。形象以等距视
 
 | 章节 | 内容 | 独立页面 |
 |---|---|---|
-| 01 自己搭配 | 用户选择身体和天线球颜色；实时预览 3D、平面、6 个状态、小尺寸图标；4 项可读性检查；导出 SVG 和配色 JSON | `dist/pages/customize.html` |
-| 02 配色方案 | 统一色板：18 种身体色（含 8 种设计系统身份色和毕方特别版）+ 7 种天线球色，每种身体色的默认搭配 | `dist/pages/palettes.html` |
-| 03 形象与状态 | 形象构成、《山海经》典故、毛绒动态版（可撸毛、抖一抖、调风力）、设计理念、14 个状态、色卡与搭配校验、小尺寸规则、产品内示意、使用规则 | `dist/pages/states.html` |
+| 01 自己搭配 | 选择身体和天线球颜色、质感、眼睛、嘴型（无 / 随状态 / 微笑 / 猫猫嘴 / 小圆嘴）、腮红（无 / 珊瑚 / 粉 / 蜜桃 / 玫瑰）；实时预览 3D、平面、6 个状态、小尺寸图标；导出 SVG 和配色 JSON | `dist/pages/customize.html` |
+| 02 形象与状态 | 《山海经》典故、毛绒动态版（可撸毛、抖一抖、调风力）、形象构成、设计理念、14 个状态、小尺寸规则、产品内示意、使用规则 | `dist/pages/states.html` |
+| 03 配色方案 | 统一色板：18 种身体色（含 8 种设计系统身份色和毕方特别版）+ 7 种天线球色，每种身体色的默认搭配 | `dist/pages/palettes.html` |
 
 ## 目录结构
 
@@ -28,8 +28,8 @@ mascot-states/
 │   │   └── openbitfun-tokens.json  从 OpenBitFun 设计系统摘录的 token
 │   └── pages/
 │       ├── customize.html     01 自己搭配
-│       ├── palettes.html      02 配色方案
-│       └── states.html        03 形象与状态
+│       ├── states.html        02 形象与状态
+│       └── palettes.html      03 配色方案
 ├── dist/                      构建产物（由 build.js 生成；仓库 .gitignore 忽略 dist，不提交）
 │   ├── pages/                 三个章节的独立页面
 │   └── assets/

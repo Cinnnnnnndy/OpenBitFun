@@ -350,17 +350,21 @@
       if (t) out += g === G ? `<g class="fwu">${t}</g>` : `<g class="fw fw${g}">${t}</g>`;
     }
     let ov = ''; for (let sg = 0; sg < SEG; sg++) for (const k in buf[2]) { const [, ss, col] = k.split('|'); if (+ss === sg) ov += `<path d="${buf[2][k]}" stroke="${col}" stroke-width="${W[sg] * .85}"/>`; }
-    x.furOver = `${P.bifang ? bifangBlush(x) : ''}<g class="fur-over" fill="none" stroke-linecap="round">${ov}</g>`;
+    x.furOver = `${bifangBlush(x)}<g class="fur-over" fill="none" stroke-linecap="round">${ov}</g>`;
     return `<g class="fur" fill="none" stroke-linecap="round">${out}</g>`;
   }
 
   // 毕方特别版：《山海经》“其状如鹤，一足，赤文青质而白喙”——青色身体、眼下一只小白喙，方块上的天线就是那“一足”。
   // “赤文”收成一对珊瑚色腮红：形状清楚、和表情结合；毛绒版另外让两颊的毛尖也泛红（见 down）
-  const bifangBlush = x => { const u = x.u, flat = x.flat, C = flat ? [[4, 20.2], [30, 20.2]] : [[4.5, 18.8], [27.5, 18.8]], rx = flat ? 3.4 : x.plush ? 5.6 : 3.8, ry = flat ? 2 : x.plush ? 3.4 : 2.3;
-    return `<defs><radialGradient id="bfb${u}"><stop offset="0" stop-color="#ef8d70" stop-opacity="${x.plush ? .92 : .85}"/><stop offset=".6" stop-color="#ef9878" stop-opacity="${x.plush ? .62 : .55}"/><stop offset="1" stop-color="#f2a588" stop-opacity="0"/></radialGradient></defs>
+  // 腮红（径向渐变的柔和椭圆）：毕方默认珊瑚色；自己搭配里可以选颜色或关掉
+  const BLUSH = { coral: '#ef8d70', pink: '#ff8fab', peach: '#ffb07c', rose: '#e8738f' };
+  const blushColor = x => x.blushPick === '' ? null : x.blushPick ? BLUSH[x.blushPick] : x.P.bifang ? BLUSH.coral : null;
+  const bifangBlush = x => { const col = blushColor(x); if (!col) return ''; const u = x.u, flat = x.flat, C = flat ? [[4, 20.2], [30, 20.2]] : [[4.5, 18.8], [27.5, 18.8]], rx = flat ? 3.4 : x.plush ? 5.6 : 3.8, ry = flat ? 2 : x.plush ? 3.4 : 2.3;
+    return `<defs><radialGradient id="bfb${u}"><stop offset="0" stop-color="${col}" stop-opacity="${x.plush ? .92 : .85}"/><stop offset=".6" stop-color="${col}" stop-opacity="${x.plush ? .6 : .52}"/><stop offset="1" stop-color="${col}" stop-opacity="0"/></radialGradient></defs>
       <g transform="${face(x)}" fill="url(#bfb${u})">${C.map(([cx, cy]) => `<ellipse cx="${cx}" cy="${cy}" rx="${rx}" ry="${ry}"/>`).join('')}</g>`; };
   function bifangMarks(x) {
-    const beak = '#F4F1EA', flat = x.flat, blush = x.plush ? '' : bifangBlush(x);
+    const beak = '#F4F1EA', flat = x.flat, blush = '';
+    if (x.mouthPick && x.mouthPick !== 'none') return '';  // 选了嘴型时，嘴替代白喙，两者不叠在一起
     if (flat) { const t = x.tiny; return `${blush}<path d="M58.6 ${t ? 72 : 70.2} L61.4 ${t ? 72 : 70.2} L60 ${t ? 75.6 : 73}Z" fill="${beak}" stroke="${beak}" stroke-width=".9" stroke-linejoin="round"/>`; }
     return `${blush}<g transform="${FACE}"${x.plush ? ` filter="url(#ev${x.u})"` : ''}><path d="M15.2 15.7 Q17.1 15.2 19 15.7 L17.3 19Z" fill="${beak}" stroke="${beak}" stroke-width=".8" stroke-linejoin="round"/></g>`;
   }
@@ -419,10 +423,10 @@ ${plush ? '' : `<path d="${LEFT}" fill="url(#lf${u})" filter="url(#tb${u})"/>`}
     return `<g transform="${face(x)}"${x.plush ? ` filter="url(#ev${x.u})"` : ''}><g transform="translate(${dx} ${dy})"><g${cls}>${s}</g></g></g>`;  // 毛绒：眼睛做成有体积的小珠子
   }
 
-  const blush = (x, op = .75) => !x.cute || x.P.bifang ? '' : `<g transform="${face(x)}" fill="${x.P.blush}" opacity="${op}"><ellipse cx="4" cy="20.2" rx="3" ry="1.7"/><ellipse cx="30" cy="20.2" rx="3" ry="1.7"/></g>`;
+  const blush = (x, op = .75) => !x.cute || x.P.bifang || x.blushPick !== undefined ? '' : `<g transform="${face(x)}" fill="${x.P.blush}" opacity="${op}"><ellipse cx="4" cy="20.2" rx="3" ry="1.7"/><ellipse cx="30" cy="20.2" rx="3" ry="1.7"/></g>`;
   const soft = x => blush(x, x.P.softOp || .45);
-  function mouth(x, type) {
-    if (!x.cute) return '';
+  function mouth(x, type, fixed) {
+    if (x.mouthPick && !fixed) { if (x.mouthPick !== 'state') return ''; } else if (!x.cute && !fixed) return '';
     const ec = x.P.eye, st = `fill="none" stroke="${ec}" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round"`;
     const m = {
       smile: `<path d="M15.4 18.6 Q17 20.6 18.6 18.6" ${st}/>`,
@@ -641,11 +645,12 @@ ${plush ? '' : `<path d="${LEFT}" fill="url(#lf${u})" filter="url(#tb${u})"/>`}
   function render(id, opt = {}) {
     const st = STATES.find(s => s.id === id);
     const P = typeof opt.palette === 'object' ? opt.palette : PALETTES[opt.palette || 'obsidian'];
-    const x = { P, u: 'b' + (++UID), plush: opt.finish === 'plush', metal: opt.finish === 'metal', cute: opt.face === 'cute', lod: opt.lod || 1, flat: opt.view === 'flat' || !!opt.tiny, tiny: !!opt.tiny };
+    const x = { P, u: 'b' + (++UID), plush: opt.finish === 'plush', metal: opt.finish === 'metal', cute: opt.face === 'cute', lod: opt.lod || 1, flat: opt.view === 'flat' || !!opt.tiny, tiny: !!opt.tiny, mouthPick: opt.mouth, blushPick: opt.blush === 'none' ? null : opt.blush };
+    if (opt.blush === 'none') x.blushPick = '';
     if (x.flat) { x.plush = false; x.metal = false; } // 平面只有一种：纯平、简化
     const color = statusColor(st.cat, opt.palette);
     const compact = !!opt.compact || !!opt.tiny, ac = !!opt.accent && !x.tiny;
-    const list = parts(id, x, color, compact || ac).filter(Boolean).join('') + (x.plush && x.furOver ? x.furOver : '');
+    const list = parts(id, x, color, compact || ac).filter(Boolean).join('') + (x.plush && x.furOver ? x.furOver : (x.tiny ? '' : bifangBlush(x))) + (x.mouthPick && x.mouthPick !== 'state' && x.mouthPick !== 'none' && !x.tiny ? mouth(x, x.mouthPick, true) : '');
     const wrap = st.wrap === 'hop' && (compact || ac) ? 'f' : st.wrap;
     const vb = x.tiny ? '20 13 80 90' : ac ? '34 6 122 120' : compact ? '9 1 102 107' : '0 0 160 136';
     const shadow = x.flat ? '' : false ? `<ellipse cx="60" cy="104" rx="27" ry="2.6" fill="#000" opacity=".07"/>` : `<ellipse cx="60" cy="103.5" rx="30" ry="4.2" fill="url(#sh${x.u})"/>`;

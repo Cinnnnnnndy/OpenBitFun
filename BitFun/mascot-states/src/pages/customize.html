@@ -26,7 +26,7 @@ h2{font-size:var(--openbitfun-type-heading-section-font-size);font-weight:var(--
 .states div{text-align:center;font-size:var(--openbitfun-type-micro-font-size);color:var(--openbitfun-color-content-muted)}
 .tiny{display:flex;align-items:center;gap:var(--openbitfun-space-4);margin-top:var(--openbitfun-space-3);font-size:var(--openbitfun-type-meta-font-size);color:var(--openbitfun-color-content-muted)}
 .tiny span{display:inline-flex;align-items:center;gap:var(--openbitfun-space-1)}
-.checks{list-style:none;margin:var(--openbitfun-space-4) 0 0;padding:0;font-size:var(--openbitfun-type-body-sm-font-size);line-height:var(--openbitfun-type-body-sm-line-height)}
+.checks{display:none;list-style:none;margin:var(--openbitfun-space-4) 0 0;padding:0;font-size:var(--openbitfun-type-body-sm-font-size);line-height:var(--openbitfun-type-body-sm-line-height)}
 .checks li{padding:var(--openbitfun-space-1) 0;color:var(--openbitfun-color-content-secondary)}
 .checks li b{font-weight:var(--openbitfun-type-heading-section-font-weight)}
 .checks li[data-level="ok"] b{color:var(--openbitfun-color-status-success-emphasis)}
@@ -55,6 +55,7 @@ button{font:inherit;font-size:var(--openbitfun-type-body-sm-font-size);color:var
 .legend i{width:var(--openbitfun-space-2);height:var(--openbitfun-space-2);border-radius:var(--openbitfun-radius-pill);background:var(--openbitfun-color-content-primary)}
 fieldset{border:0;margin:0;padding:0;display:flex;flex-wrap:wrap;gap:var(--openbitfun-space-3);align-items:center;font-size:var(--openbitfun-type-body-sm-font-size)}
 legend{float:left;padding:0;margin-right:var(--openbitfun-space-2);color:var(--openbitfun-color-content-muted)}
+i.bl{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:4px;vertical-align:-1px}
 fieldset+fieldset{margin-top:var(--openbitfun-space-3)}
 .note{margin-top:var(--openbitfun-space-6);font-size:var(--openbitfun-type-body-sm-font-size);color:var(--openbitfun-color-content-secondary)}
 </style>
@@ -83,6 +84,8 @@ fieldset+fieldset{margin-top:var(--openbitfun-space-3)}
           <fieldset><legend>质感</legend><label><input type="radio" name="finish" value="smooth" checked>光滑</label><label><input type="radio" name="finish" value="metal">金属</label><label><input type="radio" name="finish" value="plush">毛绒</label></fieldset>
           <fieldset><legend>背景</legend><label><input type="radio" name="bg" value="tertiary" checked>surface.tertiary</label><label><input type="radio" name="bg" value="scene">surface.scene</label><label><input type="radio" name="bg" value="chrome">surface.chrome</label></fieldset>
           <fieldset><legend>眼睛</legend><label><input type="radio" name="eye" value="auto" checked>自动（深色身体白眼、浅色身体黑眼）</label><label><input type="radio" name="eye" value="white">白</label><label><input type="radio" name="eye" value="black">黑</label></fieldset>
+          <fieldset><legend>嘴</legend><label><input type="radio" name="mouth" value="auto" checked>默认</label><label><input type="radio" name="mouth" value="none">无</label><label><input type="radio" name="mouth" value="state">随状态变化</label><label><input type="radio" name="mouth" value="smile">微笑</label><label><input type="radio" name="mouth" value="cat">猫猫嘴</label><label><input type="radio" name="mouth" value="o">小圆嘴</label></fieldset>
+          <fieldset><legend>腮红</legend><label><input type="radio" name="blush" value="auto" checked>默认</label><label><input type="radio" name="blush" value="none">无</label><label><input type="radio" name="blush" value="coral"><i class="bl" style="background:#ef8d70"></i>珊瑚</label><label><input type="radio" name="blush" value="pink"><i class="bl" style="background:#ff8fab"></i>粉</label><label><input type="radio" name="blush" value="peach"><i class="bl" style="background:#ffb07c"></i>蜜桃</label><label><input type="radio" name="blush" value="rose"><i class="bl" style="background:#e8738f"></i>玫瑰</label></fieldset>
           <fieldset><legend>主题</legend><label><input type="radio" name="scheme" value="light" checked>浅色</label><label><input type="radio" name="scheme" value="dark">深色</label></fieldset>
         </form>
       </div>
@@ -129,7 +132,7 @@ fieldset+fieldset{margin-top:var(--openbitfun-space-3)}
   const EYE_SPLIT = .70;
 
   /* ---- 可选颜色：主推方案 R 的身体色 + 常用球色 ---- */
-  const S = { eye:'auto', finish:'smooth', bg:'tertiary', scheme:'light', body:{tok:'color.identity.project.cyan'}, ball:{tok:'color.control.highlight.background'} };
+  const S = { mouth:'auto', blush:'auto', eye:'auto', finish:'smooth', bg:'tertiary', scheme:'light', body:{tok:'color.identity.project.cyan'}, ball:{tok:'color.control.highlight.background'} };
   const t = n => TK[n][S.scheme];
   // 统一色板：身体色和天线球色都来自生成器里的 BF.BOARD，全文件共用这一份
   const BODIES = BF.BOARD.bodies.map(b => Object.assign({}, b));
@@ -170,7 +173,8 @@ fieldset+fieldset{margin-top:var(--openbitfun-space-3)}
     return `<button type="button" class="swatch${o.same ? ' same' : ''}" style="--c:${c}" data-kind="${kind}" data-i="${o._i}" aria-pressed="${on}"${o.tok ? ' data-tok' : ''} title="${o.name}${o.tok ? ' · ' + o.tok : ''} · ${c}" aria-label="${o.name}"></button>`; };
   const ALL_BODIES = BODIES; BODIES.forEach((o,i) => o._i = i); BALLS.forEach((o,i) => o._i = i);
   S.body = ALL_BODIES.find(o => o.key === 'cyan'); S.ball = BALLS.find(o => o.name === '珍珠白'); // 默认搭配要能通过全部检查
-  const opt = (P, o) => Object.assign({ palette:P, noStyle:true, finish:S.finish }, o);
+  const pick = () => Object.assign({}, S.mouth !== 'auto' && { mouth: S.mouth }, S.blush !== 'auto' && { blush: S.blush });
+  const opt = (P, o) => Object.assign({ palette:P, noStyle:true, finish:S.finish }, pick(), o);
 
   function draw(){
     const root = document.getElementById('root');
@@ -212,8 +216,8 @@ fieldset+fieldset{margin-top:var(--openbitfun-space-3)}
 
   const save = (name, text, type) => { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([text], {type})); a.download = name; a.click(); URL.revokeObjectURL(a.href); };
   const fileName = v => `bitfun-${v}-${window.__P.side.slice(1)}-${window.__P.accent.slice(1)}.svg`;
-  document.getElementById('dl3d').onclick = () => save(fileName('3d'), render('idle', { palette: window.__P, finish: S.finish }), 'image/svg+xml');
-  document.getElementById('dlFlat').onclick = () => save(fileName('flat'), render('idle', { palette: window.__P, view:'flat' }), 'image/svg+xml');
+  document.getElementById('dl3d').onclick = () => save(fileName('3d'), render('idle', Object.assign({ palette: window.__P, finish: S.finish }, pick())), 'image/svg+xml');
+  document.getElementById('dlFlat').onclick = () => save(fileName('flat'), render('idle', Object.assign({ palette: window.__P, view:'flat' }, pick())), 'image/svg+xml');
   document.getElementById('copy').onclick = async e => {
     const P = window.__P, json = JSON.stringify({ body: S.body.tok || P.side, ball: S.ball.tok || P.accent, eye: P.eye, finish: S.finish, scheme: S.scheme }, null, 2);
     try { await navigator.clipboard.writeText(json); e.target.textContent = '已复制'; } catch { save('bitfun-colors.json', json, 'application/json'); e.target.textContent = '已下载 JSON'; }
