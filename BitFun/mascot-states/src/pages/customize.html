@@ -190,7 +190,7 @@ i.bl{display:inline-block;width:10px;height:10px;border-radius:50%;box-shadow:0 
     document.getElementById('balls').innerHTML = BALLS.map(o => sw(o,'ball')).join('');
     const P = palette();
     syncCustom('body', P.side, S.body._i === -1); syncCustom('ball', P.accent, S.ball._i === -1);
-    document.getElementById('big').innerHTML = render('idle', opt(P,{compact:1})) + render('idle', opt(P,{compact:1, view:'flat'}));
+    document.getElementById('big').innerHTML = render('idle', opt(P,{compact:1})) + render('idle', opt(P,{compact:1, view: S.finish === 'plush' ? 'front' : 'flat'}));
     document.getElementById('states').innerHTML = [['thinking','思考'],['coding','执行'],['awaiting','需要你'],['done','完成'],['error','异常'],['sleeping','离线']]
       .map(([id,n]) => `<div>${render(id, opt(P,{compact:1}))}${n}</div>`).join('');
     document.getElementById('tiny').innerHTML = '小尺寸 ' + [32,22,18].map(px => `<span><span style="display:block;width:${px}px;height:${px}px">${render('idle', opt(P,{tiny:true}))}</span>${px}px</span>`).join('');
@@ -223,7 +223,7 @@ i.bl{display:inline-block;width:10px;height:10px;border-radius:50%;box-shadow:0 
   const save = (name, text, type) => { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([text], {type})); a.download = name; a.click(); URL.revokeObjectURL(a.href); };
   const fileName = v => `bitfun-${v}-${window.__P.side.slice(1)}-${window.__P.accent.slice(1)}.svg`;
   document.getElementById('dl3d').onclick = () => save(fileName('3d'), render('idle', Object.assign({ palette: window.__P, finish: S.finish }, pick())), 'image/svg+xml');
-  document.getElementById('dlFlat').onclick = () => save(fileName('flat'), render('idle', Object.assign({ palette: window.__P, view:'flat' }, pick())), 'image/svg+xml');
+  document.getElementById('dlFlat').onclick = () => save(fileName('flat'), render('idle', Object.assign({ palette: window.__P, view: S.finish === 'plush' ? 'front' : 'flat', finish: S.finish }, pick())), 'image/svg+xml');
   document.getElementById('copy').onclick = async e => {
     const P = window.__P, json = JSON.stringify({ body: S.body.tok || P.side, ball: S.ball.tok || P.accent, eye: P.eye, finish: S.finish, scheme: S.scheme }, null, 2);
     try { await navigator.clipboard.writeText(json); e.target.textContent = '已复制'; } catch { save('bitfun-colors.json', json, 'application/json'); e.target.textContent = '已下载 JSON'; }

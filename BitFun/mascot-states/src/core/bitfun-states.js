@@ -269,6 +269,7 @@
       { q: [[33, 53.6], [60, 69.2], [60, 93.2], [33, 77.6]], n: 300, d: 1.4, base: .7 },
       { q: [[60, 69.2], [87, 53.6], [87, 77.6], [60, 93.2]], n: 300, d: 1.74, base: .64 }
     ];
+    if (!x.front) {
     // 脸：右侧面两只眼睛之间。脸上的毛短一些、顺着从脸中心向外梳，表情才看得清
     const EYE = [[69.5, 76.2], [84.5, 67.6]], FC = [77, 72];
     const faceK = (px, py) => { const d = Math.min(...EYE.map(e => Math.hypot(px - e[0], py - e[1]))); return Math.max(0, Math.min(1, (d - 3) / 9)); };
@@ -343,6 +344,29 @@
       }
     }
     NOFLOW = false;
+    } else {
+      // 正面毛绒：圆角矩形（与平面视图同形），毛从头顶向四周、向下梳；两眼周围毛短、向外梳
+      const X0 = 26, X1 = 94, Y0 = 46, Y1 = 100, RR = 20, CX = 60, CY = 73;
+      const inside = (px, py) => { const qx = Math.min(Math.max(px, X0 + RR), X1 - RR), qy = Math.min(Math.max(py, Y0 + RR), Y1 - RR); return Math.hypot(px - qx, py - qy) <= RR; };
+      const fl = (px, py) => Math.max(0, Math.min(1, .62 + (.8 - (py - 46) * .006 - (px - 60) * .002 - .62) * .42 + (r() - .5) * .05));
+      const EYF = [[49.9, 73], [70.1, 73]];
+      const fk = (px, py) => { const d = Math.min(...EYF.map(e => Math.hypot((px - e[0]) * 1.4, py - e[1]))); return Math.max(0, Math.min(1, (d - 6) / 10)); };
+      const flowAng = (px, py) => { const a = Math.atan2(py - 34, (px - 60) * 1.3); return a; };
+      const UL = Math.max(L0, .65);
+      const fill = (m, fn) => { const gs = Math.ceil(Math.sqrt(m)); for (let i = 0; i < m; i++) { const px = X0 + ((i % gs) + r()) / gs * (X1 - X0), py = Y0 + (Math.floor(i / gs) + r()) / Math.ceil(m / gs) * (Y1 - Y0); if (inside(px, py)) fn(px, py); } };
+      fill(Math.round(1100 * UL), (px, py) => clump(px, py, flowAng(px, py) + (r() - .5) * .4, 3.5 + r() * 2.8, .7, fl(px, py) - .04, 4, 3));
+      fill(Math.round(1150 * L0), (px, py) => {
+        const k = fk(px, py); let ang = flowAng(px, py) + (r() - .5) * .3;
+        if (k < 1) { const e = EYF[px < 60 ? 0 : 1], oa = Math.atan2(py - e[1], px - e[0]); ang = ang * k + oa * (1 - k); }
+        clump(px, py, ang, (7.5 + r() * 4.5) * (.45 + .55 * k), .6 + r() * .5, fl(px, py) + (1 - k) * .05, grp(), 5);
+      });
+      // 外缘：沿轮廓一圈向外蓬的长毛
+      for (let i = 0, m = Math.round(520 * Math.max(L0, .6)); i < m; i++) {
+        const th = r() * Math.PI * 2, dx = Math.cos(th), dy = Math.sin(th); let t = 0; while (inside(CX + dx * (t + .5), CY + dy * (t + .5)) && t < 60) t += .5;
+        const off = -3 + r() * 9, px = CX + dx * (t + off), py = CY + dy * (t + off);
+        clump(px, py, Math.atan2(dy * 1.15 + .25, dx) + (r() - .5) * .6, 5 + r() * 5.5, .5 + r() * .3, fl(px, py) - .03, off < 2 ? 4 : grp(), off < 2 ? 3 : 4);
+      }
+    }
     // 输出：每组一层 <g>，各自按不同节奏轻摆；同组内按 根 → 中 → 尖 的顺序叠
     let out = '';
     for (const B of buf.slice(0, 2)) for (let sg = 0; sg < SEG; sg++) for (let g = 0; g <= G; g++) {
@@ -372,6 +396,7 @@
 
   function body(x) {
     const { P, u, plush } = x, sw = plush ? 20 : 18;
+    if (x.front) return `<rect x="26" y="46" width="68" height="54" rx="20" fill="${P.side}"/>${down(x)}`;
     if (x.flat) {
       const e = edgeOf(P.side);
       let f = `<rect x="26" y="46" width="68" height="54" rx="20" fill="${P.side}"${e ? ` stroke="${e}" stroke-width="${x.tiny ? 2.4 : 1.4}"` : ''}/>`;
@@ -459,9 +484,9 @@ ${plush ? '' : `<path d="${LEFT}" fill="url(#lf${u})" filter="url(#tb${u})"/>`}
     if (fx.includes('orbit')) over += `<g><circle cx="60" cy="29" r="17" fill="none" stroke="${color}" stroke-opacity=".28" stroke-width="1" stroke-dasharray="1.5 3"/><circle cx="77" cy="29" r="2.6" fill="${color}"><animateTransform attributeName="transform" type="rotate" from="0 60 29" to="360 60 29" dur="1.8s" repeatCount="indefinite"/></circle></g>`;
     if (fx.includes('smoke')) over += `<circle class="puff" cx="67" cy="14" r="3.2" fill="#B9BEC7"/><circle class="puff p2" cx="71" cy="12" r="2.4" fill="#B9BEC7"/>`;
     const be = edgeOf(color), bs = be ? ` stroke="${be}" stroke-width="${x.tiny ? 2 : 1.1}"` : '';
-    const ball = x.tiny ? `<circle cx="60" cy="27" r="12.5" fill="${color}"${bs}/>` : x.flat ? `<circle cx="60" cy="28" r="9.6" fill="${color}"${bs}/>` : `<circle cx="60" cy="29" r="11.5" fill="${color}"${bs}/>${plush ? `<circle cx="60" cy="29" r="11.5" fill="url(#bm${u})"/>` : `<circle cx="60" cy="29" r="11.5" fill="url(#bs${u})"/>`}${plush ? '' : `<ellipse cx="55.6" cy="23.8" rx="4" ry="2.6" transform="rotate(-30 55.6 23.8)" fill="#fff" opacity=".6" filter="url(#hb${u})"/><circle cx="60" cy="29" r="11.1" fill="none" stroke="#000" stroke-opacity=".1" stroke-width=".8"/>`}`;
+    const ball = x.tiny ? `<circle cx="60" cy="27" r="12.5" fill="${color}"${bs}/>` : x.flat ? `<circle cx="60" cy="28" r="9.6" fill="${color}"${bs}/>${x.front ? `<circle cx="60" cy="28" r="9.6" fill="url(#bm${u})"/>` : ''}` : `<circle cx="60" cy="29" r="11.5" fill="${color}"${bs}/>${plush ? `<circle cx="60" cy="29" r="11.5" fill="url(#bm${u})"/>` : `<circle cx="60" cy="29" r="11.5" fill="url(#bs${u})"/>`}${plush ? '' : `<ellipse cx="55.6" cy="23.8" rx="4" ry="2.6" transform="rotate(-30 55.6 23.8)" fill="#fff" opacity=".6" filter="url(#hb${u})"/><circle cx="60" cy="29" r="11.1" fill="none" stroke="#000" stroke-opacity=".1" stroke-width=".8"/>`}`;
     return `<g class="${cls}">
-      ${x.flat ? `<rect x="58.3" y="36" width="3.4" height="10.2" fill="${edgeOf(P.side) || P.side}"/>`
+      ${x.front ? `<ellipse cx="60" cy="49" rx="4.4" ry="1.8" fill="#000" opacity=".2" filter="url(#hb${u})"/><rect x="58.2" y="35" width="3.6" height="14.5" rx="1.8" fill="url(#cr${u})"/>` : x.flat ? `<rect x="58.3" y="36" width="3.4" height="10.2" fill="${edgeOf(P.side) || P.side}"/>`
         : `${plush ? `<ellipse cx="60" cy="54.4" rx="5.2" ry="2.4" fill="#000" opacity=".22" filter="url(#hb${u})"/><rect x="57.4" y="30" width="5.2" height="24" rx="2.6" fill="url(#cr${u})"/>` : `<rect x="57.4" y="30" width="5.2" height="23.5" rx="2.6" fill="url(#cr${u})"/><ellipse cx="60" cy="53.8" rx="7" ry="3.6" fill="url(#cc${u})"/><ellipse cx="60" cy="53.1" rx="4" ry="1.7" fill="#fff" opacity=".55"/>`}`}
       <g transform="${x.flat ? '' : 'translate(0 -10) translate(60 29) scale(1.14) translate(-60 -29)'}">
       ${under}
@@ -654,13 +679,14 @@ ${plush ? '' : `<path d="${LEFT}" fill="url(#lf${u})" filter="url(#tb${u})"/>`}
     const P = typeof opt.palette === 'object' ? opt.palette : PALETTES[opt.palette || 'obsidian'];
     const x = { P, u: 'b' + (++UID), plush: opt.finish === 'plush', metal: opt.finish === 'metal', cute: opt.face === 'cute', lod: opt.lod || 1, flat: opt.view === 'flat' || !!opt.tiny, tiny: !!opt.tiny, mouthPick: opt.mouth, blushPick: opt.blush === 'none' ? null : opt.blush };
     if (opt.blush === 'none') x.blushPick = '';
-    if (x.flat) { x.plush = false; x.metal = false; } // 平面只有一种：纯平、简化
+    x.front = opt.view === 'front' && x.plush; if (opt.view === 'front') x.flat = true; // 正面毛绒：平面的正面构图 + 毛绒
+    if (x.flat && !x.front) { x.plush = false; x.metal = false; } // 平面只有一种：纯平、简化
     const color = statusColor(st.cat, opt.palette);
     const compact = !!opt.compact || !!opt.tiny, ac = !!opt.accent && !x.tiny;
     const list = parts(id, x, color, compact || ac).filter(Boolean).join('') + (x.plush && x.furOver ? x.furOver : (x.tiny ? '' : bifangBlush(x))) + (x.mouthPick === 'beak' ? beakOf(x) : x.mouthPick && x.mouthPick !== 'state' && x.mouthPick !== 'none' && !x.tiny ? mouth(x, x.mouthPick, true) : '');
     const wrap = st.wrap === 'hop' && (compact || ac) ? 'f' : st.wrap;
     const vb = x.tiny ? '20 13 80 90' : ac ? '34 6 122 120' : compact ? '9 1 102 107' : '0 0 160 136';
-    const shadow = x.flat ? '' : false ? `<ellipse cx="60" cy="104" rx="27" ry="2.6" fill="#000" opacity=".07"/>` : `<ellipse cx="60" cy="103.5" rx="30" ry="4.2" fill="url(#sh${x.u})"/>`;
+    const shadow = x.flat && !x.front ? '' : false ? `<ellipse cx="60" cy="104" rx="27" ry="2.6" fill="#000" opacity=".07"/>` : `<ellipse cx="60" cy="103.5" rx="30" ry="4.2" fill="url(#sh${x.u})"/>`;
     const inner = compact && !ac ? `${shadow}<g class="${wrap}">${list}</g>` : `<g transform="translate(20 12)">${shadow}<g class="${wrap}">${list}</g>${ac ? accent(id, color) : ''}</g>`;
     const style = opt.noStyle ? '' : `<style>${STYLE}</style>`;
     return `<svg class="bf" xmlns="http://www.w3.org/2000/svg" viewBox="${vb}" role="img" aria-label="毕方 · ${st.name}">${style}${defs(x)}${inner}</svg>`;
